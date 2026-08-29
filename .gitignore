@@ -7,3 +7,6 @@ dist/
 # Card data is fetched from Scryfall at runtime — never committed (Wizards IP).
 data/
 *.local.json
+
+build/
+release/

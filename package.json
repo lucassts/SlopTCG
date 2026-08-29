@@ -12,10 +12,15 @@
     "build": "npm run build -w @sloptcg/engine -w @sloptcg/protocol -w @sloptcg/server -w @sloptcg/web",
     "test": "npm run test -w @sloptcg/engine",
     "start": "node packages/server/dist/index.js",
+    "package": "node scripts/package.mjs",
     "dev:server": "npm run dev -w @sloptcg/server",
     "dev:web": "npm run dev -w @sloptcg/web"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6"
   }
 }

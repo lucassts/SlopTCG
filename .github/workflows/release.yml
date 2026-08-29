@@ -1,0 +1,44 @@
+# Gera os executáveis de um clique e anexa à Release da tag.
+# Dispare manualmente (Actions → Release binaries → Run workflow) ou
+# empurrando uma tag v*.
+name: Release binaries
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: release/SlopTCG.exe
+          - os: macos-latest
+            artifact: release/SlopTCG-mac
+          - os: ubuntu-latest
+            artifact: release/SlopTCG-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sloptcg-${{ matrix.os }}
+          path: ${{ matrix.artifact }}
+      - name: Attach to release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "${{ matrix.artifact }}" --clobber

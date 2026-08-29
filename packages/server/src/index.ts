@@ -9,7 +9,9 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { exec } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   compileOracleCard,
@@ -395,9 +397,23 @@ async function fetchArchidektDeck(deckUrl: string): Promise<{ name: string; card
  * XMage-style self-hosting: this one process serves the built web client AND
  * the WebSocket, so a host runs `npm start` and shares http://<ip>:8080.
  */
-const WEB_DIR =
-  process.env.SLOPTCG_WEB_DIR ??
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../apps/web/dist');
+/**
+ * When packaged as a single executable, the web build is embedded as
+ * base64 (injected by scripts/package.mjs) and served from memory.
+ */
+const EMBEDDED_WEB: Record<string, string> | undefined = (
+  globalThis as { __SLOPTCG_ASSETS__?: Record<string, string> }
+).__SLOPTCG_ASSETS__;
+
+function resolveWebDir(): string {
+  if (process.env.SLOPTCG_WEB_DIR) return process.env.SLOPTCG_WEB_DIR;
+  try {
+    return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../apps/web/dist');
+  } catch {
+    return path.resolve(process.cwd(), 'apps/web/dist');
+  }
+}
+const WEB_DIR = resolveWebDir();
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -413,6 +429,16 @@ const MIME: Record<string, string> = {
 
 function serveStatic(pathname: string, res: http.ServerResponse): void {
   const safe = path.normalize(pathname).replace(/^([/\\])+/, '').replace(/^(\.\.[/\\])+/, '');
+
+  if (EMBEDDED_WEB) {
+    const key = (safe || 'index.html').replace(/\\/g, '/');
+    const data = EMBEDDED_WEB[key] ?? EMBEDDED_WEB['index.html'];
+    const ext = EMBEDDED_WEB[key] ? path.extname(key) : '.html';
+    res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream' });
+    res.end(Buffer.from(data, 'base64'));
+    return;
+  }
+
   let file = path.join(WEB_DIR, safe || 'index.html');
   if (!file.startsWith(WEB_DIR)) file = path.join(WEB_DIR, 'index.html');
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(WEB_DIR, 'index.html');
@@ -488,6 +514,38 @@ setInterval(() => {
   }
 }, 60_000).unref();
 
+function lanAddresses(): string[] {
+  const out: string[] = [];
+  for (const infos of Object.values(os.networkInterfaces())) {
+    for (const info of infos ?? []) {
+      if (info.family === 'IPv4' && !info.internal) out.push(info.address);
+    }
+  }
+  return out;
+}
+
 httpServer.listen(PORT, () => {
-  console.log(`SlopTCG server ouvindo em ws://localhost:${PORT} (HTTP: /api/deck)`);
+  // ASCII only: the Windows console default codepage mangles anything else.
+  const local = `http://localhost:${PORT}`;
+  console.log('');
+  console.log('  ==================== SlopTCG ====================');
+  console.log('');
+  console.log(`  Jogue em:          ${local}`);
+  for (const ip of lanAddresses()) {
+    console.log(`  Mande ao oponente: http://${ip}:${PORT}  (mesma rede/VPN)`);
+  }
+  console.log('');
+  console.log('  Crie a sala, compartilhe o codigo de 5 letras e boa partida.');
+  console.log('  Feche esta janela para desligar o servidor.');
+  console.log('');
+  // Packaged (.exe) experience: pop the browser automatically.
+  if (EMBEDDED_WEB && !process.env.SLOPTCG_NO_OPEN) {
+    const cmd =
+      process.platform === 'win32'
+        ? `start "" "${local}"`
+        : process.platform === 'darwin'
+          ? `open "${local}"`
+          : `xdg-open "${local}"`;
+    exec(cmd, () => undefined);
+  }
 });

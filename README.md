@@ -42,8 +42,23 @@ automatizados. Também dá para colar qualquer decklist (`4 Lightning Bolt`…).
 
 ## Hospedando uma partida (estilo XMage)
 
-Quem cria o jogo hospeda na própria máquina — um único processo serve o
-site e o servidor de salas:
+Quem cria o jogo hospeda na própria máquina, e o oponente só precisa de um
+navegador.
+
+### Jeito fácil (sem instalar nada)
+
+1. Baixe o **`SlopTCG.exe`** (Windows) — ou o binário de mac/linux — na
+   [página de Releases](https://github.com/lucassts/SlopTCG/releases).
+2. Dê dois cliques. O navegador abre sozinho no jogo, e a janela preta
+   mostra o endereço para mandar ao oponente (ex.: `http://192.168.0.10:8080`).
+3. Crie a sala e compartilhe o código de 5 letras. Fim.
+
+> O Windows SmartScreen pode avisar sobre "editor desconhecido" (o binário
+> não é assinado): clique em **Mais informações → Executar assim mesmo**.
+> Para jogar com alguém fora da sua rede, use uma VPN simples como
+> Tailscale/Hamachi ou libere a porta 8080 no roteador.
+
+### Jeito de desenvolvedor
 
 ```bash
 npm install
@@ -51,10 +66,8 @@ npm run build
 npm start
 ```
 
-Abra `http://localhost:8080`, crie a sala e mande para o oponente o seu
-endereço (`http://SEU-IP:8080`) e o código da sala. Para jogar pela
-internet, libere a porta 8080 no roteador (port forward) ou use um túnel
-como Tailscale/ngrok. `PORT=9000 npm start` muda a porta.
+Mesmo resultado, em `http://localhost:8080`. `PORT=9000 npm start` muda a
+porta; `npm run package` gera o executável de um clique localmente.
 
 ## Testes
 
