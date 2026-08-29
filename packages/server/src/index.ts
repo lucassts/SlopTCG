@@ -8,7 +8,11 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
+  compileOracleCard,
   DEMO_CARDS,
   demoDeckAzorius,
   demoDeckGruul,
@@ -90,47 +94,138 @@ function broadcastGame(room: Room, events: GameEvent[]): void {
 
 // ------------------------------------------------------------ deck building
 
-const KNOWN_TYPES: CardType[] = ['Land', 'Creature', 'Artifact', 'Enchantment', 'Instant', 'Sorcery', 'Planeswalker', 'Battle'];
 const DEMO_BY_NAME = new Map(Object.values(DEMO_CARDS).map((c) => [c.name.toLowerCase(), c]));
 
-function externalToDefinition(card: ExternalCard): CardDefinition {
-  const registry = DEMO_BY_NAME.get(card.name.trim().toLowerCase());
-  if (registry) {
-    // Known card: full automation from OUR registry; keep the client's
-    // Scryfall ids so the client can show the exact printing.
-    return { ...registry, scryfallId: card.scryfallId ?? registry.scryfallId, oracleId: card.oracleId ?? registry.oracleId };
+interface ScryfallCard {
+  name: string;
+  id: string;
+  oracle_id: string;
+  mana_cost?: string;
+  type_line?: string;
+  power?: string;
+  toughness?: string;
+  oracle_text?: string;
+  colors?: string[];
+  card_faces?: { name?: string; mana_cost?: string; type_line?: string; oracle_text?: string; power?: string; toughness?: string; colors?: string[] }[];
+}
+
+/** Official card data cache (name, lowercase → card or null when unknown). */
+const scryfallCache = new Map<string, ScryfallCard | null>();
+
+/**
+ * The server resolves card names against Scryfall ITSELF — the client only
+ * supplies names and counts, so it can never inject card data or behaviour.
+ */
+async function resolveOfficialCards(names: string[]): Promise<Map<string, ScryfallCard | null>> {
+  const result = new Map<string, ScryfallCard | null>();
+  const missing: string[] = [];
+  for (const name of names) {
+    const key = name.toLowerCase();
+    if (scryfallCache.has(key)) result.set(key, scryfallCache.get(key)!);
+    else missing.push(name);
   }
-  const typeLine = card.typeLine ?? '';
-  const [left, right] = typeLine.split(/[—-]/).map((s) => s?.trim() ?? '');
-  const types = KNOWN_TYPES.filter((t) => left.includes(t));
+  for (let i = 0; i < missing.length; i += 75) {
+    const batch = missing.slice(i, i + 75);
+    const res = await fetch('https://api.scryfall.com/cards/collection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'SlopMTG/0.1 (open source card game client)' },
+      body: JSON.stringify({ identifiers: batch.map((n) => ({ name: n.split('//')[0].trim() })) }),
+    });
+    if (!res.ok) throw new Error(`Scryfall respondeu ${res.status}`);
+    const data = (await res.json()) as { data: ScryfallCard[] };
+    for (const card of data.data) {
+      const keys = [card.name.toLowerCase(), card.name.split('//')[0].trim().toLowerCase()];
+      for (const k of keys) {
+        scryfallCache.set(k, card);
+        result.set(k, card);
+      }
+    }
+    for (const n of batch) {
+      const key = n.toLowerCase();
+      if (!result.has(key)) {
+        scryfallCache.set(key, null);
+        result.set(key, null);
+      }
+    }
+  }
+  return result;
+}
+
+const num = (v: string | undefined) => {
+  if (v === undefined) return undefined;
+  const n = parseInt(v, 10);
+  return Number.isNaN(n) ? undefined : n;
+};
+
+/** Build a definition from OFFICIAL data: demo registry > oracle compiler > manual. */
+function officialToDefinition(official: ScryfallCard): CardDefinition {
+  const registry = DEMO_BY_NAME.get(official.name.toLowerCase());
+  if (registry) return { ...registry, scryfallId: official.id, oracleId: official.oracle_id };
+
+  const face = official.card_faces?.[0];
+  const input = {
+    name: official.name.split('//')[0].trim(),
+    manaCost: official.mana_cost || face?.mana_cost,
+    typeLine: (official.type_line || face?.type_line || '').split('//')[0].trim(),
+    oracleText: official.oracle_text ?? face?.oracle_text,
+    power: num(official.power ?? face?.power),
+    toughness: num(official.toughness ?? face?.toughness),
+    colors: (official.colors ?? face?.colors ?? []) as CardDefinition['colors'],
+    oracleId: official.oracle_id,
+    scryfallId: official.id,
+  };
+  // Double-faced cards stay manual (only the front face is modelled).
+  const compiled = official.card_faces ? null : compileOracleCard(input);
+  if (compiled) return compiled;
+
+  const { types, subtypes } = splitTypeLine(input.typeLine);
   return {
-    id: `ext-${card.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-    name: card.name.slice(0, 200),
-    manaCost: card.manaCost,
+    id: `ext-${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    name: input.name,
+    manaCost: input.manaCost,
     types: types.length > 0 ? types : ['Creature'],
-    subtypes: right ? right.split(/\s+/).slice(0, 5) : [],
-    colors: [],
-    power: card.power,
-    toughness: card.toughness,
-    text: card.text?.slice(0, 2000),
-    scryfallId: card.scryfallId,
-    oracleId: card.oracleId,
-    // Never trust client-declared behaviour: unknown cards are manual-only.
+    subtypes,
+    colors: input.colors,
+    power: input.power,
+    toughness: input.toughness,
+    text: input.oracleText?.slice(0, 2000),
+    scryfallId: official.id,
+    oracleId: official.oracle_id,
     automation: 'manual',
   };
 }
 
-function buildDeck(spec: DeckSpec): DeckList | string {
+const KNOWN_TYPES: CardType[] = ['Land', 'Creature', 'Artifact', 'Enchantment', 'Instant', 'Sorcery', 'Planeswalker', 'Battle'];
+
+function splitTypeLine(typeLine: string): { types: CardType[]; subtypes: string[] } {
+  const [left, right] = typeLine.split(/\s+—\s+/);
+  return {
+    types: KNOWN_TYPES.filter((t) => (left ?? '').includes(t)),
+    subtypes: right ? right.trim().split(/\s+/).slice(0, 5) : [],
+  };
+}
+
+async function buildDeck(spec: DeckSpec): Promise<DeckList | string> {
   if (spec.kind === 'demo') {
     return spec.name === 'gruul' ? demoDeckGruul() : demoDeckAzorius();
   }
   if (!Array.isArray(spec.cards) || spec.cards.length === 0) return 'deck vazio';
+  const entries = spec.cards
+    .map((c) => ({ name: String(c.name ?? '').slice(0, 200), count: Math.min(Math.max(1, Math.floor(c.count || 1)), 99) }))
+    .filter((c) => c.name.length > 0);
+  const official = await resolveOfficialCards(entries.map((e) => e.name));
   const cards: CardDefinition[] = [];
-  for (const entry of spec.cards) {
-    const count = Math.min(Math.max(1, Math.floor(entry.count || 1)), 99);
-    const def = externalToDefinition(entry);
-    for (let i = 0; i < count; i++) cards.push(def);
+  const notFound: string[] = [];
+  for (const entry of entries) {
+    const data = official.get(entry.name.toLowerCase());
+    if (!data) {
+      notFound.push(entry.name);
+      continue;
+    }
+    const def = officialToDefinition(data);
+    for (let i = 0; i < entry.count; i++) cards.push(def);
   }
+  if (notFound.length > 0) return `cartas não encontradas: ${notFound.slice(0, 5).join(', ')}`;
   if (cards.length < 20) return 'deck precisa de pelo menos 20 cartas';
   if (cards.length > 300) return 'deck grande demais (máx. 300)';
   return { cards };
@@ -202,11 +297,17 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
       const { room, playerId } = conn;
       if (!room || !playerId) return send(socket, { type: 'serverError', message: 'você não está numa sala' });
       if (room.game) return send(socket, { type: 'serverError', message: 'a partida já começou' });
-      const deck = buildDeck(msg.deck);
-      if (typeof deck === 'string') return send(socket, { type: 'serverError', message: deck });
-      room.seats[playerId]!.deck = deck;
-      room.lastActivity = Date.now();
-      broadcastLobby(room);
+      buildDeck(msg.deck)
+        .then((deck) => {
+          if (typeof deck === 'string') return send(socket, { type: 'serverError', message: deck });
+          if (room.game) return send(socket, { type: 'serverError', message: 'a partida já começou' });
+          room.seats[playerId]!.deck = deck;
+          room.lastActivity = Date.now();
+          broadcastLobby(room);
+        })
+        .catch((err: unknown) => {
+          send(socket, { type: 'serverError', message: err instanceof Error ? err.message : 'falha ao montar o deck' });
+        });
       return;
     }
     case 'startGame': {
@@ -288,6 +389,42 @@ async function fetchArchidektDeck(deckUrl: string): Promise<{ name: string; card
   return { name: deck.name ?? 'Deck', cards: [...counts].map(([name, count]) => ({ name, count })) };
 }
 
+// ---------------------------------------------- static web app (self-host)
+
+/**
+ * XMage-style self-hosting: this one process serves the built web client AND
+ * the WebSocket, so a host runs `npm start` and shares http://<ip>:8080.
+ */
+const WEB_DIR =
+  process.env.SLOPMTG_WEB_DIR ??
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../apps/web/dist');
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+};
+
+function serveStatic(pathname: string, res: http.ServerResponse): void {
+  const safe = path.normalize(pathname).replace(/^([/\\])+/, '').replace(/^(\.\.[/\\])+/, '');
+  let file = path.join(WEB_DIR, safe || 'index.html');
+  if (!file.startsWith(WEB_DIR)) file = path.join(WEB_DIR, 'index.html');
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(WEB_DIR, 'index.html');
+  if (!fs.existsSync(file)) {
+    res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Cliente web não compilado. Rode: npm run build');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream' });
+  fs.createReadStream(file).pipe(res);
+}
+
 const httpServer = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -302,6 +439,10 @@ const httpServer = http.createServer((req, res) => {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'falha ao importar' }));
       });
+    return;
+  }
+  if (req.method === 'GET') {
+    serveStatic(url.pathname, res);
     return;
   }
   res.writeHead(404, { 'Content-Type': 'application/json' });

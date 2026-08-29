@@ -11,6 +11,7 @@
   "scripts": {
     "build": "npm run build -w @slopmtg/engine -w @slopmtg/protocol -w @slopmtg/server -w @slopmtg/web",
     "test": "npm run test -w @slopmtg/engine",
+    "start": "node packages/server/dist/index.js",
     "dev:server": "npm run dev -w @slopmtg/server",
     "dev:web": "npm run dev -w @slopmtg/web"
   },

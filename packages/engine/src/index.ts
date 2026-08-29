@@ -3,6 +3,7 @@ export * from './events.js';
 export * from './actions.js';
 export * from './cards/types.js';
 export * from './cards/demo-set.js';
+export { compileOracleCard, type OracleInput } from './cards/oracle-parser.js';
 export { Game, type ApplyResult, type GameOptions } from './game.js';
 export {
   createGameState,

@@ -50,6 +50,11 @@ export function Home({ onCreate, onJoin, connecting }: HomeProps) {
           Crie uma sala e mande o código para o seu oponente — é só isso o matchmaking, por enquanto.
         </div>
       </div>
+      <div className="muted" style={{ maxWidth: 480, textAlign: 'center', fontSize: 12 }}>
+        Engine de card games de código aberto, para estudo e uso não comercial. Sem afiliação com a
+        Wizards of the Coast ou qualquer empresa de jogos; dados de cartas vêm do Scryfall em tempo
+        real, sob a Fan Content Policy. Marcas citadas pertencem aos seus donos.
+      </div>
     </div>
   );
 }

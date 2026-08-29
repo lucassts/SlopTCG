@@ -1,8 +1,18 @@
 /** WebSocket client with rejoin support. */
 import type { ClientMessage, ServerMessage } from '@slopmtg/protocol';
 
+const env = (import.meta as { env?: Record<string, string | boolean> }).env ?? {};
+
+/**
+ * Where the room server lives. In dev (vite on 5173) it's the separate
+ * process on :8080; in a self-hosted build the same origin that served the
+ * page IS the server (XMage-style single process).
+ */
 const DEFAULT_URL =
-  (import.meta as { env?: Record<string, string> }).env?.VITE_WS_URL ?? 'ws://localhost:8080';
+  (env.VITE_WS_URL as string | undefined) ??
+  (env.DEV
+    ? 'ws://localhost:8080'
+    : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
 
 /** HTTP base of the room server (same host/port as the WebSocket). */
 export function serverHttpBase(): string {

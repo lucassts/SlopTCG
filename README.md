@@ -38,8 +38,23 @@ npm run dev:web          # cliente em http://localhost:5173 (outro terminal)
 
 Abra duas abas em `http://localhost:5173`, crie uma sala numa, entre com o
 código na outra. Os dois decks demo (Gruul Smash e Azorius Wings) são 100%
-automatizados. Também dá para colar qualquer decklist (`4 Lightning Bolt`…) —
-cartas fora do set demo entram em modo manual.
+automatizados. Também dá para colar qualquer decklist (`4 Lightning Bolt`…).
+
+## Hospedando uma partida (estilo XMage)
+
+Quem cria o jogo hospeda na própria máquina — um único processo serve o
+site e o servidor de salas:
+
+```bash
+npm install
+npm run build
+npm start
+```
+
+Abra `http://localhost:8080`, crie a sala e mande para o oponente o seu
+endereço (`http://SEU-IP:8080`) e o código da sala. Para jogar pela
+internet, libere a porta 8080 no roteador (port forward) ou use um túnel
+como Tailscale/ngrok. `PORT=9000 npm start` muda a porta.
 
 ## Testes
 
@@ -68,8 +83,11 @@ O caminho mais fácil de contribuir é **implementar cartas** na DSL — veja
 [`CONTRIBUTING.md`](CONTRIBUTING.md). Não precisa conhecer a engine por
 dentro: a maioria das cartas é descrita como dados.
 
-## Licença
+## Licença e aviso legal
 
-[MIT](LICENSE). Nomes e textos de cartas são propriedade dos respectivos
-donos (Wizards of the Coast, no caso do Magic); este projeto é conteúdo de fã
-não oficial e não é endossado pela Wizards.
+[MIT](LICENSE) — a licença mais permissiva possível. Este é um projeto de
+**engine genérica de card games para estudo e uso não comercial**, sem
+qualquer afiliação com a Wizards of the Coast ou outras empresas de jogos.
+O repositório não contém nenhum dado proprietário de cartas — tudo vem do
+Scryfall em runtime, sob a Fan Content Policy. Leia o
+[AVISO-LEGAL.md](AVISO-LEGAL.md) completo (PT/EN) antes de redistribuir.
