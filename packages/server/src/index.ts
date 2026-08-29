@@ -7,6 +7,7 @@
  */
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
+import http from 'node:http';
 import {
   DEMO_CARDS,
   demoDeckAzorius,
@@ -254,9 +255,62 @@ function sanitizeName(name: string): string {
   return clean.length > 0 ? clean : 'Jogador';
 }
 
+// -------------------------------------------------- deck import proxy (HTTP)
+
+/**
+ * GET /api/deck?url=<archidekt deck url> → { name, cards: [{name, count}] }
+ * Browsers can't call Archidekt directly (CORS), so the room server proxies.
+ * Only deck ids extracted from known hosts are fetched — the client never
+ * controls the outgoing URL.
+ */
+async function fetchArchidektDeck(deckUrl: string): Promise<{ name: string; cards: { name: string; count: number }[] }> {
+  const m = deckUrl.match(/archidekt\.com\/(?:api\/)?decks\/(\d+)/);
+  if (!m) throw new Error('URL não reconhecida — cole um link de deck do Archidekt');
+  const res = await fetch(`https://archidekt.com/api/decks/${m[1]}/`, {
+    headers: { 'User-Agent': 'SlopMTG/0.1 (open source card game client)' },
+  });
+  if (!res.ok) throw new Error(`Archidekt respondeu ${res.status}`);
+  const deck = (await res.json()) as {
+    name: string;
+    categories?: { name: string; includedInDeck: boolean }[];
+    cards: { quantity: number; categories?: string[]; card?: { oracleCard?: { name?: string } } }[];
+  };
+  const excluded = new Set(
+    (deck.categories ?? []).filter((c) => !c.includedInDeck).map((c) => c.name),
+  );
+  const counts = new Map<string, number>();
+  for (const entry of deck.cards ?? []) {
+    const name = entry.card?.oracleCard?.name;
+    if (!name) continue;
+    if ((entry.categories ?? []).some((c) => excluded.has(c))) continue;
+    counts.set(name, (counts.get(name) ?? 0) + (entry.quantity || 1));
+  }
+  return { name: deck.name ?? 'Deck', cards: [...counts].map(([name, count]) => ({ name, count })) };
+}
+
+const httpServer = http.createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (req.method === 'GET' && url.pathname === '/api/deck') {
+    const deckUrl = url.searchParams.get('url') ?? '';
+    fetchArchidektDeck(deckUrl)
+      .then((deck) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(deck));
+      })
+      .catch((err: unknown) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'falha ao importar' }));
+      });
+    return;
+  }
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'não encontrado' }));
+});
+
 // ------------------------------------------------------------------- server
 
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({ server: httpServer });
 
 wss.on('connection', (socket) => {
   const conn: ConnState = { room: null, playerId: null };
@@ -293,4 +347,6 @@ setInterval(() => {
   }
 }, 60_000).unref();
 
-console.log(`SlopMTG server ouvindo em ws://localhost:${PORT}`);
+httpServer.listen(PORT, () => {
+  console.log(`SlopMTG server ouvindo em ws://localhost:${PORT} (HTTP: /api/deck)`);
+});

@@ -16,6 +16,8 @@ export interface CardView {
   toughness: number | null;
   attacking: boolean;
   blocking: number | null;
+  /** For auras/equipment: the object this is attached to. */
+  attachedTo: number | null;
   summoningSick: boolean;
   isToken: boolean;
 }
@@ -55,13 +57,15 @@ export interface GameView {
   priority: PlayerId | null;
   combatAwaiting: 'attackers' | 'blockers' | null;
   pendingDecision: { type: string; player: PlayerId; count?: number } | null;
+  /** Non-null while opening hands are being decided. */
+  mulligan: { taken: Record<PlayerId, number>; phase: Record<PlayerId, 'deciding' | 'kept'> } | null;
   stack: StackItemView[];
   players: Record<PlayerId, PlayerView>;
   status: 'playing' | 'finished';
   winner?: PlayerId | 'draw';
 }
 
-function cardView(obj: GameObject): CardView {
+function cardView(state: GameState, obj: GameObject): CardView {
   const isCreature = obj.card.types.includes('Creature');
   return {
     objectId: obj.id,
@@ -69,10 +73,11 @@ function cardView(obj: GameObject): CardView {
     tapped: obj.tapped,
     damage: obj.damage,
     counters: Object.fromEntries(Object.entries(obj.counters).filter(([k]) => !k.startsWith('__'))),
-    power: isCreature ? effectivePower(obj) : null,
-    toughness: isCreature ? effectiveToughness(obj) : null,
+    power: isCreature ? effectivePower(state, obj) : null,
+    toughness: isCreature ? effectiveToughness(state, obj) : null,
     attacking: obj.attacking,
     blocking: obj.blocking ?? null,
+    attachedTo: obj.attachedTo ?? null,
     summoningSick: obj.summoningSick,
     isToken: obj.isToken,
   };
@@ -90,10 +95,10 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       librarySize: p.zones.library.length,
       handSize: p.zones.hand.length,
       landsPlayedThisTurn: p.landsPlayedThisTurn,
-      hand: pid === viewer ? p.zones.hand.map((id) => cardView(state.objects[id])) : null,
-      battlefield: p.zones.battlefield.map((id) => cardView(state.objects[id])),
-      graveyard: p.zones.graveyard.map((id) => cardView(state.objects[id])),
-      exile: p.zones.exile.map((id) => cardView(state.objects[id])),
+      hand: pid === viewer ? p.zones.hand.map((id) => cardView(state, state.objects[id])) : null,
+      battlefield: p.zones.battlefield.map((id) => cardView(state, state.objects[id])),
+      graveyard: p.zones.graveyard.map((id) => cardView(state, state.objects[id])),
+      exile: p.zones.exile.map((id) => cardView(state, state.objects[id])),
     };
   }
   return {
@@ -104,6 +109,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
     priority: state.priority,
     combatAwaiting: state.combatAwaiting,
     pendingDecision: state.pendingDecision,
+    mulligan: state.mulligan,
     stack: state.stack.map((item) => ({
       id: item.id,
       kind: item.kind,

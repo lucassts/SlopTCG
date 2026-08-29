@@ -6,7 +6,7 @@ import type { GameState } from '../src/state.js';
 export function makeGame(
   p1Cards: CardDefinition[],
   p2Cards: CardDefinition[],
-  opts: { topP1?: string[]; topP2?: string[] } = {},
+  opts: { topP1?: string[]; topP2?: string[]; skipKeep?: boolean } = {},
 ): Game {
   const game = new Game(
     [
@@ -19,6 +19,10 @@ export function makeGame(
   if (opts.topP1) stackTop(game, 'p1', opts.topP1);
   if (opts.topP2) stackTop(game, 'p2', opts.topP2);
   game.start();
+  if (!opts.skipKeep) {
+    game.apply('p1', { type: 'keepHand', bottom: [] });
+    game.apply('p2', { type: 'keepHand', bottom: [] });
+  }
   return game;
 }
 

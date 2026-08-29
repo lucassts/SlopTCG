@@ -4,6 +4,11 @@ import type { ClientMessage, ServerMessage } from '@slopmtg/protocol';
 const DEFAULT_URL =
   (import.meta as { env?: Record<string, string> }).env?.VITE_WS_URL ?? 'ws://localhost:8080';
 
+/** HTTP base of the room server (same host/port as the WebSocket). */
+export function serverHttpBase(): string {
+  return DEFAULT_URL.replace(/^ws/, 'http');
+}
+
 export interface Session {
   roomCode: string;
   token: string;

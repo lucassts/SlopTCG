@@ -21,14 +21,38 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
     }
 
     for (const obj of battlefield(state)) {
-      if (!obj.card.types.includes('Creature')) continue;
-      const toughness = effectiveToughness(obj);
-      const deathtouched = (obj.counters['__deathtouched'] ?? 0) > 0 && obj.damage > 0;
-      if (toughness <= 0 || obj.damage >= toughness || deathtouched) {
+      if (obj.card.types.includes('Creature')) {
+        const toughness = effectiveToughness(state, obj);
+        const deathtouched = (obj.counters['__deathtouched'] ?? 0) > 0 && obj.damage > 0;
+        if (toughness <= 0 || obj.damage >= toughness || deathtouched) {
+          moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+          changed = true;
+          anyChange = true;
+          break; // battlefield list changed; rescan
+        }
+      }
+
+      // Aura attached to nothing (or to something gone) goes to the graveyard;
+      // equipment just becomes unattached (704.5n / 704.5p).
+      if (obj.attachedTo !== undefined) {
+        const host = state.objects[obj.attachedTo];
+        const hostGone = !host || host.zone !== 'battlefield' || !host.card.types.includes('Creature');
+        if (hostGone) {
+          if (obj.card.enchant) {
+            moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+            changed = true;
+            anyChange = true;
+            break;
+          }
+          obj.attachedTo = undefined;
+          anyChange = true;
+        }
+      } else if (obj.card.enchant) {
+        // An aura must always be attached to something.
         moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
         changed = true;
         anyChange = true;
-        break; // battlefield list changed; rescan
+        break;
       }
     }
   }

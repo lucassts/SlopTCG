@@ -72,7 +72,9 @@ export type Keyword =
   | 'lifelink'
   | 'deathtouch'
   | 'defender'
-  | 'menace';
+  | 'menace'
+  | 'firstStrike'
+  | 'doubleStrike';
 
 /** A chosen target, stored on stack items and validated on resolution. */
 export type TargetChoice =

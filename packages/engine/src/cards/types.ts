@@ -44,6 +44,8 @@ export type EffectStep =
   | { op: 'untap'; what: SubjectRef }
   | { op: 'counterSpell'; what: SubjectRef }
   | { op: 'pump'; what: SubjectRef; power: number; toughness: number }
+  /** Attach the source permanent (aura/equipment) to target:0. */
+  | { op: 'attach' }
   | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[] }
   | {
       op: 'token';
@@ -83,6 +85,8 @@ export interface ActivatedAbility {
   text: string;
   /** Mana abilities resolve immediately, without using the stack. */
   isManaAbility?: boolean;
+  /** Equip-style: only during your main phase with an empty stack. */
+  sorceryOnly?: boolean;
 }
 
 export type AbilityDef = TriggeredAbility | ActivatedAbility;
@@ -110,6 +114,19 @@ export interface CardDefinition {
   spellTargets?: TargetSpec[];
   spellEffect?: EffectScript;
   abilities?: AbilityDef[];
+  /**
+   * Aura: what it can enchant. Casting requires this target and the aura
+   * enters the battlefield attached to it (fizzles if the target is gone).
+   */
+  enchant?: { what: 'creature'; controlledBy?: 'you' | 'opponent' };
+  /** Static effects granted to whatever this aura/equipment is attached to. */
+  attachEffect?: {
+    power?: number;
+    toughness?: number;
+    keywords?: Keyword[];
+    cantAttack?: boolean;
+    cantBlock?: boolean;
+  };
   /**
    * 'full'   → the engine automates this card entirely.
    * 'manual' → playable via manual mode only (Tier 3); engine logs, players adjudicate.

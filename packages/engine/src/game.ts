@@ -72,11 +72,76 @@ export class Game {
       this.emit({ type: 'shuffled', player: p });
       for (let i = 0; i < STARTING_HAND; i++) draw(s, p, this.emit);
     }
+    // London mulligan: turn 1 only starts after both players keep.
+    s.mulligan = {
+      taken: { p1: 0, p2: 0 },
+      phase: { p1: 'deciding', p2: 'deciding' },
+    };
+    for (const p of PLAYER_IDS) this.emit({ type: 'decisionRequired', player: p, decision: 'mulligan' });
+    return this.flush();
+  }
+
+  private beginFirstTurn(): void {
+    const s = this.state;
     s.turn = 1;
-    this.emit({ type: 'turnBegan', turn: 1, activePlayer: first });
+    this.emit({ type: 'turnBegan', turn: 1, activePlayer: s.activePlayer });
     this.enterStep('untap');
     this.advanceLoop();
-    return this.flush();
+  }
+
+  private doMulligan(playerId: PlayerId): boolean {
+    const s = this.state;
+    const mull = s.mulligan;
+    if (!mull || mull.phase[playerId] !== 'deciding')
+      { this.fail(playerId, 'você não está decidindo mulligan'); return false; }
+    if (mull.taken[playerId] >= STARTING_HAND)
+      { this.fail(playerId, 'não dá para baixar de 0 cartas — mantenha a mão'); return false; }
+    const player = s.players[playerId];
+    for (const id of [...player.zones.hand]) {
+      const obj = s.objects[id];
+      removeFromCurrentZone(s, obj);
+      obj.zone = 'library';
+      player.zones.library.push(id);
+    }
+    const r = shuffle(player.zones.library, s.rngState);
+    player.zones.library = r.items;
+    s.rngState = r.state;
+    this.emit({ type: 'shuffled', player: playerId });
+    for (let i = 0; i < STARTING_HAND; i++) draw(s, playerId, this.emit);
+    mull.taken[playerId] += 1;
+    this.emit({ type: 'mulliganTaken', player: playerId, taken: mull.taken[playerId] });
+    return true;
+  }
+
+  private doKeepHand(playerId: PlayerId, bottom: number[]): boolean {
+    const s = this.state;
+    const mull = s.mulligan;
+    if (!mull || mull.phase[playerId] !== 'deciding')
+      { this.fail(playerId, 'você não está decidindo mulligan'); return false; }
+    const mustBottom = mull.taken[playerId];
+    if (bottom.length !== mustBottom)
+      { this.fail(playerId, `escolha exatamente ${mustBottom} carta(s) para o fundo da biblioteca`); return false; }
+    if (new Set(bottom).size !== bottom.length)
+      { this.fail(playerId, 'carta repetida na escolha'); return false; }
+    const player = s.players[playerId];
+    for (const id of bottom) {
+      const obj = s.objects[id];
+      if (!obj || obj.zone !== 'hand' || obj.owner !== playerId)
+        { this.fail(playerId, 'carta inválida'); return false; }
+    }
+    for (const id of bottom) {
+      const obj = s.objects[id];
+      removeFromCurrentZone(s, obj);
+      obj.zone = 'library';
+      player.zones.library.push(id); // fundo da biblioteca, na ordem escolhida
+    }
+    mull.phase[playerId] = 'kept';
+    this.emit({ type: 'handKept', player: playerId, bottomed: mustBottom });
+    if (PLAYER_IDS.every((p) => mull.phase[p] === 'kept')) {
+      s.mulligan = null;
+      this.beginFirstTurn();
+    }
+    return true;
   }
 
   apply(playerId: PlayerId, action: PlayerAction): ApplyResult {
@@ -86,6 +151,13 @@ export class Game {
 
     if (s.status === 'finished' && action.type !== 'chat') {
       return this.fail(playerId, 'a partida já terminou');
+    }
+
+    if (
+      s.mulligan !== null &&
+      !['mulligan', 'keepHand', 'concede', 'chat'].includes(action.type)
+    ) {
+      return this.fail(playerId, 'decida sua mão inicial primeiro (mulligan ou manter)');
     }
 
     try {
@@ -127,6 +199,10 @@ export class Game {
         return true;
       case 'passPriority':
         return this.doPassPriority(playerId);
+      case 'mulligan':
+        return this.doMulligan(playerId);
+      case 'keepHand':
+        return this.doKeepHand(playerId, action.bottom);
       case 'playLand':
         return this.doPlayLand(playerId, action.objectId);
       case 'castSpell':
@@ -239,7 +315,11 @@ export class Game {
     if (!isInstant && !this.sorceryTiming(playerId))
       { this.fail(playerId, 'só pode ser conjurada na sua fase principal com a pilha vazia'); return false; }
 
-    const targetErr = this.validateTargets(playerId, card.spellTargets, targets);
+    // Auras derive their (mandatory) target from the enchant spec.
+    const specs = card.enchant
+      ? [{ what: card.enchant.what, controlledBy: card.enchant.controlledBy }]
+      : card.spellTargets;
+    const targetErr = this.validateTargets(playerId, specs, targets);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
 
     const cost = parseCost(card.manaCost);
@@ -294,13 +374,15 @@ export class Game {
     if (!ability.isManaAbility) {
       const err = this.requirePriority(playerId);
       if (err) { this.fail(playerId, err); return false; }
+      if (ability.sorceryOnly && !this.sorceryTiming(playerId))
+        { this.fail(playerId, 'só na sua fase principal com a pilha vazia (como uma feitiçaria)'); return false; }
     } else if (s.pendingDecision || s.status !== 'playing') {
       { this.fail(playerId, 'agora não'); return false; }
     }
 
     if (ability.cost.tap) {
       if (obj.tapped) { this.fail(playerId, `${obj.card.name} já está virada`); return false; }
-      if (obj.card.types.includes('Creature') && obj.summoningSick && !hasKeyword(obj, 'haste'))
+      if (obj.card.types.includes('Creature') && obj.summoningSick && !hasKeyword(s, obj, 'haste'))
         { this.fail(playerId, `${obj.card.name} tem enjoo de invocação`); return false; }
     }
     const targetErr = this.validateTargets(playerId, ability.targets, targets);
@@ -355,13 +437,13 @@ export class Game {
       const obj = s.objects[id];
       if (!obj || obj.zone !== 'battlefield' || obj.controller !== playerId)
         { this.fail(playerId, 'atacante inválido'); return false; }
-      const why = canAttack(obj);
+      const why = canAttack(s, obj);
       if (why) { this.fail(playerId, `${obj.card.name} não pode atacar: ${why}`); return false; }
       attackers.push(obj);
     }
     for (const obj of attackers) {
       obj.attacking = true;
-      if (!hasKeyword(obj, 'vigilance')) setTapped(s, obj, true, this.emit);
+      if (!hasKeyword(s, obj, 'vigilance')) setTapped(s, obj, true, this.emit);
     }
     s.combatAwaiting = null;
     this.emit({
@@ -394,18 +476,21 @@ export class Game {
         { this.fail(playerId, `${blocker.card.name} só pode bloquear um atacante`); return false; }
       if (!attacker || !attacker.attacking)
         { this.fail(playerId, 'atacante inválido'); return false; }
-      const why = canBlock(blocker, attacker);
+      const why = canBlock(s, blocker, attacker);
       if (why) { this.fail(playerId, `${blocker.card.name} não pode bloquear: ${why}`); return false; }
       seen.add(blocker.id);
       resolved.push({ blocker, attacker });
     }
     // Menace: attackers with menace must be blocked by 2+ or not at all.
-    for (const atk of Object.values(s.objects).filter((o) => o.attacking && hasKeyword(o, 'menace'))) {
+    for (const atk of Object.values(s.objects).filter((o) => o.attacking && hasKeyword(s, o, 'menace'))) {
       const count = resolved.filter((r) => r.attacker.id === atk.id).length;
       if (count === 1)
         { this.fail(playerId, `${atk.card.name} tem ameaçar: precisa de 2+ bloqueadores`); return false; }
     }
-    for (const r of resolved) r.blocker.blocking = r.attacker.id;
+    for (const r of resolved) {
+      r.blocker.blocking = r.attacker.id;
+      r.attacker.wasBlocked = true;
+    }
     s.combatAwaiting = null;
     this.emit({
       type: 'blockersDeclared',
@@ -546,7 +631,7 @@ export class Game {
   private advanceLoop(): void {
     const s = this.state;
     let guard = 0;
-    while (s.status === 'playing' && !s.pendingDecision && !s.combatAwaiting) {
+    while (s.status === 'playing' && s.mulligan === null && !s.pendingDecision && !s.combatAwaiting) {
       if (++guard > 500) throw new Error('advanceLoop travou (bug na engine)');
       if (s.priority === null) {
         this.advanceStep();
@@ -621,7 +706,7 @@ export class Game {
       case 'declareAttackers': {
         const canAny = s.players[s.activePlayer].zones.battlefield
           .map((id) => s.objects[id])
-          .some((o) => canAttack(o) === null);
+          .some((o) => canAttack(s, o) === null);
         if (!canAny) {
           this.emit({ type: 'attackersDeclared', player: s.activePlayer, attackers: [] });
           this.enterStep('combatEnd');
@@ -698,6 +783,21 @@ export class Game {
       }
       if (isPermanentCard(obj.card)) {
         moveWithEvent(s, obj, 'battlefield', 'resolved', this.emit);
+        // Aura: enters attached to its target (fizzle above covers a dead one).
+        const enchantTarget = obj.card.enchant ? item.targets[0] : undefined;
+        if (enchantTarget && enchantTarget.kind === 'object') {
+          const host = s.objects[enchantTarget.id];
+          if (host && host.zone === 'battlefield') {
+            obj.attachedTo = host.id;
+            this.emit({
+              type: 'attached',
+              sourceId: obj.id,
+              sourceName: obj.card.name,
+              hostId: host.id,
+              hostName: host.card.name,
+            });
+          }
+        }
         this.emit({ type: 'stackResolved', description: `${item.cardName} entra no campo de batalha` });
         return;
       }

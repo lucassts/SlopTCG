@@ -30,6 +30,11 @@ export interface GameObject {
   attacking: boolean;
   /** Attacker object id this creature is blocking, if any. */
   blocking?: number;
+  /** Set at blocker declaration; a blocked attacker whose blockers all die
+   * still deals no damage to the player (unless it has trample). */
+  wasBlocked: boolean;
+  /** For auras/equipment on the battlefield: the object they're attached to. */
+  attachedTo?: number;
   isToken: boolean;
 }
 
@@ -56,6 +61,14 @@ export interface PlayerState {
 
 export type PendingDecision = { type: 'discardToHandSize'; player: PlayerId; count: number };
 
+/** London mulligan bookkeeping, active only before turn 1. */
+export interface MulliganState {
+  /** Mulligans taken so far (= cards to bottom when keeping). */
+  taken: Record<PlayerId, number>;
+  /** 'deciding' → may mulligan or keep; 'kept' → waiting for the other player. */
+  phase: Record<PlayerId, 'deciding' | 'kept'>;
+}
+
 export interface GameState {
   seed: number;
   rngState: number;
@@ -75,6 +88,8 @@ export interface GameState {
   /** Combat declaration the engine is waiting for, if any. */
   combatAwaiting: 'attackers' | 'blockers' | null;
   pendingDecision: PendingDecision | null;
+  /** Non-null while opening hands are being decided (before turn 1). */
+  mulligan: MulliganState | null;
   status: 'playing' | 'finished';
   winner?: PlayerId | 'draw';
 }
@@ -100,6 +115,7 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
     onThePlay: 'p1',
     combatAwaiting: null,
     pendingDecision: null,
+    mulligan: null,
     status: 'playing',
   };
 
@@ -138,6 +154,7 @@ export function createObject(state: GameState, card: CardDefinition, owner: Play
     summoningSick: false,
     untilEot: { power: 0, toughness: 0 },
     attacking: false,
+    wasBlocked: false,
     isToken: false,
   };
   state.objects[obj.id] = obj;
@@ -175,6 +192,8 @@ export function moveObject(
     obj.counters = {};
     obj.attacking = false;
     obj.blocking = undefined;
+    obj.wasBlocked = false;
+    obj.attachedTo = undefined;
     obj.untilEot = { power: 0, toughness: 0 };
     obj.summoningSick = false;
   } else {
@@ -192,16 +211,37 @@ export function removeFromCurrentZone(state: GameState, obj: GameObject): void {
   if (i >= 0) arr.splice(i, 1);
 }
 
-export function effectivePower(obj: GameObject): number {
-  return (obj.card.power ?? 0) + obj.untilEot.power + (obj.counters['+1/+1'] ?? 0);
+/** Auras/equipment on the battlefield attached to `obj`. */
+export function attachmentsOf(state: GameState, obj: GameObject): GameObject[] {
+  return Object.values(state.objects).filter(
+    (o) => o.zone === 'battlefield' && o.attachedTo === obj.id,
+  );
 }
 
-export function effectiveToughness(obj: GameObject): number {
-  return (obj.card.toughness ?? 0) + obj.untilEot.toughness + (obj.counters['+1/+1'] ?? 0);
+export function effectivePower(state: GameState, obj: GameObject): number {
+  const fromAttachments = attachmentsOf(state, obj).reduce(
+    (sum, a) => sum + (a.card.attachEffect?.power ?? 0),
+    0,
+  );
+  return (obj.card.power ?? 0) + obj.untilEot.power + (obj.counters['+1/+1'] ?? 0) + fromAttachments;
 }
 
-export function hasKeyword(obj: GameObject, kw: import('./types.js').Keyword): boolean {
-  return obj.card.keywords?.includes(kw) ?? false;
+export function effectiveToughness(state: GameState, obj: GameObject): number {
+  const fromAttachments = attachmentsOf(state, obj).reduce(
+    (sum, a) => sum + (a.card.attachEffect?.toughness ?? 0),
+    0,
+  );
+  return (obj.card.toughness ?? 0) + obj.untilEot.toughness + (obj.counters['+1/+1'] ?? 0) + fromAttachments;
+}
+
+export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
+  if (obj.card.keywords?.includes(kw)) return true;
+  return attachmentsOf(state, obj).some((a) => a.card.attachEffect?.keywords?.includes(kw));
+}
+
+/** True if an attachment forbids this creature from attacking/blocking. */
+export function attachmentForbids(state: GameState, obj: GameObject, what: 'cantAttack' | 'cantBlock'): boolean {
+  return attachmentsOf(state, obj).some((a) => a.card.attachEffect?.[what]);
 }
 
 export function battlefield(state: GameState): GameObject[] {

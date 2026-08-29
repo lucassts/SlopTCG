@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CardView, GameView, PlayerAction, PlayerId } from '@slopmtg/protocol';
-import type { TargetChoice } from '@slopmtg/engine';
+import type { Step, TargetChoice } from '@slopmtg/engine';
 import { CardTile } from './CardTile';
 import { stepName } from '../logText';
 
@@ -14,6 +14,30 @@ const STEP_SHORT: Record<string, string> = {
   combatBegin: 'Combate', declareAttackers: 'Atacantes', declareBlockers: 'Bloqueadores',
   combatDamage: 'Dano', combatEnd: 'Fim comb.', main2: 'Principal 2', end: 'Final', cleanup: 'Limpeza',
 };
+
+/** Steps a player can choose to stop on (untap/cleanup grant no priority). */
+const STOPPABLE: Step[] = [
+  'upkeep', 'draw', 'main1', 'combatBegin', 'declareAttackers',
+  'declareBlockers', 'combatDamage', 'combatEnd', 'main2', 'end',
+];
+
+interface StopsConfig {
+  myTurn: Step[];
+  oppTurn: Step[];
+}
+
+const DEFAULT_STOPS: StopsConfig = { myTurn: ['main1', 'main2'], oppTurn: ['end'] };
+
+function loadStops(): StopsConfig {
+  try {
+    const raw = localStorage.getItem('slopmtg-stops');
+    if (!raw) return DEFAULT_STOPS;
+    const parsed = JSON.parse(raw) as StopsConfig;
+    return { myTurn: parsed.myTurn ?? DEFAULT_STOPS.myTurn, oppTurn: parsed.oppTurn ?? DEFAULT_STOPS.oppTurn };
+  } catch {
+    return DEFAULT_STOPS;
+  }
+}
 
 interface Targeting {
   kind: 'spell' | 'ability';
@@ -49,8 +73,11 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const [blockSel, setBlockSel] = useState<Map<number, number>>(new Map());
   const [selBlocker, setSelBlocker] = useState<number | null>(null);
   const [discardSel, setDiscardSel] = useState<Set<number>>(new Set());
+  const [bottomSel, setBottomSel] = useState<Set<number>>(new Set());
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showManual, setShowManual] = useState(false);
+  const [showStops, setShowStops] = useState(false);
+  const [stops, setStops] = useState<StopsConfig>(loadStops);
   const [chatText, setChatText] = useState('');
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +86,8 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const awaitingMyBlocks = view.combatAwaiting === 'blockers' && view.activePlayer === oppId;
   const myDiscard = view.pendingDecision?.type === 'discardToHandSize' && view.pendingDecision.player === you;
   const discardCount = myDiscard ? (view.pendingDecision?.count ?? 0) : 0;
+  const myMulligan = view.mulligan?.phase[you] === 'deciding';
+  const mullTaken = view.mulligan?.taken[you] ?? 0;
 
   // Reset transient interaction state when the situation changes.
   useEffect(() => {
@@ -67,18 +96,28 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
     setSelBlocker(null);
   }, [view.combatAwaiting, view.turn]);
   useEffect(() => setDiscardSel(new Set()), [myDiscard]);
+  useEffect(() => setBottomSel(new Set()), [mullTaken, myMulligan]);
   useEffect(() => setTargeting(null), [view.turn, view.step]);
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [log.length]);
 
+  const saveStops = (next: StopsConfig) => {
+    setStops(next);
+    try {
+      localStorage.setItem('slopmtg-stops', JSON.stringify(next));
+    } catch {
+      // localStorage indisponível: config só vale para a sessão
+    }
+  };
+
   // ---------------------------------------------------------- auto-yield
   useEffect(() => {
-    if (!shouldAutoPass(view)) return;
+    if (!shouldAutoPass(view, stops)) return;
     const t = setTimeout(() => onAction({ type: 'passPriority' }), 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncSeq]);
+  }, [syncSeq, stops]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -91,6 +130,26 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // ---------------------------------------------- attachments (empilhados)
+  const allField = useMemo(() => [...opp.battlefield, ...me.battlefield], [opp.battlefield, me.battlefield]);
+  const attachedIds = useMemo(
+    () => new Set(allField.filter((c) => c.attachedTo !== null && allField.some((h) => h.objectId === c.attachedTo)).map((c) => c.objectId)),
+    [allField],
+  );
+  const attachmentsOf = (hostId: number) => allField.filter((c) => c.attachedTo === hostId);
+  const controllerOf = (id: number): PlayerId =>
+    me.battlefield.some((c) => c.objectId === id) ? you : oppId;
+
+  /** Row cards with each host followed by its attachments (cross-side too). */
+  const rowCards = (cards: CardView[], lands: boolean): { card: CardView; attachment: boolean }[] =>
+    cards
+      .filter((c) => c.card.types.includes('Land') === lands)
+      .filter((c) => !attachedIds.has(c.objectId))
+      .flatMap((h) => [
+        { card: h, attachment: false },
+        ...attachmentsOf(h.objectId).map((a) => ({ card: a, attachment: true })),
+      ]);
 
   // ------------------------------------------------------------ handlers
 
@@ -112,6 +171,14 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
 
   const clickHandCard = (cv: CardView) => {
     setMenu(null);
+    if (myMulligan) {
+      if (mullTaken === 0) return;
+      const next = new Set(bottomSel);
+      if (next.has(cv.objectId)) next.delete(cv.objectId);
+      else if (next.size < mullTaken) next.add(cv.objectId);
+      setBottomSel(next);
+      return;
+    }
     if (myDiscard) {
       const next = new Set(discardSel);
       if (next.has(cv.objectId)) next.delete(cv.objectId);
@@ -127,7 +194,9 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       return;
     }
     if (def.automation === 'manual') return; // menu de contexto cuida
-    const specs = def.spellTargets ?? [];
+    const specs = def.enchant
+      ? [{ what: def.enchant.what }]
+      : def.spellTargets ?? [];
     if (specs.length === 0) {
       onAction({ type: 'castSpell', objectId: cv.objectId });
     } else {
@@ -219,6 +288,13 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
 
   const promptText = (() => {
     if (view.status === 'finished') return null;
+    if (view.mulligan) {
+      if (myMulligan)
+        return mullTaken > 0
+          ? `Mulligan ${mullTaken}: mantenha escolhendo ${mullTaken} carta(s) para o fundo, ou compre 7 de novo`
+          : 'Decida sua mão inicial';
+      return 'Aguardando o oponente decidir a mão…';
+    }
     if (targeting) return `${targeting.label}: escolha o alvo (${targeting.chosen.length + 1}/${targeting.specs.length}) — Esc cancela`;
     if (myDiscard) return `Descarte ${discardCount} carta(s): selecione na mão e confirme`;
     if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
@@ -232,7 +308,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   })();
 
   return (
-    <div className="table" onClick={() => setMenu(null)}>
+    <div className="table" onClick={() => { setMenu(null); setShowStops(false); }}>
       {/* -------- oponente -------- */}
       <div className={`opp-bar player-bar ${view.priority === oppId ? 'priority-holder' : ''}`}>
         <div
@@ -254,25 +330,22 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
 
       <div className="opp-field battlefield">
         <div className="field-row">
-          {opp.battlefield
-            .filter((c) => !c.card.types.includes('Land'))
-            .map((c) => (
-              <CardTile
-                key={c.objectId}
-                card={c}
-                targetable={isTargetableCard(c)}
-                selected={selBlocker !== null && c.attacking}
-                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, oppId); }}
-              />
-            ))}
+          {rowCards(opp.battlefield, false).map(({ card: c, attachment }) => (
+            <CardTile
+              key={c.objectId}
+              card={c}
+              attachment={attachment}
+              targetable={isTargetableCard(c)}
+              selected={selBlocker !== null && c.attacking}
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }}
+            />
+          ))}
         </div>
         <div className="field-row">
-          {opp.battlefield
-            .filter((c) => c.card.types.includes('Land'))
-            .map((c) => (
-              <CardTile key={c.objectId} card={c} targetable={isTargetableCard(c)}
-                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, oppId); }} />
-            ))}
+          {rowCards(opp.battlefield, true).map(({ card: c, attachment }) => (
+            <CardTile key={c.objectId} card={c} attachment={attachment} targetable={isTargetableCard(c)}
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }} />
+          ))}
         </div>
       </div>
 
@@ -287,11 +360,9 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
           {promptText && <span className="prompt-banner">{promptText}</span>}
           {targeting && <button onClick={() => setTargeting(null)}>Cancelar</button>}
           {awaitingMyAttack && (
-            <>
-              <button className="primary" onClick={confirmAttack}>
-                {attackSel.size > 0 ? `Atacar com ${attackSel.size}` : 'Não atacar'}
-              </button>
-            </>
+            <button className="primary" onClick={confirmAttack}>
+              {attackSel.size > 0 ? `Atacar com ${attackSel.size}` : 'Não atacar'}
+            </button>
           )}
           {awaitingMyBlocks && (
             <button className="primary" onClick={confirmBlocks}>
@@ -304,42 +375,46 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
               Descartar {discardSel.size}/{discardCount}
             </button>
           )}
-          {myPriority && !view.combatAwaiting && !myDiscard && (
+          {myPriority && !view.combatAwaiting && !myDiscard && !view.mulligan && (
             <button onClick={() => onAction({ type: 'passPriority' })}>
               {view.stack.length > 0 ? 'Resolver' : 'Passar'}
             </button>
           )}
+          <button
+            title="Paradas automáticas"
+            onClick={(e) => { e.stopPropagation(); setShowStops(!showStops); }}
+          >
+            ⏱
+          </button>
         </div>
       </div>
 
       {/* -------- meu campo -------- */}
       <div className="my-field battlefield">
         <div className="field-row">
-          {me.battlefield
-            .filter((c) => !c.card.types.includes('Land'))
-            .map((c) => (
-              <CardTile
-                key={c.objectId}
-                card={c}
-                targetable={isTargetableCard(c)}
-                selected={attackSel.has(c.objectId) || selBlocker === c.objectId || blockSel.has(c.objectId)}
-                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, you); }}
-                onContextMenu={(e) => openMenu(e, c)}
-              />
-            ))}
+          {rowCards(me.battlefield, false).map(({ card: c, attachment }) => (
+            <CardTile
+              key={c.objectId}
+              card={c}
+              attachment={attachment}
+              targetable={isTargetableCard(c)}
+              selected={attackSel.has(c.objectId) || selBlocker === c.objectId || blockSel.has(c.objectId)}
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }}
+              onContextMenu={(e) => openMenu(e, c)}
+            />
+          ))}
         </div>
         <div className="field-row">
-          {me.battlefield
-            .filter((c) => c.card.types.includes('Land'))
-            .map((c) => (
-              <CardTile
-                key={c.objectId}
-                card={c}
-                targetable={isTargetableCard(c)}
-                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, you); }}
-                onContextMenu={(e) => openMenu(e, c)}
-              />
-            ))}
+          {rowCards(me.battlefield, true).map(({ card: c, attachment }) => (
+            <CardTile
+              key={c.objectId}
+              card={c}
+              attachment={attachment}
+              targetable={isTargetableCard(c)}
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }}
+              onContextMenu={(e) => openMenu(e, c)}
+            />
+          ))}
         </div>
       </div>
 
@@ -359,7 +434,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
               key={c.objectId}
               card={c}
               size="hand"
-              selected={discardSel.has(c.objectId)}
+              selected={discardSel.has(c.objectId) || bottomSel.has(c.objectId)}
               dimmed={myDiscard && !discardSel.has(c.objectId) && discardSel.size >= discardCount}
               onClick={(e) => { e.stopPropagation(); clickHandCard(c); }}
               onContextMenu={(e) => openMenu(e, c)}
@@ -438,6 +513,22 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
         </div>
       </div>
 
+      {/* -------- paradas automáticas -------- */}
+      {showStops && (
+        <div className="context-menu stops-panel" style={{ right: 12, top: 60 }} onClick={(e) => e.stopPropagation()}>
+          <div className="panel-title" style={{ padding: '4px 10px' }}>Parar automaticamente em:</div>
+          <div className="stops-grid">
+            <span />
+            <span className="muted">meu turno</span>
+            <span className="muted">oponente</span>
+            {STOPPABLE.map((s) => (
+              <StopRow key={s} step={s} stops={stops} onChange={saveStops} />
+            ))}
+          </div>
+          <button onClick={() => saveStops(DEFAULT_STOPS)}>Restaurar padrão</button>
+        </div>
+      )}
+
       {/* -------- menu de contexto (modo manual) -------- */}
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
@@ -451,6 +542,52 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
           <MenuItem label={menu.card.tapped ? 'desvirar' : 'virar'} onPick={() => onAction({ type: 'manualTap', objectId: menu.card.objectId, tapped: !menu.card.tapped })} />
           <MenuItem label="+1/+1" onPick={() => onAction({ type: 'manualCounter', objectId: menu.card.objectId, counter: '+1/+1', delta: 1 })} />
           <MenuItem label="-1 marcador +1/+1" onPick={() => onAction({ type: 'manualCounter', objectId: menu.card.objectId, counter: '+1/+1', delta: -1 })} />
+        </div>
+      )}
+
+      {/* -------- mulligan -------- */}
+      {view.mulligan && view.status === 'playing' && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>Mão inicial{mullTaken > 0 ? ` — mulligan ${mullTaken}` : ''}</h2>
+            <div className="mulligan-hand">
+              {(me.hand ?? []).map((c) => (
+                <CardTile
+                  key={c.objectId}
+                  card={c}
+                  size="hand"
+                  selected={bottomSel.has(c.objectId)}
+                  onClick={(e) => { e.stopPropagation(); clickHandCard(c); }}
+                />
+              ))}
+            </div>
+            {myMulligan ? (
+              <>
+                {mullTaken > 0 && (
+                  <div className="muted">
+                    Para manter, escolha {mullTaken} carta(s) para o fundo da biblioteca ({bottomSel.size}/{mullTaken}).
+                  </div>
+                )}
+                <div className="row">
+                  <button
+                    className="primary"
+                    disabled={bottomSel.size !== mullTaken}
+                    onClick={() => onAction({ type: 'keepHand', bottom: [...bottomSel] })}
+                  >
+                    Manter mão
+                  </button>
+                  <button disabled={mullTaken >= 7} onClick={() => onAction({ type: 'mulligan' })}>
+                    Mulligan (comprar 7 de novo)
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="muted">Mão mantida. Aguardando o oponente…</div>
+            )}
+            <div className="muted">
+              Oponente: {view.mulligan.phase[oppId] === 'kept' ? 'manteve' : `decidindo (mulligan ${view.mulligan.taken[oppId]})`}
+            </div>
+          </div>
         </div>
       )}
 
@@ -477,7 +614,21 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   function MenuItem({ label, onPick }: { label: string; onPick: () => void }) {
     return <button onClick={() => { onPick(); setMenu(null); }}>{label}</button>;
   }
+}
 
+function StopRow({ step, stops, onChange }: { step: Step; stops: StopsConfig; onChange: (s: StopsConfig) => void }) {
+  const toggle = (side: 'myTurn' | 'oppTurn') => {
+    const list = stops[side];
+    const next = list.includes(step) ? list.filter((s) => s !== step) : [...list, step];
+    onChange({ ...stops, [side]: next });
+  };
+  return (
+    <>
+      <span className="stops-label">{STEP_SHORT[step]}</span>
+      <input type="checkbox" checked={stops.myTurn.includes(step)} onChange={() => toggle('myTurn')} />
+      <input type="checkbox" checked={stops.oppTurn.includes(step)} onChange={() => toggle('oppTurn')} />
+    </>
+  );
 }
 
 function ManaChips({ pool }: { pool: Record<string, number> }) {
@@ -493,8 +644,9 @@ function ManaChips({ pool }: { pool: Record<string, number> }) {
   );
 }
 
-function shouldAutoPass(view: GameView): boolean {
+function shouldAutoPass(view: GameView, stops: StopsConfig): boolean {
   if (view.status !== 'playing') return false;
+  if (view.mulligan) return false;
   if (view.priority !== view.you) return false;
   if (view.pendingDecision) return false;
   if (view.combatAwaiting) return false;
@@ -503,7 +655,6 @@ function shouldAutoPass(view: GameView): boolean {
     return view.stack[view.stack.length - 1].controller === view.you;
   }
   const myTurn = view.activePlayer === view.you;
-  if (myTurn) return !(view.step === 'main1' || view.step === 'main2');
-  // No turno do oponente, para apenas na etapa final (janela de instants).
-  return view.step !== 'end';
+  const stopList = myTurn ? stops.myTurn : stops.oppTurn;
+  return !stopList.includes(view.step);
 }

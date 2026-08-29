@@ -220,7 +220,71 @@ export const prodigalPyromancer = def({
   automation: 'full',
 });
 
+export const youthfulKnight = def({
+  id: 'youthful-knight',
+  name: 'Youthful Knight',
+  manaCost: '{1}{W}',
+  types: ['Creature'],
+  subtypes: ['Human', 'Knight'],
+  colors: ['W'],
+  power: 2,
+  toughness: 1,
+  keywords: ['firstStrike'],
+  text: 'First strike',
+  automation: 'full',
+});
+
+export const fencingAce = def({
+  id: 'fencing-ace',
+  name: 'Fencing Ace',
+  manaCost: '{1}{W}',
+  types: ['Creature'],
+  subtypes: ['Human', 'Soldier'],
+  colors: ['W'],
+  power: 1,
+  toughness: 1,
+  keywords: ['doubleStrike'],
+  text: 'Double strike',
+  automation: 'full',
+});
+
+// --------------------------------------------------------------- auras
+export const pacifism = def({
+  id: 'pacifism',
+  name: 'Pacifism',
+  manaCost: '{1}{W}',
+  types: ['Enchantment'],
+  subtypes: ['Aura'],
+  colors: ['W'],
+  text: "Enchant creature. Enchanted creature can't attack or block.",
+  enchant: { what: 'creature' },
+  attachEffect: { cantAttack: true, cantBlock: true },
+  automation: 'full',
+});
+
 // ------------------------------------------------------------- artifacts
+export const bonesplitter = def({
+  id: 'bonesplitter',
+  name: 'Bonesplitter',
+  manaCost: '{1}',
+  types: ['Artifact'],
+  subtypes: ['Equipment'],
+  colors: [],
+  text: 'Equipped creature gets +2/+0. Equip {1}',
+  attachEffect: { power: 2, toughness: 0 },
+  abilities: [
+    {
+      kind: 'activated',
+      cost: { mana: '{1}' },
+      targets: [{ what: 'creature', controlledBy: 'you' }],
+      effect: [{ op: 'attach' }],
+      text: 'Equipar criatura que você controla (+2/+0)',
+      sorceryOnly: true,
+    },
+  ],
+  automation: 'full',
+});
+
 export const fountainOfRenewal = def({
   id: 'fountain-of-renewal',
   name: 'Fountain of Renewal',
@@ -390,8 +454,9 @@ export function demoDeckGruul(): DeckList {
       ...copies(giantSpider, 3),
       ...copies(colossalDreadmaw, 2),
       ...copies(lightningBolt, 4),
-      ...copies(giantGrowth, 4),
-      ...copies(krenkosCommand, 2),
+      ...copies(giantGrowth, 3),
+      ...copies(krenkosCommand, 1),
+      ...copies(bonesplitter, 2),
     ],
   };
 }
@@ -403,11 +468,13 @@ export function demoDeckAzorius(): DeckList {
       ...copies(plains, 8),
       ...copies(island, 8),
       ...copies(stormCrow, 4),
+      ...copies(youthfulKnight, 2),
       ...copies(serraAngel, 2),
-      ...copies(raiseTheAlarm, 4),
-      ...copies(unsummon, 4),
-      ...copies(cancel, 4),
-      ...copies(divination, 3),
+      ...copies(raiseTheAlarm, 3),
+      ...copies(unsummon, 3),
+      ...copies(cancel, 3),
+      ...copies(divination, 2),
+      ...copies(pacifism, 2),
       ...copies(revitalize, 2),
       ...copies(fountainOfRenewal, 1),
     ],

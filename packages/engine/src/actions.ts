@@ -11,6 +11,10 @@ import type { PlayerId, TargetChoice, ZoneName } from './types.js';
 
 export type PlayerAction =
   | { type: 'passPriority' }
+  /** London mulligan: shuffle the hand back and draw 7 again. */
+  | { type: 'mulligan' }
+  /** Keep the hand, putting exactly `bottom` (= mulligans taken) on the bottom. */
+  | { type: 'keepHand'; bottom: number[] }
   | { type: 'playLand'; objectId: number }
   | { type: 'castSpell'; objectId: number; targets?: TargetChoice[] }
   | { type: 'activateAbility'; objectId: number; abilityIndex: number; targets?: TargetChoice[] }

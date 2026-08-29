@@ -55,7 +55,8 @@ export async function resolveDecklist(entries: { name: string; count: number }[]
     const res = await fetch(`${API}/cards/collection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifiers: batch.map((e) => ({ name: e.name })) }),
+      // Cartas dupla-face vêm como "Frente // Verso"; o Scryfall resolve pela frente.
+      body: JSON.stringify({ identifiers: batch.map((e) => ({ name: e.name.split('//')[0].trim() })) }),
     });
     if (!res.ok) throw new Error(`Scryfall respondeu ${res.status}`);
     const data = (await res.json()) as { data: CollectionCard[]; not_found?: { name: string }[] };

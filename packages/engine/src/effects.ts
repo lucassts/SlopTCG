@@ -165,6 +165,24 @@ function runStep(ctx: EffectContext, step: EffectStep): void {
       }
       return;
 
+    case 'attach': {
+      const source = state.objects[ctx.sourceId];
+      const t = ctx.targets[0];
+      if (!source || source.zone !== 'battlefield') return;
+      if (!t || t.kind !== 'object') return;
+      const host = objectAlive(state, t);
+      if (!host || host.zone !== 'battlefield') return;
+      source.attachedTo = host.id;
+      emit({
+        type: 'attached',
+        sourceId: source.id,
+        sourceName: source.card.name,
+        hostId: host.id,
+        hostName: host.card.name,
+      });
+      return;
+    }
+
     case 'addMana':
       for (const p of resolvePlayers(step.who, ctx.controller)) {
         for (const sym of step.mana) state.players[p].manaPool[sym] += 1;

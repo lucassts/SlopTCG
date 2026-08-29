@@ -37,6 +37,9 @@ export type GameEvent =
   | { type: 'pumped'; objectId: number; cardName: string; power: number; toughness: number }
   | { type: 'countersChanged'; objectId: number; cardName: string; counter: string; delta: number; total: number }
   | { type: 'tokenCreated'; player: PlayerId; objectId: number; name: string }
+  | { type: 'attached'; sourceId: number; sourceName: string; hostId: number; hostName: string }
+  | { type: 'mulliganTaken'; player: PlayerId; taken: number }
+  | { type: 'handKept'; player: PlayerId; bottomed: number }
   | { type: 'attackersDeclared'; player: PlayerId; attackers: { objectId: number; cardName: string }[] }
   | { type: 'blockersDeclared'; player: PlayerId; blocks: { blocker: number; blockerName: string; attacker: number; attackerName: string }[] }
   | { type: 'discarded'; player: PlayerId; objectId: number; cardName: string }

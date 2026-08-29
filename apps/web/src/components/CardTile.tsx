@@ -22,13 +22,15 @@ export interface CardTileProps {
   selected?: boolean;
   targetable?: boolean;
   dimmed?: boolean;
+  /** Rendered tucked behind the card it is attached to (aura/equipment). */
+  attachment?: boolean;
   onClick?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   title?: string;
 }
 
 /** A card on the table: Scryfall image when available, text frame as fallback. */
-export function CardTile({ card, size = 'field', selected, targetable, dimmed, onClick, onContextMenu, title }: CardTileProps) {
+export function CardTile({ card, size = 'field', selected, targetable, dimmed, attachment, onClick, onContextMenu, title }: CardTileProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const def = card.card;
   const url = card.isToken && !def.scryfallId
@@ -45,6 +47,7 @@ export function CardTile({ card, size = 'field', selected, targetable, dimmed, o
     targetable ? 'targetable' : '',
     dimmed ? 'dimmed' : '',
     card.attacking ? 'attacking' : '',
+    attachment ? 'attached-tile' : '',
   ].filter(Boolean).join(' ');
 
   return (

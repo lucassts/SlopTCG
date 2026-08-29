@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { DeckSpec, LobbyPlayer } from '@slopmtg/protocol';
+import { serverHttpBase } from '../net';
 import { parseDecklist, resolveDecklist } from '../scryfall';
 
 export interface LobbyProps {
@@ -15,6 +16,7 @@ type DeckChoice = 'gruul' | 'azorius' | 'custom';
 export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps) {
   const [choice, setChoice] = useState<DeckChoice | null>(null);
   const [customText, setCustomText] = useState('');
+  const [deckUrl, setDeckUrl] = useState('');
   const [importing, setImporting] = useState(false);
   const [importInfo, setImportInfo] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -28,22 +30,42 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
     onSetDeck({ kind: 'demo', name });
   };
 
+  const finishImport = async (entries: { name: string; count: number }[]) => {
+    const result = await resolveDecklist(entries);
+    if (result.cards.length === 0) throw new Error('nenhuma carta encontrada no Scryfall');
+    onSetDeck({ kind: 'external', cards: result.cards });
+    setChoice('custom');
+    const total = result.cards.reduce((n, c) => n + c.count, 0);
+    setImportInfo(
+      `${total} cartas importadas.` +
+        (result.notFound.length > 0 ? ` Não encontradas: ${result.notFound.join(', ')}.` : '') +
+        ' Cartas fora do set demo entram em modo manual.',
+    );
+  };
+
   const importCustom = async () => {
     setImporting(true);
     setImportInfo(null);
     try {
       const entries = parseDecklist(customText);
       if (entries.length === 0) throw new Error('cole uma lista tipo "4 Lightning Bolt"');
-      const result = await resolveDecklist(entries);
-      if (result.cards.length === 0) throw new Error('nenhuma carta encontrada no Scryfall');
-      onSetDeck({ kind: 'external', cards: result.cards });
-      setChoice('custom');
-      const total = result.cards.reduce((n, c) => n + c.count, 0);
-      setImportInfo(
-        `${total} cartas importadas.` +
-          (result.notFound.length > 0 ? ` Não encontradas: ${result.notFound.join(', ')}.` : '') +
-          ' Cartas fora do set demo entram em modo manual.',
-      );
+      await finishImport(entries);
+    } catch (err) {
+      setImportInfo(`Erro: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const importFromUrl = async () => {
+    setImporting(true);
+    setImportInfo(null);
+    try {
+      const res = await fetch(`${serverHttpBase()}/api/deck?url=${encodeURIComponent(deckUrl.trim())}`);
+      const data = (await res.json()) as { name?: string; cards?: { name: string; count: number }[]; error?: string };
+      if (!res.ok || !data.cards) throw new Error(data.error ?? `servidor respondeu ${res.status}`);
+      await finishImport(data.cards);
+      setImportInfo((prev) => `Deck "${data.name}": ${prev ?? ''}`);
     } catch (err) {
       setImportInfo(`Erro: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -92,16 +114,26 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
           </div>
         </div>
         <details>
-          <summary className="muted" style={{ cursor: 'pointer' }}>Importar deck próprio (via Scryfall)</summary>
+          <summary className="muted" style={{ cursor: 'pointer' }}>Importar deck próprio</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+            <div className="row">
+              <input
+                placeholder="URL do Archidekt (ex.: archidekt.com/decks/123456)"
+                value={deckUrl}
+                onChange={(e) => setDeckUrl(e.target.value)}
+              />
+              <button disabled={importing || !deckUrl.trim()} onClick={importFromUrl} style={{ flex: '0 0 auto' }}>
+                {importing ? '…' : 'Importar URL'}
+              </button>
+            </div>
             <textarea
               rows={6}
-              placeholder={'4 Lightning Bolt\n4 Grizzly Bears\n12 Mountain\n...'}
+              placeholder={'…ou cole a lista (Moxfield: Export → copy):\n4 Lightning Bolt\n4 Grizzly Bears\n12 Mountain'}
               value={customText}
               onChange={(e) => setCustomText(e.target.value)}
             />
             <button disabled={importing || !customText.trim()} onClick={importCustom}>
-              {importing ? 'importando…' : 'Importar deck'}
+              {importing ? 'importando…' : 'Importar lista'}
             </button>
             {importInfo && <div className="muted">{importInfo}</div>}
           </div>

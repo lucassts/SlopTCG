@@ -84,6 +84,14 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${ev.cardName}: ${ev.delta > 0 ? '+' : ''}${ev.delta} marcador(es) de ${ev.counter} (total ${ev.total}).`;
     case 'tokenCreated':
       return `${name(ev.player)} criou uma ficha: ${ev.name}.`;
+    case 'attached':
+      return `${ev.sourceName} foi anexada a ${ev.hostName}.`;
+    case 'mulliganTaken':
+      return `${name(ev.player)} fez mulligan (${ev.taken}º).`;
+    case 'handKept':
+      return ev.bottomed > 0
+        ? `${name(ev.player)} manteve a mão, devolvendo ${ev.bottomed} carta(s) para o fundo.`
+        : `${name(ev.player)} manteve a mão.`;
     case 'attackersDeclared':
       return ev.attackers.length === 0
         ? `${name(ev.player)} não atacou.`
