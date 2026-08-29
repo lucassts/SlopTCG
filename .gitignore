@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+
+# Card data is fetched from Scryfall at runtime — never committed (Wizards IP).
+data/
+*.local.json

@@ -1,0 +1,509 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CardView, GameView, PlayerAction, PlayerId } from '@slopmtg/protocol';
+import type { TargetChoice } from '@slopmtg/engine';
+import { CardTile } from './CardTile';
+import { stepName } from '../logText';
+
+const STEPS = [
+  'untap', 'upkeep', 'draw', 'main1', 'combatBegin', 'declareAttackers',
+  'declareBlockers', 'combatDamage', 'combatEnd', 'main2', 'end', 'cleanup',
+] as const;
+
+const STEP_SHORT: Record<string, string> = {
+  untap: 'Desv.', upkeep: 'Manut.', draw: 'Compra', main1: 'Principal 1',
+  combatBegin: 'Combate', declareAttackers: 'Atacantes', declareBlockers: 'Bloqueadores',
+  combatDamage: 'Dano', combatEnd: 'Fim comb.', main2: 'Principal 2', end: 'Final', cleanup: 'Limpeza',
+};
+
+interface Targeting {
+  kind: 'spell' | 'ability';
+  objectId: number;
+  abilityIndex?: number;
+  specs: { what: string }[];
+  chosen: TargetChoice[];
+  label: string;
+}
+
+interface MenuState {
+  x: number;
+  y: number;
+  card: CardView;
+}
+
+export interface GameBoardProps {
+  view: GameView;
+  syncSeq: number;
+  log: string[];
+  onAction: (action: PlayerAction) => void;
+  onExit: () => void;
+}
+
+export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardProps) {
+  const you = view.you;
+  const oppId: PlayerId = you === 'p1' ? 'p2' : 'p1';
+  const me = view.players[you];
+  const opp = view.players[oppId];
+
+  const [targeting, setTargeting] = useState<Targeting | null>(null);
+  const [attackSel, setAttackSel] = useState<Set<number>>(new Set());
+  const [blockSel, setBlockSel] = useState<Map<number, number>>(new Map());
+  const [selBlocker, setSelBlocker] = useState<number | null>(null);
+  const [discardSel, setDiscardSel] = useState<Set<number>>(new Set());
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [showManual, setShowManual] = useState(false);
+  const [chatText, setChatText] = useState('');
+  const logRef = useRef<HTMLDivElement>(null);
+
+  const myPriority = view.priority === you && view.status === 'playing';
+  const awaitingMyAttack = view.combatAwaiting === 'attackers' && view.activePlayer === you;
+  const awaitingMyBlocks = view.combatAwaiting === 'blockers' && view.activePlayer === oppId;
+  const myDiscard = view.pendingDecision?.type === 'discardToHandSize' && view.pendingDecision.player === you;
+  const discardCount = myDiscard ? (view.pendingDecision?.count ?? 0) : 0;
+
+  // Reset transient interaction state when the situation changes.
+  useEffect(() => {
+    setAttackSel(new Set());
+    setBlockSel(new Map());
+    setSelBlocker(null);
+  }, [view.combatAwaiting, view.turn]);
+  useEffect(() => setDiscardSel(new Set()), [myDiscard]);
+  useEffect(() => setTargeting(null), [view.turn, view.step]);
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [log.length]);
+
+  // ---------------------------------------------------------- auto-yield
+  useEffect(() => {
+    if (!shouldAutoPass(view)) return;
+    const t = setTimeout(() => onAction({ type: 'passPriority' }), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncSeq]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setTargeting(null);
+        setMenu(null);
+        setSelBlocker(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ------------------------------------------------------------ handlers
+
+  const finishTargetingIfDone = (t: Targeting) => {
+    if (t.chosen.length >= t.specs.length) {
+      if (t.kind === 'spell') onAction({ type: 'castSpell', objectId: t.objectId, targets: t.chosen });
+      else onAction({ type: 'activateAbility', objectId: t.objectId, abilityIndex: t.abilityIndex ?? 0, targets: t.chosen });
+      setTargeting(null);
+    } else {
+      setTargeting({ ...t });
+    }
+  };
+
+  const addTarget = (choice: TargetChoice) => {
+    if (!targeting) return;
+    const t = { ...targeting, chosen: [...targeting.chosen, choice] };
+    finishTargetingIfDone(t);
+  };
+
+  const clickHandCard = (cv: CardView) => {
+    setMenu(null);
+    if (myDiscard) {
+      const next = new Set(discardSel);
+      if (next.has(cv.objectId)) next.delete(cv.objectId);
+      else if (next.size < discardCount) next.add(cv.objectId);
+      setDiscardSel(next);
+      return;
+    }
+    if (targeting) return;
+    if (!myPriority) return;
+    const def = cv.card;
+    if (def.types.includes('Land')) {
+      onAction({ type: 'playLand', objectId: cv.objectId });
+      return;
+    }
+    if (def.automation === 'manual') return; // menu de contexto cuida
+    const specs = def.spellTargets ?? [];
+    if (specs.length === 0) {
+      onAction({ type: 'castSpell', objectId: cv.objectId });
+    } else {
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label: def.name });
+    }
+  };
+
+  const clickFieldCard = (cv: CardView, owner: PlayerId) => {
+    setMenu(null);
+    if (targeting) {
+      addTarget({ kind: 'object', id: cv.objectId });
+      return;
+    }
+    if (awaitingMyAttack && owner === you && cv.card.types.includes('Creature')) {
+      const next = new Set(attackSel);
+      if (next.has(cv.objectId)) next.delete(cv.objectId);
+      else next.add(cv.objectId);
+      setAttackSel(next);
+      return;
+    }
+    if (awaitingMyBlocks) {
+      if (owner === you && cv.card.types.includes('Creature')) {
+        setSelBlocker(cv.objectId === selBlocker ? null : cv.objectId);
+        return;
+      }
+      if (owner === oppId && cv.attacking && selBlocker !== null) {
+        const next = new Map(blockSel);
+        next.set(selBlocker, cv.objectId);
+        setBlockSel(next);
+        setSelBlocker(null);
+        return;
+      }
+      return;
+    }
+    if (owner === you) {
+      const abilities = cv.card.abilities ?? [];
+      const idx = abilities.findIndex((a) => a.kind === 'activated');
+      if (idx >= 0) {
+        const ability = abilities[idx];
+        if (ability.kind !== 'activated') return;
+        const specs = ability.targets ?? [];
+        if (specs.length === 0) {
+          onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx });
+        } else {
+          setTargeting({
+            kind: 'ability',
+            objectId: cv.objectId,
+            abilityIndex: idx,
+            specs,
+            chosen: [],
+            label: `${cv.card.name}: ${ability.text}`,
+          });
+        }
+      }
+    }
+  };
+
+  const clickPlayer = (playerId: PlayerId) => {
+    if (targeting) addTarget({ kind: 'player', player: playerId });
+  };
+
+  const clickStackItem = (itemIdx: number) => {
+    // Alvo em mágica na pilha (counterspell): o sourceId é o objectId do card.
+    const item = view.stack[itemIdx];
+    if (targeting && item?.kind === 'spell') {
+      addTarget({ kind: 'object', id: item.sourceId });
+    }
+  };
+
+  const openMenu = (e: React.MouseEvent, cv: CardView) => {
+    e.preventDefault();
+    setMenu({ x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 320), card: cv });
+  };
+
+  const confirmAttack = () => onAction({ type: 'declareAttackers', attackers: [...attackSel] });
+  const confirmBlocks = () =>
+    onAction({ type: 'declareBlockers', blocks: [...blockSel.entries()].map(([blocker, attacker]) => ({ blocker, attacker })) });
+
+  // --------------------------------------------------------------- render
+
+  const isTargetableCard = (cv: CardView): boolean => {
+    if (!targeting) return false;
+    const spec = targeting.specs[targeting.chosen.length];
+    if (!spec) return false;
+    if (spec.what === 'player') return false;
+    if (spec.what === 'creature') return cv.card.types.includes('Creature');
+    return true;
+  };
+
+  const promptText = (() => {
+    if (view.status === 'finished') return null;
+    if (targeting) return `${targeting.label}: escolha o alvo (${targeting.chosen.length + 1}/${targeting.specs.length}) — Esc cancela`;
+    if (myDiscard) return `Descarte ${discardCount} carta(s): selecione na mão e confirme`;
+    if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
+    if (awaitingMyBlocks) return 'Clique num bloqueador seu, depois no atacante; confirme';
+    if (view.combatAwaiting) return 'Aguardando o oponente…';
+    if (myPriority && view.stack.length > 0) return 'Responder à pilha ou resolver';
+    if (myPriority && (view.step === 'main1' || view.step === 'main2') && view.activePlayer === you)
+      return 'Sua fase principal — jogue cartas ou passe';
+    if (myPriority) return 'Você tem a prioridade';
+    return 'Aguardando o oponente…';
+  })();
+
+  return (
+    <div className="table" onClick={() => setMenu(null)}>
+      {/* -------- oponente -------- */}
+      <div className={`opp-bar player-bar ${view.priority === oppId ? 'priority-holder' : ''}`}>
+        <div
+          className={`life ${targeting ? 'targetable' : ''}`}
+          onClick={() => clickPlayer(oppId)}
+          title={targeting ? 'Escolher como alvo' : `${opp.name}`}
+        >
+          {opp.life}
+        </div>
+        <strong>{opp.name}</strong>
+        {view.activePlayer === oppId && <span className="zone-pill">turno dele</span>}
+        <span className="zone-pill">✋ {opp.handSize}</span>
+        <span className="zone-pill" title={opp.graveyard.map((c) => c.card.name).join('\n') || 'cemitério vazio'}>
+          🪦 {opp.graveyard.length}
+        </span>
+        <span className="zone-pill">📚 {opp.librarySize}</span>
+        <ManaChips pool={opp.manaPool} />
+      </div>
+
+      <div className="opp-field battlefield">
+        <div className="field-row">
+          {opp.battlefield
+            .filter((c) => !c.card.types.includes('Land'))
+            .map((c) => (
+              <CardTile
+                key={c.objectId}
+                card={c}
+                targetable={isTargetableCard(c)}
+                selected={selBlocker !== null && c.attacking}
+                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, oppId); }}
+              />
+            ))}
+        </div>
+        <div className="field-row">
+          {opp.battlefield
+            .filter((c) => c.card.types.includes('Land'))
+            .map((c) => (
+              <CardTile key={c.objectId} card={c} targetable={isTargetableCard(c)}
+                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, oppId); }} />
+            ))}
+        </div>
+      </div>
+
+      {/* -------- barra de fases -------- */}
+      <div className="phase-bar phase-strip">
+        {STEPS.map((s) => (
+          <span key={s} className={`phase-step ${view.step === s ? 'current' : ''}`} title={stepName(s)}>
+            {STEP_SHORT[s]}
+          </span>
+        ))}
+        <div className="phase-actions">
+          {promptText && <span className="prompt-banner">{promptText}</span>}
+          {targeting && <button onClick={() => setTargeting(null)}>Cancelar</button>}
+          {awaitingMyAttack && (
+            <>
+              <button className="primary" onClick={confirmAttack}>
+                {attackSel.size > 0 ? `Atacar com ${attackSel.size}` : 'Não atacar'}
+              </button>
+            </>
+          )}
+          {awaitingMyBlocks && (
+            <button className="primary" onClick={confirmBlocks}>
+              {blockSel.size > 0 ? `Confirmar ${blockSel.size} bloqueio(s)` : 'Não bloquear'}
+            </button>
+          )}
+          {myDiscard && (
+            <button className="primary" disabled={discardSel.size !== discardCount}
+              onClick={() => onAction({ type: 'chooseDiscard', objectIds: [...discardSel] })}>
+              Descartar {discardSel.size}/{discardCount}
+            </button>
+          )}
+          {myPriority && !view.combatAwaiting && !myDiscard && (
+            <button onClick={() => onAction({ type: 'passPriority' })}>
+              {view.stack.length > 0 ? 'Resolver' : 'Passar'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* -------- meu campo -------- */}
+      <div className="my-field battlefield">
+        <div className="field-row">
+          {me.battlefield
+            .filter((c) => !c.card.types.includes('Land'))
+            .map((c) => (
+              <CardTile
+                key={c.objectId}
+                card={c}
+                targetable={isTargetableCard(c)}
+                selected={attackSel.has(c.objectId) || selBlocker === c.objectId || blockSel.has(c.objectId)}
+                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, you); }}
+                onContextMenu={(e) => openMenu(e, c)}
+              />
+            ))}
+        </div>
+        <div className="field-row">
+          {me.battlefield
+            .filter((c) => c.card.types.includes('Land'))
+            .map((c) => (
+              <CardTile
+                key={c.objectId}
+                card={c}
+                targetable={isTargetableCard(c)}
+                onClick={(e) => { e.stopPropagation(); clickFieldCard(c, you); }}
+                onContextMenu={(e) => openMenu(e, c)}
+              />
+            ))}
+        </div>
+      </div>
+
+      {/* -------- minha barra + mão -------- */}
+      <div className={`my-bar player-bar ${myPriority ? 'priority-holder' : ''}`}>
+        <div className={`life ${targeting ? 'targetable' : ''}`} onClick={() => clickPlayer(you)}>
+          {me.life}
+        </div>
+        <span className="zone-pill" title={me.graveyard.map((c) => c.card.name).join('\n') || 'cemitério vazio'}>
+          🪦 {me.graveyard.length}
+        </span>
+        <span className="zone-pill">📚 {me.librarySize}</span>
+        <ManaChips pool={me.manaPool} />
+        <div className="hand-row">
+          {(me.hand ?? []).map((c) => (
+            <CardTile
+              key={c.objectId}
+              card={c}
+              size="hand"
+              selected={discardSel.has(c.objectId)}
+              dimmed={myDiscard && !discardSel.has(c.objectId) && discardSel.size >= discardCount}
+              onClick={(e) => { e.stopPropagation(); clickHandCard(c); }}
+              onContextMenu={(e) => openMenu(e, c)}
+            />
+          ))}
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); setShowManual(!showManual); }} title="Ações manuais (Tier 3)">
+          🛠
+        </button>
+      </div>
+
+      {/* -------- painel lateral -------- */}
+      <div className="side-panel">
+        <div className="phase-strip" style={{ justifyContent: 'space-between' }}>
+          <span className="panel-title">Turno {view.turn} · {stepName(view.step)}</span>
+          <button className="danger" onClick={() => { if (confirm('Conceder a partida?')) onAction({ type: 'concede' }); }}>
+            Conceder
+          </button>
+        </div>
+        {view.stack.length > 0 && (
+          <div className="stack-panel">
+            <div className="panel-title">Pilha (resolve de baixo para cima)</div>
+            {[...view.stack].reverse().map((item, i) => (
+              <div
+                key={item.id}
+                className={`stack-item ${item.controller === you ? 'mine' : ''}`}
+                onClick={() => clickStackItem(view.stack.length - 1 - i)}
+                style={targeting ? { cursor: 'crosshair' } : undefined}
+              >
+                {item.description}
+                {i === 0 ? ' ← próxima' : ''}
+              </div>
+            ))}
+          </div>
+        )}
+        {showManual && (
+          <div className="stack-panel">
+            <div className="panel-title">Modo manual — tudo fica no log</div>
+            <div className="manual-drawer">
+              <button onClick={() => onAction({ type: 'manualDraw', count: 1 })}>Comprar carta</button>
+              <button onClick={() => onAction({ type: 'manualLife', player: you, delta: 1 })}>+1 vida</button>
+              <button onClick={() => onAction({ type: 'manualLife', player: you, delta: -1 })}>-1 vida</button>
+              <button onClick={() => onAction({ type: 'manualUntapAll' })}>Desvirar tudo</button>
+              <button onClick={() => onAction({ type: 'manualShuffle' })}>Embaralhar</button>
+              <button
+                onClick={() => {
+                  const name = prompt('Nome da ficha:', 'Goblin');
+                  if (!name) return;
+                  const pt = prompt('Poder/resistência (ex.: 1/1):', '1/1') ?? '1/1';
+                  const m = pt.match(/(\d+)\s*\/\s*(\d+)/);
+                  onAction({ type: 'manualToken', name, power: m ? parseInt(m[1], 10) : 1, toughness: m ? parseInt(m[2], 10) : 1 });
+                }}
+              >
+                Criar ficha
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="log-panel" ref={logRef}>
+          {log.map((line, i) => (
+            <div key={i} className={i >= log.length - 6 ? 'recent' : ''}>{line}</div>
+          ))}
+        </div>
+        <div className="row">
+          <input
+            placeholder="chat…"
+            value={chatText}
+            onChange={(e) => setChatText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && chatText.trim()) {
+                onAction({ type: 'chat', text: chatText.trim() });
+                setChatText('');
+              }
+            }}
+          />
+        </div>
+      </div>
+
+      {/* -------- menu de contexto (modo manual) -------- */}
+      {menu && (
+        <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+          <div className="panel-title" style={{ padding: '4px 10px' }}>{menu.card.card.name} (manual)</div>
+          <MenuItem label="→ campo de batalha" onPick={() => moveTo(menu.card, 'battlefield')} />
+          <MenuItem label="→ cemitério" onPick={() => moveTo(menu.card, 'graveyard')} />
+          <MenuItem label="→ exílio" onPick={() => moveTo(menu.card, 'exile')} />
+          <MenuItem label="→ mão" onPick={() => moveTo(menu.card, 'hand')} />
+          <MenuItem label="→ topo da biblioteca" onPick={() => moveTo(menu.card, 'library', 'top')} />
+          <MenuItem label="→ fundo da biblioteca" onPick={() => moveTo(menu.card, 'library', 'bottom')} />
+          <MenuItem label={menu.card.tapped ? 'desvirar' : 'virar'} onPick={() => onAction({ type: 'manualTap', objectId: menu.card.objectId, tapped: !menu.card.tapped })} />
+          <MenuItem label="+1/+1" onPick={() => onAction({ type: 'manualCounter', objectId: menu.card.objectId, counter: '+1/+1', delta: 1 })} />
+          <MenuItem label="-1 marcador +1/+1" onPick={() => onAction({ type: 'manualCounter', objectId: menu.card.objectId, counter: '+1/+1', delta: -1 })} />
+        </div>
+      )}
+
+      {view.status === 'finished' && (
+        <div className="game-over-overlay">
+          <div>
+            {view.winner === 'draw'
+              ? 'Empate!'
+              : view.winner === you
+                ? '🏆 Você venceu!'
+                : `${opp.name} venceu.`}
+          </div>
+          <button className="primary" onClick={onExit}>Voltar ao início</button>
+        </div>
+      )}
+    </div>
+  );
+
+  function moveTo(card: CardView, to: 'battlefield' | 'graveyard' | 'exile' | 'hand' | 'library', position?: 'top' | 'bottom') {
+    onAction({ type: 'manualMove', objectId: card.objectId, to, position });
+    setMenu(null);
+  }
+
+  function MenuItem({ label, onPick }: { label: string; onPick: () => void }) {
+    return <button onClick={() => { onPick(); setMenu(null); }}>{label}</button>;
+  }
+
+}
+
+function ManaChips({ pool }: { pool: Record<string, number> }) {
+  const COLORS: Record<string, string> = { W: '#e8e2d0', U: '#5b9bd5', B: '#9b8fb0', R: '#d5745b', G: '#6bbf7e', C: '#b0b0b0' };
+  const chips = Object.entries(pool).filter(([, n]) => n > 0);
+  if (chips.length === 0) return null;
+  return (
+    <div className="mana-pool" title="Mana flutuante">
+      {chips.map(([sym, n]) => (
+        <span key={sym} className="mana-chip" style={{ background: COLORS[sym] }}>{n}</span>
+      ))}
+    </div>
+  );
+}
+
+function shouldAutoPass(view: GameView): boolean {
+  if (view.status !== 'playing') return false;
+  if (view.priority !== view.you) return false;
+  if (view.pendingDecision) return false;
+  if (view.combatAwaiting) return false;
+  if (view.stack.length > 0) {
+    // Auto-passa apenas sobre a própria mágica (estilo Arena).
+    return view.stack[view.stack.length - 1].controller === view.you;
+  }
+  const myTurn = view.activePlayer === view.you;
+  if (myTurn) return !(view.step === 'main1' || view.step === 'main2');
+  // No turno do oponente, para apenas na etapa final (janela de instants).
+  return view.step !== 'end';
+}

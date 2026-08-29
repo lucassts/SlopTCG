@@ -1,0 +1,84 @@
+import type { CardView } from '@slopmtg/protocol';
+import { imageUrlById, imageUrlByName } from '../scryfall';
+import { useState } from 'react';
+
+const COLOR_FRAMES: Record<string, string> = {
+  W: '#e8e2d0',
+  U: '#3b6ea5',
+  B: '#3a3542',
+  R: '#a33b2e',
+  G: '#3d6b45',
+};
+
+export function frameColor(colors: string[]): string {
+  if (colors.length === 0) return '#8a8f9c';
+  if (colors.length > 1) return '#b5985a';
+  return COLOR_FRAMES[colors[0]] ?? '#8a8f9c';
+}
+
+export interface CardTileProps {
+  card: CardView;
+  size?: 'hand' | 'field';
+  selected?: boolean;
+  targetable?: boolean;
+  dimmed?: boolean;
+  onClick?: (e: React.MouseEvent) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+  title?: string;
+}
+
+/** A card on the table: Scryfall image when available, text frame as fallback. */
+export function CardTile({ card, size = 'field', selected, targetable, dimmed, onClick, onContextMenu, title }: CardTileProps) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const def = card.card;
+  const url = card.isToken && !def.scryfallId
+    ? null
+    : def.scryfallId
+      ? imageUrlById(def.scryfallId)
+      : imageUrlByName(def.name);
+
+  const classes = [
+    'card-tile',
+    size === 'hand' ? 'card-hand' : 'card-field',
+    card.tapped ? 'tapped' : '',
+    selected ? 'selected' : '',
+    targetable ? 'targetable' : '',
+    dimmed ? 'dimmed' : '',
+    card.attacking ? 'attacking' : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <div className={classes} onClick={onClick} onContextMenu={onContextMenu} title={title ?? tooltip(card)}>
+      {url && !imgFailed ? (
+        <img src={url} alt={def.name} loading="lazy" draggable={false} onError={() => setImgFailed(true)} />
+      ) : (
+        <div className="card-fallback" style={{ borderColor: frameColor(def.colors) }}>
+          <div className="cf-name">{def.name}</div>
+          {def.manaCost && <div className="cf-cost">{def.manaCost}</div>}
+          <div className="cf-type">{def.types.join(' ')}{def.subtypes.length > 0 ? ` — ${def.subtypes.join(' ')}` : ''}</div>
+          {def.text && <div className="cf-text">{def.text}</div>}
+        </div>
+      )}
+      {card.power !== null && (
+        <div className={`card-pt ${card.damage > 0 ? 'damaged' : ''}`}>
+          {card.power}/{(card.toughness ?? 0) - card.damage < (card.toughness ?? 0) ? `${(card.toughness ?? 0) - card.damage}` : card.toughness}
+        </div>
+      )}
+      {card.summoningSick && card.card.types.includes('Creature') && <div className="card-sick" title="Enjoo de invocação">💤</div>}
+      {Object.entries(card.counters).map(([k, v]) => (
+        <div key={k} className="card-counter" title={`${v} marcador(es) de ${k}`}>{k}: {v}</div>
+      ))}
+      {card.blocking !== null && <div className="card-blocking">🛡</div>}
+    </div>
+  );
+}
+
+function tooltip(card: CardView): string {
+  const d = card.card;
+  const parts = [d.name];
+  if (d.manaCost) parts.push(d.manaCost);
+  parts.push(d.types.join(' ') + (d.subtypes.length > 0 ? ` — ${d.subtypes.join(' ')}` : ''));
+  if (d.text) parts.push(d.text);
+  if (d.automation === 'manual') parts.push('⚠ carta em modo manual (mecânica ainda não automatizada)');
+  return parts.join('\n');
+}

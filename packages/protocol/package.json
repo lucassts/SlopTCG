@@ -1,0 +1,24 @@
+{
+  "name": "@slopmtg/protocol",
+  "version": "0.1.0",
+  "description": "SlopMTG shared client/server message types.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@slopmtg/engine": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
