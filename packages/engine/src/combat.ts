@@ -61,6 +61,8 @@ export function resolveCombatDamage(state: GameState, emit: Emit): void {
 
 function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) => boolean): void {
   if (state.status !== 'playing') return;
+  if (state.combatDamagePrevented) return; // Fog
+
   const attackerId = state.activePlayer;
   const defender: PlayerId = opponentOf(attackerId);
   const attackers = state.players[attackerId].zones.battlefield

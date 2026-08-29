@@ -86,6 +86,12 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${name(ev.player)} criou uma ficha: ${ev.name}.`;
     case 'attached':
       return `${ev.sourceName} foi anexada a ${ev.hostName}.`;
+    case 'copiesCreated':
+      return ev.reason === 'storm'
+        ? `Tempestade: ${ev.count} cópia(s) de ${ev.cardName} na pilha.`
+        : `${ev.cardName} foi copiada.`;
+    case 'controlChanged':
+      return `${name(ev.to)} assumiu o controle de ${ev.cardName}.`;
     case 'scried':
       return `${name(ev.player)} olhou as ${ev.looked} carta(s) do topo e mandou ${ev.bottomed} para o fundo.`;
     case 'searched':

@@ -37,7 +37,12 @@ export interface FilterSpec {
  * Amounts may be dynamic: a literal, the spell's X, or a count of objects
  * matching a filter ("equal to the number of creatures you control").
  */
-export type DynAmount = number | 'X' | { per: FilterSpec };
+export type DynAmount =
+  | number
+  | 'X'
+  | { per: FilterSpec }
+  /** Power of the creature sacrificed as an additional cost (Fling). */
+  | 'sacrificedPower';
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
@@ -104,6 +109,12 @@ export type EffectStep =
       tapped?: boolean;
     }
   | { op: 'shuffle'; who: PlayerSel }
+  /** Take control of a permanent (optionally until end of turn, Act of Treason-style). */
+  | { op: 'gainControl'; what: SubjectRef; untilEndOfTurn?: boolean }
+  /** Copy a spell on the stack (the copy keeps the same targets). */
+  | { op: 'copySpell'; what: SubjectRef }
+  /** Fog: no combat damage is dealt for the rest of this turn. */
+  | { op: 'preventCombatDamage' }
   | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[] }
   | {
       op: 'token';
@@ -136,6 +147,11 @@ export type TriggerSpec =
 export interface TriggeredAbility {
   kind: 'triggered';
   trigger: TriggerSpec;
+  /**
+   * Targets chosen by the controller when the trigger goes on the stack
+   * (Flametongue Kavu-style). If no legal target exists, the trigger is
+   * simply removed.
+   */
   targets?: TargetSpec[];
   effect: EffectScript;
   /** Human-readable rules text of just this ability, for the log. */
@@ -198,6 +214,10 @@ export interface CardDefinition {
   spellEffect?: EffectScript;
   /** Modal spells: exactly one mode is chosen at cast time. */
   spellModes?: SpellMode[];
+  /** Storm: when cast, copy this spell once per spell cast earlier this turn. */
+  storm?: boolean;
+  /** Additional cost paid at cast time (e.g. Fling's sacrifice). */
+  additionalCost?: { sacrifice: FilterSpec; count?: number };
   abilities?: AbilityDef[];
   /** Permanent that "enters the battlefield with N counters" (N may be X). */
   entersWithCounters?: { counter: string; count: DynAmount };

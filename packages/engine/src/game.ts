@@ -22,6 +22,7 @@ import { changeLife, draw, lose, moveWithEvent, setTapped } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
 import {
   createGameState,
+  effectivePower,
   hasKeyword,
   matchFilter,
   MAX_HAND_SIZE,
@@ -29,6 +30,7 @@ import {
   STARTING_HAND,
   type GameObject,
   type GameState,
+  type QueuedTrigger,
   type StackItem,
 } from './state.js';
 import { shuffle, nextRandom } from './rng.js';
@@ -213,9 +215,11 @@ export class Game {
       case 'playLand':
         return this.doPlayLand(playerId, action.objectId);
       case 'castSpell':
-        return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode);
+        return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices);
       case 'effectChoice':
         return this.doEffectChoice(playerId, action.picks);
+      case 'chooseTargets':
+        return this.doChooseTargets(playerId, action.targets);
       case 'activateAbility':
         return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? []);
       case 'declareAttackers':
@@ -314,6 +318,7 @@ export class Game {
     targets: TargetChoice[],
     x?: number,
     modeIndex?: number,
+    sacrifices?: number[],
   ): boolean {
     const s = this.state;
     const err = this.requirePriority(playerId);
@@ -347,6 +352,23 @@ export class Game {
     const targetErr = this.validateTargets(playerId, specs, targets);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
 
+    // Additional cost: sacrifice (Fling-style). Validated before any payment.
+    const sacs = sacrifices ?? [];
+    if (card.additionalCost) {
+      const need = card.additionalCost.count ?? 1;
+      if (sacs.length !== need)
+        { this.fail(playerId, `custo adicional: sacrifique ${need} permanente(s)`); return false; }
+      for (const id of sacs) {
+        const sacObj = s.objects[id];
+        if (!sacObj || sacObj.zone !== 'battlefield' || sacObj.controller !== playerId)
+          { this.fail(playerId, 'sacrifício inválido'); return false; }
+        if (!matchFilter({ controller: playerId, sourceId: obj.id }, card.additionalCost.sacrifice, sacObj))
+          { this.fail(playerId, `${sacObj.card.name} não satisfaz o custo adicional`); return false; }
+      }
+    } else if (sacs.length > 0) {
+      { this.fail(playerId, 'essa mágica não tem custo adicional de sacrifício'); return false; }
+    }
+
     const cost = parseCost(card.manaCost);
     let xValue: number | undefined;
     if (cost.xCount > 0) {
@@ -359,24 +381,51 @@ export class Game {
     if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
     this.payWithPlan(playerId, plan);
 
+    // Pay the sacrifice cost (power recorded first, for 'sacrificedPower').
+    let sacrificedPower: number | undefined;
+    if (sacs.length > 0) {
+      sacrificedPower = sacs.reduce((sum, id) => sum + Math.max(0, effectivePower(s, s.objects[id])), 0);
+      for (const id of sacs) moveWithEvent(s, s.objects[id], 'graveyard', 'sacrificed', this.emit);
+    }
+
     removeFromCurrentZone(s, obj);
     obj.zone = 'stack';
     const description =
       (mode ? `${card.name} — ${mode.label}` : card.name) + (xValue !== undefined ? ` (X=${xValue})` : '');
+    const effect = mode ? mode.effect : card.spellEffect ?? [];
     s.stack.push({
       id: s.nextStackId++,
       kind: 'spell',
       sourceId: obj.id,
       controller: playerId,
       cardName: card.name,
-      effect: mode ? mode.effect : card.spellEffect ?? [],
+      effect,
       targets,
       description,
       xValue,
+      sacrificedPower,
     });
+    // Storm: one copy per spell cast earlier this turn (they resolve first).
+    const copies = card.storm ? s.spellsCastThisTurn : 0;
+    s.spellsCastThisTurn += 1;
+    for (let i = 0; i < copies; i++) {
+      s.stack.push({
+        id: s.nextStackId++,
+        kind: 'copy',
+        sourceId: obj.id,
+        controller: playerId,
+        cardName: card.name,
+        effect,
+        targets: [...targets],
+        description: `Cópia de ${card.name}`,
+        xValue,
+        sacrificedPower,
+      });
+    }
     s.passCount = 0;
     s.priority = playerId;
     this.emit({ type: 'spellCast', player: playerId, objectId: obj.id, cardName: card.name, targets });
+    if (copies > 0) this.emit({ type: 'copiesCreated', cardName: card.name, count: copies, reason: 'storm' });
     this.fireCastTriggers(playerId, card);
     return true;
   }
@@ -684,6 +733,10 @@ export class Game {
     let guard = 0;
     while (s.status === 'playing' && s.mulligan === null && !s.pendingDecision && !s.combatAwaiting) {
       if (++guard > 500) throw new Error('advanceLoop travou (bug na engine)');
+      if (s.triggerQueue.length > 0) {
+        this.processTriggerQueue();
+        continue;
+      }
       if (s.priority === null) {
         this.advanceStep();
         continue;
@@ -718,6 +771,8 @@ export class Game {
     const s = this.state;
     s.turn += 1;
     s.activePlayer = opponentOf(s.activePlayer);
+    s.spellsCastThisTurn = 0;
+    s.combatDamagePrevented = false;
     this.emit({ type: 'turnBegan', turn: s.turn, activePlayer: s.activePlayer });
     this.enterStep('untap');
   }
@@ -818,6 +873,20 @@ export class Game {
         delete obj.counters['__deathtouched'];
       }
     }
+    // "Until end of turn" control effects wear off (Act of Treason).
+    for (const revert of s.controlReverts) {
+      const obj = s.objects[revert.objectId];
+      if (obj && obj.zone === 'battlefield' && obj.controller !== revert.to) {
+        const fromArr = s.players[obj.controller].zones.battlefield;
+        const i = fromArr.indexOf(obj.id);
+        if (i >= 0) fromArr.splice(i, 1);
+        obj.controller = revert.to;
+        s.players[revert.to].zones.battlefield.push(obj.id);
+        this.emit({ type: 'controlChanged', objectId: obj.id, cardName: obj.card.name, to: revert.to });
+      }
+    }
+    s.controlReverts = [];
+    s.combatDamagePrevented = false;
     checkStateBasedActions(s, this.emit);
     if (s.status === 'playing') this.beginTurn();
   }
@@ -828,6 +897,28 @@ export class Game {
     const s = this.state;
     const item = s.stack.pop();
     if (!item) return;
+
+    if (item.kind === 'copy') {
+      if (item.targets.length > 0 && !itemStillHasLegalWork(s, item)) {
+        this.emit({ type: 'fizzled', description: `${item.description} foi anulada (alvos ilegais)` });
+        return;
+      }
+      const result = runEffectScript(
+        {
+          state: s,
+          controller: item.controller,
+          sourceId: item.sourceId,
+          sourceName: item.description,
+          targets: item.targets,
+          xValue: item.xValue,
+          sacrificedPower: item.sacrificedPower,
+          emit: this.emit,
+        },
+        item.effect,
+      );
+      if (result !== 'paused') this.emit({ type: 'stackResolved', description: `${item.description} resolveu` });
+      return;
+    }
 
     if (item.kind === 'spell') {
       const obj = s.objects[item.sourceId];
@@ -890,6 +981,7 @@ export class Game {
           sourceName: item.cardName,
           targets: item.targets,
           xValue: item.xValue,
+          sacrificedPower: item.sacrificedPower,
           emit: this.emit,
         },
         item.effect,
@@ -955,7 +1047,7 @@ export class Game {
         if (!('what' in ability.trigger)) continue;
         if (!matchFilter({ controller: source.controller, sourceId: source.id }, ability.trigger.what, subject))
           continue;
-        this.pushTrigger(source, ability.text, ability.effect);
+        this.pushTrigger(source, ability);
       }
     }
   }
@@ -966,7 +1058,7 @@ export class Game {
     for (const ability of obj.card.abilities ?? []) {
       if (ability.kind !== 'triggered') continue;
       if (ability.trigger.on !== on || !('self' in ability.trigger)) continue;
-      this.pushTrigger(obj, ability.text, ability.effect);
+      this.pushTrigger(obj, ability);
     }
   }
 
@@ -978,7 +1070,7 @@ export class Game {
       for (const ability of obj.card.abilities ?? []) {
         if (ability.kind !== 'triggered' || ability.trigger.on !== 'youCastSpell') continue;
         if (ability.trigger.noncreatureOnly && card.types.includes('Creature')) continue;
-        this.pushTrigger(obj, ability.text, ability.effect);
+        this.pushTrigger(obj, ability);
       }
     }
   }
@@ -992,32 +1084,97 @@ export class Game {
           if (ability.kind !== 'triggered' || ability.trigger.on !== on) continue;
           const whose = ability.trigger.whose;
           if (whose === 'controller' && obj.controller !== s.activePlayer) continue;
-          this.pushTrigger(obj, ability.text, ability.effect);
+          this.pushTrigger(obj, ability);
         }
       }
     }
   }
 
-  private pushTrigger(obj: GameObject, text: string, effect: StackItem['effect']): void {
+  private pushTrigger(obj: GameObject, ability: { text: string; effect: StackItem['effect']; targets?: import('./cards/types.js').TargetSpec[] }): void {
     const s = this.state;
+    this.emit({
+      type: 'abilityTriggered',
+      player: obj.controller,
+      sourceId: obj.id,
+      sourceName: obj.card.name,
+      text: ability.text,
+    });
+    // Targeted trigger: queue it — the controller picks targets before it
+    // goes on the stack (processed by advanceLoop).
+    if (ability.targets && ability.targets.length > 0) {
+      s.triggerQueue.push({
+        sourceId: obj.id,
+        controller: obj.controller,
+        cardName: obj.card.name,
+        text: ability.text,
+        specs: ability.targets,
+        effect: ability.effect,
+      });
+      return;
+    }
     s.stack.push({
       id: s.nextStackId++,
       kind: 'ability',
       sourceId: obj.id,
       controller: obj.controller,
       cardName: obj.card.name,
-      effect,
+      effect: ability.effect,
       targets: [],
-      description: `${obj.card.name}: ${text}`,
+      description: `${obj.card.name}: ${ability.text}`,
     });
     s.passCount = 0;
     s.priority = s.activePlayer;
-    this.emit({
-      type: 'abilityTriggered',
-      player: obj.controller,
-      sourceId: obj.id,
-      sourceName: obj.card.name,
-      text,
+  }
+
+  /** Pop the next queued targeted trigger; skip it if no legal target exists. */
+  private processTriggerQueue(): void {
+    const s = this.state;
+    const trig = s.triggerQueue.shift();
+    if (!trig) return;
+    const anyLegal = trig.specs.every((spec) => this.hasLegalTarget(trig.controller, spec));
+    if (!anyLegal) {
+      this.emit({ type: 'fizzled', description: `${trig.cardName}: ${trig.text} — removida (sem alvos legais)` });
+      return;
+    }
+    s.pendingDecision = {
+      type: 'chooseTargets',
+      player: trig.controller,
+      sourceId: trig.sourceId,
+      cardName: trig.cardName,
+      text: trig.text,
+      specs: trig.specs,
+      effect: trig.effect,
+    };
+    this.emit({ type: 'decisionRequired', player: trig.controller, decision: `targets:${trig.cardName}` });
+  }
+
+  private hasLegalTarget(controller: PlayerId, spec: import('./cards/types.js').TargetSpec): boolean {
+    if (spec.what === 'player' || spec.what === 'any') return true;
+    return Object.values(this.state.objects).some((o) =>
+      targetMatchesSpec(this.state, controller, spec, { kind: 'object', id: o.id }),
+    );
+  }
+
+  private doChooseTargets(playerId: PlayerId, targets: TargetChoice[]): boolean {
+    const s = this.state;
+    const pending = s.pendingDecision;
+    if (!pending || pending.type !== 'chooseTargets' || pending.player !== playerId)
+      { this.fail(playerId, 'nenhuma escolha de alvos pendente para você'); return false; }
+    const err = this.validateTargets(playerId, pending.specs, targets);
+    if (err) { this.fail(playerId, err); return false; }
+    s.pendingDecision = null;
+    s.stack.push({
+      id: s.nextStackId++,
+      kind: 'ability',
+      sourceId: pending.sourceId,
+      controller: playerId,
+      cardName: pending.cardName,
+      effect: pending.effect,
+      targets,
+      description: `${pending.cardName}: ${pending.text}`,
     });
+    s.passCount = 0;
+    s.priority = s.activePlayer;
+    return true;
   }
 }

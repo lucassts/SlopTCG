@@ -74,7 +74,9 @@ export type Keyword =
   | 'defender'
   | 'menace'
   | 'firstStrike'
-  | 'doubleStrike';
+  | 'doubleStrike'
+  | 'indestructible'
+  | 'hexproof';
 
 /** A chosen target, stored on stack items and validated on resolution. */
 export type TargetChoice =

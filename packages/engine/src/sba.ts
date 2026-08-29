@@ -4,7 +4,7 @@
  */
 import type { Emit } from './ops.js';
 import { lose, moveWithEvent } from './ops.js';
-import { battlefield, effectiveToughness, type GameState } from './state.js';
+import { battlefield, effectiveToughness, hasKeyword, type GameState } from './state.js';
 import { PLAYER_IDS } from './types.js';
 
 export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
@@ -24,7 +24,9 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
       if (obj.card.types.includes('Creature')) {
         const toughness = effectiveToughness(state, obj);
         const deathtouched = (obj.counters['__deathtouched'] ?? 0) > 0 && obj.damage > 0;
-        if (toughness <= 0 || obj.damage >= toughness || deathtouched) {
+        // Indestructible ignores lethal damage/deathtouch, NOT toughness ≤ 0.
+        const lethal = (obj.damage >= toughness || deathtouched) && !hasKeyword(state, obj, 'indestructible');
+        if (toughness <= 0 || lethal) {
           moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
           changed = true;
           anyChange = true;

@@ -769,6 +769,168 @@ export const grixisCharm = def({
   automation: 'full',
 });
 
+// ------------------------------------------------------------- M3: storm
+export const grapeshot = def({
+  id: 'grapeshot',
+  name: 'Grapeshot',
+  manaCost: '{1}{R}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'Grapeshot deals 1 damage to any target. Storm',
+  storm: true,
+  spellTargets: [{ what: 'any' }],
+  spellEffect: [{ op: 'damage', to: 'target:0', amount: 1 }],
+  automation: 'full',
+});
+
+export const emptyTheWarrens = def({
+  id: 'empty-the-warrens',
+  name: 'Empty the Warrens',
+  manaCost: '{3}{R}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'Create two 1/1 red Goblin creature tokens. Storm',
+  storm: true,
+  spellEffect: [
+    { op: 'token', who: 'controller', count: 2, name: 'Goblin', power: 1, toughness: 1, colors: ['R'], subtypes: ['Goblin'] },
+  ],
+  automation: 'full',
+});
+
+// ------------------------------------------- M3: gatilhos com alvo (ETB)
+export const flametongueKavu = def({
+  id: 'flametongue-kavu',
+  name: 'Flametongue Kavu',
+  manaCost: '{3}{R}',
+  types: ['Creature'],
+  subtypes: ['Kavu'],
+  colors: ['R'],
+  power: 4,
+  toughness: 2,
+  text: 'When Flametongue Kavu enters the battlefield, it deals 4 damage to target creature.',
+  abilities: [
+    {
+      kind: 'triggered',
+      trigger: { on: 'etb', self: true },
+      targets: [{ what: 'creature' }],
+      effect: [{ op: 'damage', to: 'target:0', amount: 4 }],
+      text: 'Quando entra no campo de batalha, causa 4 de dano à criatura alvo',
+    },
+  ],
+  automation: 'full',
+});
+
+export const ravenousChupacabra = def({
+  id: 'ravenous-chupacabra',
+  name: 'Ravenous Chupacabra',
+  manaCost: '{2}{B}{B}',
+  types: ['Creature'],
+  subtypes: ['Beast', 'Horror'],
+  colors: ['B'],
+  power: 2,
+  toughness: 2,
+  text: 'When Ravenous Chupacabra enters the battlefield, destroy target creature an opponent controls.',
+  abilities: [
+    {
+      kind: 'triggered',
+      trigger: { on: 'etb', self: true },
+      targets: [{ what: 'creature', controlledBy: 'opponent' }],
+      effect: [{ op: 'destroy', what: 'target:0' }],
+      text: 'Quando entra no campo de batalha, destrua a criatura alvo de um oponente',
+    },
+  ],
+  automation: 'full',
+});
+
+// ------------------------------------------------- M3: custos adicionais
+export const fling = def({
+  id: 'fling',
+  name: 'Fling',
+  manaCost: '{1}{R}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'As an additional cost to cast this spell, sacrifice a creature. Fling deals damage equal to the sacrificed creature\'s power to any target.',
+  additionalCost: { sacrifice: { what: 'creature' } },
+  spellTargets: [{ what: 'any' }],
+  spellEffect: [{ op: 'damage', to: 'target:0', amount: 'sacrificedPower' }],
+  automation: 'full',
+});
+
+// ------------------------------------- M3: proteções e prevenção de dano
+export const darksteelMyr = def({
+  id: 'darksteel-myr',
+  name: 'Darksteel Myr',
+  manaCost: '{3}',
+  types: ['Artifact', 'Creature'],
+  subtypes: ['Myr'],
+  colors: [],
+  power: 0,
+  toughness: 3,
+  keywords: ['indestructible'],
+  text: 'Indestructible',
+  automation: 'full',
+});
+
+export const gladecoverScout = def({
+  id: 'gladecover-scout',
+  name: 'Gladecover Scout',
+  manaCost: '{G}',
+  types: ['Creature'],
+  subtypes: ['Elf', 'Scout'],
+  colors: ['G'],
+  power: 1,
+  toughness: 1,
+  keywords: ['hexproof'],
+  text: 'Hexproof',
+  automation: 'full',
+});
+
+export const fog = def({
+  id: 'fog',
+  name: 'Fog',
+  manaCost: '{G}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['G'],
+  text: 'Prevent all combat damage that would be dealt this turn.',
+  spellEffect: [{ op: 'preventCombatDamage' }],
+  automation: 'full',
+});
+
+// ------------------------------------------------ M3: controle e cópias
+export const actOfTreason = def({
+  id: 'act-of-treason',
+  name: 'Act of Treason',
+  manaCost: '{2}{R}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'Gain control of target creature until end of turn. Untap it. It gains haste until end of turn.',
+  spellTargets: [{ what: 'creature' }],
+  spellEffect: [
+    { op: 'gainControl', what: 'target:0', untilEndOfTurn: true },
+    { op: 'untap', what: 'target:0' },
+    { op: 'pump', what: 'target:0', power: 0, toughness: 0, keywords: ['haste'] },
+  ],
+  automation: 'full',
+});
+
+export const twincast = def({
+  id: 'twincast',
+  name: 'Twincast',
+  manaCost: '{U}{U}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['U'],
+  text: 'Copy target instant or sorcery spell. You may choose new targets for the copy.',
+  spellTargets: [{ what: 'spell' }],
+  spellEffect: [{ op: 'copySpell', what: 'target:0' }],
+  automation: 'full',
+});
+
 // ------------------------------------------------------------ demo decks
 function copies(card: CardDefinition, n: number): CardDefinition[] {
   return Array.from({ length: n }, () => card);

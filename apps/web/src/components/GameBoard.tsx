@@ -40,7 +40,7 @@ function loadStops(): StopsConfig {
 }
 
 interface Targeting {
-  kind: 'spell' | 'ability';
+  kind: 'spell' | 'ability' | 'trigger';
   objectId: number;
   abilityIndex?: number;
   specs: { what: string }[];
@@ -49,6 +49,8 @@ interface Targeting {
   /** Extras carried into the cast action (X spells, modal spells). */
   x?: number;
   mode?: number;
+  /** First N picks are sacrifices for an additional cost (Fling). */
+  sacCount?: number;
 }
 
 interface MenuState {
@@ -93,6 +95,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const discardCount = myDiscard && view.pendingDecision?.type === 'discardToHandSize' ? view.pendingDecision.count : 0;
   const effectChoice = view.pendingDecision?.type === 'effectChoice' ? view.pendingDecision : null;
   const myChoice = effectChoice !== null && effectChoice.player === you ? effectChoice : null;
+  const triggerTargets = view.pendingDecision?.type === 'chooseTargets' ? view.pendingDecision : null;
   const myMulligan = view.mulligan?.phase[you] === 'deciding';
   const mullTaken = view.mulligan?.taken[you] ?? 0;
 
@@ -105,6 +108,21 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   useEffect(() => setDiscardSel(new Set()), [myDiscard]);
   useEffect(() => setBottomSel(new Set()), [mullTaken, myMulligan]);
   useEffect(() => setChoiceSel(new Set()), [view.pendingDecision]);
+
+  // Gatilho aguardando alvos meus → entra no modo de targeting automaticamente.
+  useEffect(() => {
+    if (triggerTargets && triggerTargets.player === you && !targeting) {
+      setTargeting({
+        kind: 'trigger',
+        objectId: 0,
+        specs: triggerTargets.specs,
+        chosen: [],
+        label: `${triggerTargets.cardName}: ${triggerTargets.text}`,
+      });
+    }
+    if (!triggerTargets && targeting?.kind === 'trigger') setTargeting(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.pendingDecision, targeting]);
   useEffect(() => setTargeting(null), [view.turn, view.step]);
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -163,9 +181,24 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
 
   const finishTargetingIfDone = (t: Targeting) => {
     if (t.chosen.length >= t.specs.length) {
-      if (t.kind === 'spell')
-        onAction({ type: 'castSpell', objectId: t.objectId, targets: t.chosen, x: t.x, mode: t.mode });
-      else onAction({ type: 'activateAbility', objectId: t.objectId, abilityIndex: t.abilityIndex ?? 0, targets: t.chosen });
+      if (t.kind === 'trigger') {
+        onAction({ type: 'chooseTargets', targets: t.chosen });
+      } else if (t.kind === 'spell') {
+        const sacCount = t.sacCount ?? 0;
+        const sacrifices = t.chosen
+          .slice(0, sacCount)
+          .flatMap((c) => (c.kind === 'object' ? [c.id] : []));
+        onAction({
+          type: 'castSpell',
+          objectId: t.objectId,
+          targets: t.chosen.slice(sacCount),
+          x: t.x,
+          mode: t.mode,
+          sacrifices: sacCount > 0 ? sacrifices : undefined,
+        });
+      } else {
+        onAction({ type: 'activateAbility', objectId: t.objectId, abilityIndex: t.abilityIndex ?? 0, targets: t.chosen });
+      }
       setTargeting(null);
     } else {
       setTargeting({ ...t });
@@ -210,7 +243,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
     beginCast(cv, undefined);
   };
 
-  /** Start casting: asks for X if needed, then targets, then sends. */
+  /** Start casting: asks for X if needed, then sacrifices/targets, then sends. */
   const beginCast = (cv: CardView, mode: number | undefined) => {
     const def = cv.card;
     let x: number | undefined;
@@ -220,16 +253,23 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       x = parseInt(raw, 10);
       if (!Number.isInteger(x) || x < 0) return;
     }
-    const specs = mode !== undefined
+    // Custo adicional de sacrifício (Fling): escolhido como os primeiros "alvos".
+    const sacCount = def.additionalCost ? def.additionalCost.count ?? 1 : 0;
+    const sacSpecs = Array.from({ length: sacCount }, () => ({
+      what: def.additionalCost?.sacrifice.what ?? 'permanent',
+    }));
+    const targetSpecs = mode !== undefined
       ? def.spellModes?.[mode]?.targets ?? []
       : def.enchant
         ? [{ what: def.enchant.what }]
         : def.spellTargets ?? [];
+    const specs = [...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
       onAction({ type: 'castSpell', objectId: cv.objectId, x, mode });
     } else {
-      const label = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode });
+      const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
+      const label = sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, sacCount });
     }
   };
 
@@ -327,6 +367,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
     if (targeting) return `${targeting.label}: escolha o alvo (${targeting.chosen.length + 1}/${targeting.specs.length}) — Esc cancela`;
     if (myChoice) return myChoice.prompt;
     if (effectChoice) return 'Aguardando a escolha do oponente…';
+    if (triggerTargets && triggerTargets.player !== you) return 'Aguardando o oponente escolher alvos…';
     if (myDiscard) return `Descarte ${discardCount} carta(s): selecione na mão e confirme`;
     if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
     if (awaitingMyBlocks) return 'Clique num bloqueador seu, depois no atacante; confirme';

@@ -16,7 +16,9 @@ export type PlayerAction =
   /** Keep the hand, putting exactly `bottom` (= mulligans taken) on the bottom. */
   | { type: 'keepHand'; bottom: number[] }
   | { type: 'playLand'; objectId: number }
-  | { type: 'castSpell'; objectId: number; targets?: TargetChoice[]; x?: number; mode?: number }
+  | { type: 'castSpell'; objectId: number; targets?: TargetChoice[]; x?: number; mode?: number; sacrifices?: number[] }
+  /** Choose targets for a triggered ability waiting on the queue. */
+  | { type: 'chooseTargets'; targets: TargetChoice[] }
   | { type: 'activateAbility'; objectId: number; abilityIndex: number; targets?: TargetChoice[] }
   | { type: 'declareAttackers'; attackers: number[] }
   | { type: 'declareBlockers'; blocks: { blocker: number; attacker: number }[] }

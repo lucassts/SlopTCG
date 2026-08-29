@@ -49,6 +49,7 @@ export interface EffectContext {
   sourceName: string;
   targets: TargetChoice[];
   xValue?: number;
+  sacrificedPower?: number;
   emit: Emit;
 }
 
@@ -70,6 +71,7 @@ function resolveSubject(ctx: EffectContext, ref: SubjectRef): TargetChoice[] {
 export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if (typeof amount === 'number') return amount;
   if (amount === 'X') return ctx.xValue ?? 0;
+  if (amount === 'sacrificedPower') return ctx.sacrificedPower ?? 0;
   return battlefield(ctx.state).filter((o) =>
     matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId }, amount.per, o),
   ).length;
@@ -379,7 +381,8 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
     case 'destroy':
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
-        if (obj && obj.zone === 'battlefield') moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+        if (obj && obj.zone === 'battlefield' && !hasKeyword(state, obj, 'indestructible'))
+          moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
       }
       return;
 
@@ -463,7 +466,8 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
 
     case 'destroyEach':
       for (const obj of selectBattlefield(ctx, step.filter))
-        moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+        if (!hasKeyword(state, obj, 'indestructible'))
+          moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
       return;
 
     case 'exileEach':
@@ -494,6 +498,49 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       if (bPower > 0) dealDamageToObject(state, a, bPower, b.card.name, emit, { deathtouch: hasKeyword(state, b, 'deathtouch') });
       return;
     }
+
+    case 'gainControl':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (!obj || obj.zone !== 'battlefield' || obj.controller === ctx.controller) continue;
+        const from = obj.controller;
+        const fromArr = state.players[from].zones.battlefield;
+        const i = fromArr.indexOf(obj.id);
+        if (i >= 0) fromArr.splice(i, 1);
+        obj.controller = ctx.controller;
+        state.players[ctx.controller].zones.battlefield.push(obj.id);
+        if (step.untilEndOfTurn) state.controlReverts.push({ objectId: obj.id, to: from });
+        emit({ type: 'controlChanged', objectId: obj.id, cardName: obj.card.name, to: ctx.controller });
+      }
+      return;
+
+    case 'copySpell':
+      for (const t of resolveSubject(ctx, step.what)) {
+        if (t.kind !== 'object') continue;
+        const original = state.stack.find(
+          (s) => (s.kind === 'spell' || s.kind === 'copy') && s.sourceId === t.id,
+        );
+        if (!original) continue;
+        state.stack.push({
+          id: state.nextStackId++,
+          kind: 'copy',
+          sourceId: original.sourceId,
+          controller: ctx.controller,
+          cardName: original.cardName,
+          effect: original.effect,
+          targets: [...original.targets],
+          description: `Cópia de ${original.cardName}`,
+          xValue: original.xValue,
+          sacrificedPower: original.sacrificedPower,
+        });
+        emit({ type: 'copiesCreated', cardName: original.cardName, count: 1, reason: 'copy' });
+      }
+      return;
+
+    case 'preventCombatDamage':
+      // O log já registra a resolução da mágica; aqui só o estado muda.
+      state.combatDamagePrevented = true;
+      return;
 
     case 'shuffle':
       for (const p of resolvePlayers(step.who, ctx.controller)) {
@@ -569,6 +616,8 @@ export function targetMatchesSpec(
   } else {
     if (spec.controlledBy === 'you' && obj.controller !== controller) return false;
     if (spec.controlledBy === 'opponent' && obj.controller === controller) return false;
+    // Hexproof: opponents' spells/abilities can't target it.
+    if (obj.controller !== controller && hasKeyword(state, obj, 'hexproof')) return false;
   }
   switch (spec.what) {
     case 'any':

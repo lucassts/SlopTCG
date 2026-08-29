@@ -39,6 +39,8 @@ export type GameEvent =
   | { type: 'tokenCreated'; player: PlayerId; objectId: number; name: string }
   | { type: 'attached'; sourceId: number; sourceName: string; hostId: number; hostName: string }
   | { type: 'scried'; player: PlayerId; looked: number; bottomed: number }
+  | { type: 'copiesCreated'; cardName: string; count: number; reason: 'storm' | 'copy' }
+  | { type: 'controlChanged'; objectId: number; cardName: string; to: PlayerId }
   | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' }
   | { type: 'mulliganTaken'; player: PlayerId; taken: number }
   | { type: 'handKept'; player: PlayerId; bottomed: number }

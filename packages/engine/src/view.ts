@@ -25,6 +25,13 @@ export interface CardView {
 export type PendingDecisionView =
   | { type: 'discardToHandSize'; player: PlayerId; count: number }
   | {
+      type: 'chooseTargets';
+      player: PlayerId;
+      cardName: string;
+      text: string;
+      specs: import('./cards/types.js').TargetSpec[];
+    }
+  | {
       type: 'effectChoice';
       player: PlayerId;
       prompt: string;
@@ -37,7 +44,7 @@ export type PendingDecisionView =
 
 export interface StackItemView {
   id: number;
-  kind: 'spell' | 'ability';
+  kind: 'spell' | 'ability' | 'copy';
   /** For spells: the card object's id (usable as a counterspell target). */
   sourceId: number;
   controller: PlayerId;
@@ -82,6 +89,8 @@ function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisio
   const pd = state.pendingDecision;
   if (!pd) return null;
   if (pd.type === 'discardToHandSize') return { type: 'discardToHandSize', player: pd.player, count: pd.count };
+  if (pd.type === 'chooseTargets')
+    return { type: 'chooseTargets', player: pd.player, cardName: pd.cardName, text: pd.text, specs: pd.specs };
   return {
     type: 'effectChoice',
     player: pd.player,

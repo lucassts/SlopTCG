@@ -40,8 +40,9 @@ export interface GameObject {
 
 export interface StackItem {
   id: number;
-  kind: 'spell' | 'ability';
-  /** For spells: the card object on the stack. For abilities: the source permanent. */
+  /** 'copy' = a spell copy (storm, Twincast): resolves like the spell but no card moves. */
+  kind: 'spell' | 'ability' | 'copy';
+  /** For spells/copies: the card object. For abilities: the source permanent. */
   sourceId: number;
   controller: PlayerId;
   cardName: string;
@@ -50,6 +51,8 @@ export interface StackItem {
   description: string;
   /** Value chosen for {X} at cast time, if any. */
   xValue?: number;
+  /** Power of the creature sacrificed as an additional cost (Fling). */
+  sacrificedPower?: number;
 }
 
 export interface PlayerState {
@@ -76,8 +79,27 @@ export interface EffectResume {
   finishSpellId: number | null;
 }
 
+/** A triggered ability waiting for its controller to choose targets. */
+export interface QueuedTrigger {
+  sourceId: number;
+  controller: PlayerId;
+  cardName: string;
+  text: string;
+  specs: import('./cards/types.js').TargetSpec[];
+  effect: EffectStep[];
+}
+
 export type PendingDecision =
   | { type: 'discardToHandSize'; player: PlayerId; count: number }
+  | {
+      type: 'chooseTargets';
+      player: PlayerId;
+      sourceId: number;
+      cardName: string;
+      text: string;
+      specs: import('./cards/types.js').TargetSpec[];
+      effect: EffectStep[];
+    }
   | {
       type: 'effectChoice';
       player: PlayerId;
@@ -117,6 +139,14 @@ export interface GameState {
   /** Combat declaration the engine is waiting for, if any. */
   combatAwaiting: 'attackers' | 'blockers' | null;
   pendingDecision: PendingDecision | null;
+  /** Targeted triggers waiting to have their targets chosen (FIFO). */
+  triggerQueue: QueuedTrigger[];
+  /** Spells cast this turn by anyone (storm count). */
+  spellsCastThisTurn: number;
+  /** Fog effect: combat deals no damage for the rest of this turn. */
+  combatDamagePrevented: boolean;
+  /** Control changes to undo at cleanup (Act of Treason). */
+  controlReverts: { objectId: number; to: PlayerId }[];
   /** Non-null while opening hands are being decided (before turn 1). */
   mulligan: MulliganState | null;
   status: 'playing' | 'finished';
@@ -144,6 +174,10 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
     onThePlay: 'p1',
     combatAwaiting: null,
     pendingDecision: null,
+    triggerQueue: [],
+    spellsCastThisTurn: 0,
+    combatDamagePrevented: false,
+    controlReverts: [],
     mulligan: null,
     status: 'playing',
   };
