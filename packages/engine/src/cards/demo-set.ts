@@ -931,6 +931,295 @@ export const twincast = def({
   automation: 'full',
 });
 
+// ---------------------------------------------- M4: landfall e ganho de vida
+export const grazingGladehart = def({
+  id: 'grazing-gladehart',
+  name: 'Grazing Gladehart',
+  manaCost: '{2}{G}',
+  types: ['Creature'],
+  subtypes: ['Antelope'],
+  colors: ['G'],
+  power: 2,
+  toughness: 2,
+  text: 'Landfall — Whenever a land enters the battlefield under your control, you may gain 2 life.',
+  abilities: [
+    {
+      kind: 'triggered',
+      trigger: { on: 'etb', what: { what: 'land', controlledBy: 'you' } },
+      effect: [{ op: 'gainLife', who: 'controller', amount: 2 }],
+      text: 'Terramoto — quando um terreno entra sob seu controle, ganhe 2 pontos de vida',
+    },
+  ],
+  automation: 'full',
+});
+
+export const ajanisPridemate = def({
+  id: 'ajanis-pridemate',
+  name: "Ajani's Pridemate",
+  manaCost: '{1}{W}',
+  types: ['Creature'],
+  subtypes: ['Cat', 'Soldier'],
+  colors: ['W'],
+  power: 2,
+  toughness: 2,
+  text: "Whenever you gain life, put a +1/+1 counter on Ajani's Pridemate.",
+  abilities: [
+    {
+      kind: 'triggered',
+      trigger: { on: 'youGainLife' },
+      effect: [{ op: 'putCounters', what: 'self', counter: '+1/+1', count: 1 }],
+      text: 'Quando você ganha vida, coloque um marcador +1/+1 nele',
+    },
+  ],
+  automation: 'full',
+});
+
+// ------------------------------------------------- M4: tutores e wheels
+export const mysticalTutor = def({
+  id: 'mystical-tutor',
+  name: 'Mystical Tutor',
+  manaCost: '{U}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['U'],
+  text: 'Search your library for an instant or sorcery card, reveal it, then shuffle and put the card on top of your library.',
+  spellEffect: [{ op: 'search', filter: { what: 'instant' }, count: 1, to: 'libraryTop' }],
+  automation: 'full',
+});
+
+export const vampiricTutor = def({
+  id: 'vampiric-tutor',
+  name: 'Vampiric Tutor',
+  manaCost: '{B}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['B'],
+  text: 'Search your library for a card, then shuffle and put that card on top of it. You lose 2 life.',
+  spellEffect: [
+    { op: 'search', count: 1, to: 'libraryTop' },
+    { op: 'loseLife', who: 'controller', amount: 2 },
+  ],
+  automation: 'full',
+});
+
+export const wheelOfFortune = def({
+  id: 'wheel-of-fortune',
+  name: 'Wheel of Fortune',
+  manaCost: '{2}{R}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'Each player discards their hand, then draws seven cards.',
+  spellEffect: [
+    { op: 'discardHand', who: 'each' },
+    { op: 'draw', who: 'each', count: 7 },
+  ],
+  automation: 'full',
+});
+
+export const duress = def({
+  id: 'duress',
+  name: 'Duress',
+  manaCost: '{B}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['B'],
+  text: 'Target opponent reveals their hand. You choose a noncreature, nonland card from it. That player discards that card.',
+  spellTargets: [{ what: 'player' }],
+  spellEffect: [
+    { op: 'discard', who: 'target:0', count: 1, chooser: 'caster', filter: { noncreature: true, nonland: true } },
+  ],
+  automation: 'full',
+});
+
+// ------------------------------------------- M4: kicker, flashback, cycling
+export const burstLightning = def({
+  id: 'burst-lightning',
+  name: 'Burst Lightning',
+  manaCost: '{R}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'Kicker {4}. Burst Lightning deals 2 damage to any target. If this spell was kicked, it deals 4 damage instead.',
+  spellTargets: [{ what: 'any' }],
+  spellEffect: [{ op: 'damage', to: 'target:0', amount: 2 }],
+  kicker: { cost: '{4}', effect: [{ op: 'damage', to: 'target:0', amount: 2 }] },
+  automation: 'full',
+});
+
+export const thinkTwice = def({
+  id: 'think-twice',
+  name: 'Think Twice',
+  manaCost: '{1}{U}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['U'],
+  text: 'Draw a card. Flashback {2}{U}',
+  spellEffect: [{ op: 'draw', who: 'controller', count: 1 }],
+  flashback: { cost: '{2}{U}' },
+  automation: 'full',
+});
+
+export const tranquilThicket = def({
+  id: 'tranquil-thicket',
+  name: 'Tranquil Thicket',
+  types: ['Land'],
+  subtypes: [],
+  colors: [],
+  text: 'Tranquil Thicket enters the battlefield tapped. {T}: Add {G}. Cycling {G}',
+  entersTapped: true,
+  cycling: { mana: '{G}' },
+  abilities: [
+    {
+      kind: 'activated',
+      cost: { tap: true },
+      effect: [{ op: 'addMana', who: 'controller', mana: ['G'] }],
+      text: 'Adicionar {G}',
+      isManaAbility: true,
+    },
+  ],
+  automation: 'full',
+});
+
+// ------------------------------------- M4: custos de habilidade e regeneração
+export const visceraSeer = def({
+  id: 'viscera-seer',
+  name: 'Viscera Seer',
+  manaCost: '{B}',
+  types: ['Creature'],
+  subtypes: ['Vampire', 'Wizard'],
+  colors: ['B'],
+  power: 1,
+  toughness: 1,
+  text: 'Sacrifice a creature: Scry 1.',
+  abilities: [
+    {
+      kind: 'activated',
+      cost: { sacrifice: { what: 'creature' } },
+      effect: [{ op: 'scry', count: 1 }],
+      text: 'Sacrifique uma criatura: Vidência 1',
+    },
+  ],
+  automation: 'full',
+});
+
+export const arguelsBloodFast = def({
+  id: 'arguels-blood-fast',
+  name: "Arguel's Blood Fast",
+  manaCost: '{1}{B}',
+  types: ['Enchantment'],
+  subtypes: [],
+  colors: ['B'],
+  text: '{1}{B}, Pay 2 life: Draw a card.',
+  abilities: [
+    {
+      kind: 'activated',
+      cost: { mana: '{1}{B}', payLife: 2 },
+      effect: [{ op: 'draw', who: 'controller', count: 1 }],
+      text: '{1}{B}, pague 2 vidas: compre uma carta',
+    },
+  ],
+  automation: 'full',
+});
+
+export const drudgeSkeletons = def({
+  id: 'drudge-skeletons',
+  name: 'Drudge Skeletons',
+  manaCost: '{1}{B}',
+  types: ['Creature'],
+  subtypes: ['Skeleton'],
+  colors: ['B'],
+  power: 1,
+  toughness: 1,
+  text: '{B}: Regenerate Drudge Skeletons.',
+  abilities: [
+    {
+      kind: 'activated',
+      cost: { mana: '{B}' },
+      effect: [{ op: 'regenerate', what: 'self' }],
+      text: '{B}: Regenere',
+    },
+  ],
+  automation: 'full',
+});
+
+// ------------------------------------------- M4: proteção e anti-counter
+export const whiteKnight = def({
+  id: 'white-knight',
+  name: 'White Knight',
+  manaCost: '{W}{W}',
+  types: ['Creature'],
+  subtypes: ['Human', 'Knight'],
+  colors: ['W'],
+  power: 2,
+  toughness: 2,
+  keywords: ['firstStrike'],
+  protectionFrom: ['B'],
+  text: 'First strike, protection from black',
+  automation: 'full',
+});
+
+export const supremeVerdict = def({
+  id: 'supreme-verdict',
+  name: 'Supreme Verdict',
+  manaCost: '{1}{W}{W}{U}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['W', 'U'],
+  text: "This spell can't be countered. Destroy all creatures.",
+  uncounterable: true,
+  spellEffect: [{ op: 'destroyEach', filter: { what: 'creature', controlledBy: 'any' } }],
+  automation: 'full',
+});
+
+// --------------------------------------------------- M4: reanimação e PW
+export const zombify = def({
+  id: 'zombify',
+  name: 'Zombify',
+  manaCost: '{3}{B}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['B'],
+  text: 'Return target creature card from your graveyard to the battlefield.',
+  spellTargets: [{ what: 'creature', zone: 'graveyard', ownedBy: 'you' }],
+  spellEffect: [{ op: 'returnToBattlefield', what: 'target:0' }],
+  automation: 'full',
+});
+
+export const jaceBeleren = def({
+  id: 'jace-beleren',
+  name: 'Jace Beleren',
+  manaCost: '{1}{U}{U}',
+  types: ['Planeswalker'],
+  subtypes: ['Jace'],
+  colors: ['U'],
+  loyalty: 3,
+  text: '+2: Each player draws a card. −1: Target player draws a card. −10: Target player mills twenty cards.',
+  abilities: [
+    {
+      kind: 'loyalty',
+      cost: 2,
+      effect: [{ op: 'draw', who: 'each', count: 1 }],
+      text: '+2: cada jogador compra uma carta',
+    },
+    {
+      kind: 'loyalty',
+      cost: -1,
+      targets: [{ what: 'player' }],
+      effect: [{ op: 'draw', who: 'target:0', count: 1 }],
+      text: '−1: o jogador alvo compra uma carta',
+    },
+    {
+      kind: 'loyalty',
+      cost: -10,
+      targets: [{ what: 'player' }],
+      effect: [{ op: 'mill', who: 'target:0', count: 20 }],
+      text: '−10: o jogador alvo descarta as 20 cartas do topo da biblioteca',
+    },
+  ],
+  automation: 'full',
+});
+
 // ------------------------------------------------------------ demo decks
 function copies(card: CardDefinition, n: number): CardDefinition[] {
   return Array.from({ length: n }, () => card);

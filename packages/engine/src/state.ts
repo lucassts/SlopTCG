@@ -4,6 +4,7 @@
  * events — that is game.ts / effects.ts territory.
  */
 import type { CardDefinition, EffectStep, FilterSpec, PlayerConfig } from './cards/types.js';
+import { cardMatchesFilter } from './cards/types.js';
 import { shuffle } from './rng.js';
 import {
   emptyManaPool,
@@ -35,6 +36,10 @@ export interface GameObject {
   wasBlocked: boolean;
   /** For auras/equipment on the battlefield: the object they're attached to. */
   attachedTo?: number;
+  /** Planeswalkers: one loyalty ability per turn. */
+  activatedLoyaltyThisTurn?: boolean;
+  /** Attackers: planeswalker being attacked instead of the player. */
+  pwTarget?: number;
   isToken: boolean;
 }
 
@@ -53,6 +58,8 @@ export interface StackItem {
   xValue?: number;
   /** Power of the creature sacrificed as an additional cost (Fling). */
   sacrificedPower?: number;
+  /** Cast via flashback: the card is exiled instead of going to the graveyard. */
+  flashback?: boolean;
 }
 
 export interface PlayerState {
@@ -77,6 +84,8 @@ export interface EffectResume {
   remaining: EffectStep[];
   /** Spell card to move to the graveyard once the whole script finishes. */
   finishSpellId: number | null;
+  /** Flashback: the finished spell is exiled instead. */
+  finishSpellExile?: boolean;
 }
 
 /** A triggered ability waiting for its controller to choose targets. */
@@ -290,12 +299,7 @@ export function matchFilter(
   filter: FilterSpec,
   obj: GameObject,
 ): boolean {
-  if (filter.what && filter.what !== 'permanent') {
-    const typeName = (filter.what.charAt(0).toUpperCase() + filter.what.slice(1)) as CardDefinition['types'][number];
-    if (!obj.card.types.includes(typeName)) return false;
-  }
-  if (filter.subtype && !obj.card.subtypes.includes(filter.subtype)) return false;
-  if (filter.basic && !obj.card.supertypes?.includes('Basic')) return false;
+  if (!cardMatchesFilter(obj.card, filter)) return false;
   if (filter.controlledBy === 'you' && obj.controller !== ctx.controller) return false;
   if (filter.controlledBy === 'opponent' && obj.controller === ctx.controller) return false;
   if (filter.other && obj.id === ctx.sourceId) return false;

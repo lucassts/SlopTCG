@@ -36,11 +36,16 @@ abilities: [{
 
 ### Primitivas disponíveis
 
-Diretas: `draw · discardRandom · mill · damage · gainLife · loseLife ·
-destroy · exile · returnToHand · tap · untap · counterSpell · pump (com
-keywords até o fim do turno) · putCounters (+1/+1, -1/-1…) · attach ·
-addMana · token · shuffle · fight · gainControl (com reversão no fim do
-turno) · copySpell · preventCombatDamage`
+Diretas: `draw · discardRandom · discardHand · mill · damage · gainLife ·
+loseLife · destroy · exile · returnToHand · returnToBattlefield (reanimação) ·
+tap · untap · counterSpell · pump (com keywords até o fim do turno) ·
+putCounters (+1/+1, -1/-1…) · attach · addMana · token · shuffle · fight ·
+gainControl (com reversão no fim do turno) · copySpell ·
+preventCombatDamage · regenerate`
+
+`draw`, `mill`, `discard` e `sacrifice` aceitam `who: 'target:N'` ("o
+jogador alvo compra…"); `discard` aceita `chooser: 'caster'` + `filter`
+(Duress). `search` aceita `to: 'libraryTop'` (Mystical/Vampiric Tutor).
 
 Em massa (com `FilterSpec`): `damageEach · destroyEach · exileEach ·
 pumpEach · tapEach · untapEach`
@@ -62,8 +67,15 @@ Keywords automatizadas: `flying · reach · haste · vigilance · trample ·
 lifelink · deathtouch · defender · menace · firstStrike · doubleStrike ·
 indestructible · hexproof`.
 Mecânicas de carta: `storm` (cópias na pilha por mágica conjurada antes no
-turno) e `additionalCost` (sacrifício pago no cast, com `'sacrificedPower'`
-como quantidade dinâmica — Fling).
+turno) · `additionalCost` (sacrifício pago no cast, com `'sacrificedPower'`
+como quantidade dinâmica — Fling) · `kicker` · `flashback` (conjura do
+cemitério e exila) · `cycling` (mana e/ou vida) · `uncounterable` ·
+`protectionFrom` (cores: alvo, bloqueio e dano) · `entersTapped` ·
+`loyalty` + habilidades `kind: 'loyalty'` (planeswalkers: velocidade de
+feitiçaria, 1×/turno, dano vira perda de lealdade, SBA em 0; atacáveis via
+`defendTarget`). Custos de habilidade: `tap · mana · sacrificeSelf ·
+sacrifice (outra permanente, por filtro) · payLife`. Gatilhos extras:
+`youGainLife` e landfall via `etb` + filtro de terreno.
 
 Definições em [`packages/engine/src/cards/types.ts`](packages/engine/src/cards/types.ts).
 

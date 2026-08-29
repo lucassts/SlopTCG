@@ -46,9 +46,10 @@ interface Targeting {
   specs: { what: string }[];
   chosen: TargetChoice[];
   label: string;
-  /** Extras carried into the cast action (X spells, modal spells). */
+  /** Extras carried into the cast action (X spells, modal spells, kicker). */
   x?: number;
   mode?: number;
+  kicked?: boolean;
   /** First N picks are sacrifices for an additional cost (Fling). */
   sacCount?: number;
 }
@@ -81,6 +82,8 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const [bottomSel, setBottomSel] = useState<Set<number>>(new Set());
   const [choiceSel, setChoiceSel] = useState<Set<number>>(new Set());
   const [modalPick, setModalPick] = useState<CardView | null>(null);
+  const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
+  const [gravePick, setGravePick] = useState<PlayerId | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [showStops, setShowStops] = useState(false);
@@ -194,10 +197,21 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
           targets: t.chosen.slice(sacCount),
           x: t.x,
           mode: t.mode,
+          kicked: t.kicked,
           sacrifices: sacCount > 0 ? sacrifices : undefined,
         });
       } else {
-        onAction({ type: 'activateAbility', objectId: t.objectId, abilityIndex: t.abilityIndex ?? 0, targets: t.chosen });
+        const sacCount = t.sacCount ?? 0;
+        const sacrifices = t.chosen
+          .slice(0, sacCount)
+          .flatMap((c) => (c.kind === 'object' ? [c.id] : []));
+        onAction({
+          type: 'activateAbility',
+          objectId: t.objectId,
+          abilityIndex: t.abilityIndex ?? 0,
+          targets: t.chosen.slice(sacCount),
+          sacrifices: sacCount > 0 ? sacrifices : undefined,
+        });
       }
       setTargeting(null);
     } else {
@@ -243,7 +257,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
     beginCast(cv, undefined);
   };
 
-  /** Start casting: asks for X if needed, then sacrifices/targets, then sends. */
+  /** Start casting: asks for X/kicker, then sacrifices/targets, then sends. */
   const beginCast = (cv: CardView, mode: number | undefined) => {
     const def = cv.card;
     let x: number | undefined;
@@ -253,6 +267,8 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       x = parseInt(raw, 10);
       if (!Number.isInteger(x) || x < 0) return;
     }
+    let kicked: boolean | undefined;
+    if (def.kicker) kicked = confirm(`${def.name}: pagar o kicker ${def.kicker.cost}?`);
     // Custo adicional de sacrifício (Fling): escolhido como os primeiros "alvos".
     const sacCount = def.additionalCost ? def.additionalCost.count ?? 1 : 0;
     const sacSpecs = Array.from({ length: sacCount }, () => ({
@@ -265,11 +281,11 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
         : def.spellTargets ?? [];
     const specs = [...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
       const label = sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, sacCount });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, sacCount });
     }
   };
 
@@ -302,24 +318,38 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
     }
     if (owner === you) {
       const abilities = cv.card.abilities ?? [];
+      // Planeswalker: pick one of the loyalty abilities from an overlay.
+      if (cv.card.types.includes('Planeswalker') && abilities.some((a) => a.kind === 'loyalty')) {
+        setLoyaltyPick(cv);
+        return;
+      }
       const idx = abilities.findIndex((a) => a.kind === 'activated');
       if (idx >= 0) {
         const ability = abilities[idx];
         if (ability.kind !== 'activated') return;
-        const specs = ability.targets ?? [];
-        if (specs.length === 0) {
-          onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx });
-        } else {
-          setTargeting({
-            kind: 'ability',
-            objectId: cv.objectId,
-            abilityIndex: idx,
-            specs,
-            chosen: [],
-            label: `${cv.card.name}: ${ability.text}`,
-          });
-        }
+        beginAbility(cv, idx, ability);
       }
+    }
+  };
+
+  /** Activate an ability, collecting sacrifice cost and targets by clicks. */
+  const beginAbility = (
+    cv: CardView,
+    idx: number,
+    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string } } },
+  ) => {
+    const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice : undefined;
+    const sacCount = sacFilter ? 1 : 0;
+    const sacSpecs = sacCount > 0 ? [{ what: sacFilter?.what ?? 'permanent' }] : [];
+    const specs = [...sacSpecs, ...(ability.targets ?? [])];
+    if (specs.length === 0) {
+      onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx });
+    } else {
+      const label =
+        sacCount > 0
+          ? `${cv.card.name}: ${ability.text} (escolha o sacrifício primeiro)`
+          : `${cv.card.name}: ${ability.text}`;
+      setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount });
     }
   };
 
@@ -340,7 +370,16 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
     setMenu({ x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 320), card: cv });
   };
 
-  const confirmAttack = () => onAction({ type: 'declareAttackers', attackers: [...attackSel] });
+  const confirmAttack = () => {
+    let defendTarget: number | undefined;
+    const enemyWalkers = opp.battlefield.filter((c) => c.card.types.includes('Planeswalker'));
+    if (attackSel.size > 0 && enemyWalkers.length > 0) {
+      const pw = enemyWalkers[0];
+      if (confirm(`Atacar ${pw.card.name} em vez do jogador? (OK = planeswalker, Cancelar = jogador)`))
+        defendTarget = pw.objectId;
+    }
+    onAction({ type: 'declareAttackers', attackers: [...attackSel], defendTarget });
+  };
   const confirmBlocks = () =>
     onAction({ type: 'declareBlockers', blocks: [...blockSel.entries()].map(([blocker, attacker]) => ({ blocker, attacker })) });
 
@@ -393,7 +432,12 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
         <strong>{opp.name}</strong>
         {view.activePlayer === oppId && <span className="zone-pill">turno dele</span>}
         <span className="zone-pill">✋ {opp.handSize}</span>
-        <span className="zone-pill" title={opp.graveyard.map((c) => c.card.name).join('\n') || 'cemitério vazio'}>
+        <span
+          className="zone-pill"
+          style={{ cursor: 'pointer' }}
+          title="Ver cemitério"
+          onClick={(e) => { e.stopPropagation(); setGravePick(oppId); }}
+        >
           🪦 {opp.graveyard.length}
         </span>
         <span className="zone-pill">📚 {opp.librarySize}</span>
@@ -495,7 +539,12 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
         <div className={`life ${targeting ? 'targetable' : ''}`} onClick={() => clickPlayer(you)}>
           {me.life}
         </div>
-        <span className="zone-pill" title={me.graveyard.map((c) => c.card.name).join('\n') || 'cemitério vazio'}>
+        <span
+          className="zone-pill"
+          style={{ cursor: 'pointer' }}
+          title="Ver cemitério"
+          onClick={(e) => { e.stopPropagation(); setGravePick(you); }}
+        >
           🪦 {me.graveyard.length}
         </span>
         <span className="zone-pill">📚 {me.librarySize}</span>
@@ -605,6 +654,12 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
           <div className="panel-title" style={{ padding: '4px 10px' }}>{menu.card.card.name} (manual)</div>
+          {menu.card.card.cycling && (me.hand ?? []).some((c) => c.objectId === menu.card.objectId) && (
+            <MenuItem
+              label={`♻ Reciclar (${menu.card.card.cycling.mana ?? ''}${menu.card.card.cycling.life ? `${menu.card.card.cycling.life} vidas` : ''})`}
+              onPick={() => onAction({ type: 'cycle', objectId: menu.card.objectId })}
+            />
+          )}
           <MenuItem label="→ campo de batalha" onPick={() => moveTo(menu.card, 'battlefield')} />
           <MenuItem label="→ cemitério" onPick={() => moveTo(menu.card, 'graveyard')} />
           <MenuItem label="→ exílio" onPick={() => moveTo(menu.card, 'exile')} />
@@ -720,6 +775,59 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
               </button>
             ))}
             <button className="danger" onClick={() => setModalPick(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* -------- habilidades de lealdade -------- */}
+      {loyaltyPick && (
+        <div className="mulligan-overlay" onClick={() => setLoyaltyPick(null)}>
+          <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
+            <h2>{loyaltyPick.card.name}</h2>
+            <div className="muted">Lealdade: {loyaltyPick.counters['loyalty'] ?? 0}</div>
+            {(loyaltyPick.card.abilities ?? []).map((a, i) =>
+              a.kind === 'loyalty' ? (
+                <button
+                  key={i}
+                  onClick={() => {
+                    const cv = loyaltyPick;
+                    setLoyaltyPick(null);
+                    beginAbility(cv, i, a);
+                  }}
+                >
+                  {a.text}
+                </button>
+              ) : null,
+            )}
+            <button className="danger" onClick={() => setLoyaltyPick(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* -------- cemitério (com flashback) -------- */}
+      {gravePick && (
+        <div className="mulligan-overlay" onClick={() => setGravePick(null)}>
+          <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
+            <h2>Cemitério de {view.players[gravePick].name}</h2>
+            <div className="mulligan-hand choice-hand">
+              {view.players[gravePick].graveyard.length === 0 && <div className="muted">vazio</div>}
+              {view.players[gravePick].graveyard.map((c) => (
+                <div key={c.objectId} style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+                  <CardTile card={c} size="hand" onContextMenu={(e) => openMenu(e, c)} />
+                  {gravePick === you && c.card.flashback && (
+                    <button
+                      onClick={() => {
+                        setGravePick(null);
+                        beginCast(c, undefined);
+                      }}
+                    >
+                      ⚡ Flashback {c.card.flashback.cost}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setGravePick(null)}>Fechar</button>
           </div>
         </div>
       )}

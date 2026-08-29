@@ -39,6 +39,9 @@ export function canBlock(state: GameState, blocker: GameObject, attacker: GameOb
     !hasKeyword(state, blocker, 'reach')
   )
     return 'não alcança criaturas com voar';
+  // Protection: the attacker can't be blocked by creatures of those colors.
+  if (attacker.card.protectionFrom?.some((c) => blocker.card.colors.includes(c)))
+    return `o atacante tem proteção contra as cores do bloqueador`;
   return null;
 }
 
@@ -79,16 +82,24 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
     const deathtouch = hasKeyword(state, atk, 'deathtouch');
     const trample = hasKeyword(state, atk, 'trample');
 
+    // Unblocked damage goes to the attacked planeswalker, if one was chosen
+    // and is still around; otherwise to the defending player.
+    const pw = atk.pwTarget !== undefined ? state.objects[atk.pwTarget] : undefined;
+    const hitFace = () => {
+      if (pw && pw.zone === 'battlefield') {
+        dealDamageToObject(state, pw, power, atk.card.name, emit, { sourceColors: atk.card.colors });
+      } else {
+        dealDamageToPlayer(state, defender, power, atk.card.name, emit);
+      }
+      if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
+    };
+
     if (atkDeals && power > 0) {
       if (!atk.wasBlocked) {
-        dealDamageToPlayer(state, defender, power, atk.card.name, emit);
-        if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
+        hitFace();
       } else if (blockers.length === 0) {
         // All blockers already died; only trample lets damage through.
-        if (trample) {
-          dealDamageToPlayer(state, defender, power, atk.card.name, emit);
-          if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
-        }
+        if (trample) hitFace();
       } else {
         // Assign lethal to each blocker in order; deathtouch makes 1 lethal.
         let remaining = power;
@@ -97,11 +108,13 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
           const lethal = deathtouch ? 1 : Math.max(1, effectiveToughness(state, blk) - blk.damage);
           const isLast = blockers.indexOf(blk) === blockers.length - 1;
           const assigned = isLast && !trample ? remaining : Math.min(remaining, lethal);
-          dealDamageToObject(state, blk, assigned, atk.card.name, emit, { deathtouch });
+          dealDamageToObject(state, blk, assigned, atk.card.name, emit, { deathtouch, sourceColors: atk.card.colors });
           remaining -= assigned;
         }
         if (remaining > 0 && trample) {
-          dealDamageToPlayer(state, defender, remaining, atk.card.name, emit);
+          if (pw && pw.zone === 'battlefield')
+            dealDamageToObject(state, pw, remaining, atk.card.name, emit, { sourceColors: atk.card.colors });
+          else dealDamageToPlayer(state, defender, remaining, atk.card.name, emit);
         }
         if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
       }
@@ -114,6 +127,7 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
       if (bPower > 0) {
         dealDamageToObject(state, atk, bPower, blk.card.name, emit, {
           deathtouch: hasKeyword(state, blk, 'deathtouch'),
+          sourceColors: blk.card.colors,
         });
         if (hasKeyword(state, blk, 'lifelink'))
           changeLife(state, blk.controller, bPower, `vínculo com a vida de ${blk.card.name}`, emit);
@@ -128,5 +142,6 @@ export function clearCombat(state: GameState): void {
     obj.attacking = false;
     obj.blocking = undefined;
     obj.wasBlocked = false;
+    obj.pwTarget = undefined;
   }
 }

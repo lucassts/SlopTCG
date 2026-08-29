@@ -22,6 +22,7 @@ import {
   changeLife,
   dealDamageToObject,
   dealDamageToPlayer,
+  destroyObject,
   draw,
   moveWithEvent,
   setTapped,
@@ -68,6 +69,19 @@ function resolveSubject(ctx: EffectContext, ref: SubjectRef): TargetChoice[] {
   return t ? [t] : [];
 }
 
+/** Resolve a WhoSel ('controller'/'opponent'/'each'/'target:N') to players. */
+function resolveWho(ctx: EffectContext, who: import('./cards/types.js').WhoSel): PlayerId[] {
+  if (who === 'controller' || who === 'opponent' || who === 'each')
+    return resolvePlayers(who, ctx.controller);
+  const t = ctx.targets[parseInt(who.slice('target:'.length), 10)];
+  return t?.kind === 'player' ? [t.player] : [];
+}
+
+/** Colors of the effect's source, for protection checks. */
+function sourceColors(ctx: EffectContext): import('./types.js').Color[] {
+  return ctx.state.objects[ctx.sourceId]?.card.colors ?? [];
+}
+
 export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if (typeof amount === 'number') return amount;
   if (amount === 'X') return ctx.xValue ?? 0;
@@ -110,7 +124,8 @@ interface ChoiceSetup {
 }
 
 /** Resolve who a choice belongs to ('target:N' → the targeted player). */
-function choicePlayer(ctx: EffectContext, who: 'controller' | 'opponent' | `target:${number}`): PlayerId {
+function choicePlayer(ctx: EffectContext, who: import('./cards/types.js').WhoSel): PlayerId {
+  if (who === 'each') return ctx.controller;
   if (who === 'controller') return ctx.controller;
   if (who === 'opponent') return opponentOf(ctx.controller);
   const t = ctx.targets[parseInt(who.slice('target:'.length), 10)];
@@ -121,15 +136,22 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
   const { state, controller } = ctx;
   switch (step.op) {
     case 'discard': {
-      const player = choicePlayer(ctx, step.who);
-      const hand = state.players[player].zones.hand;
+      const victim = choicePlayer(ctx, step.who);
+      // Duress-style: the caster looks at that hand and picks.
+      const decider = step.chooser === 'caster' ? controller : victim;
+      const hand = state.players[victim].zones.hand.filter((id) =>
+        cardMatchesFilter(state.objects[id].card, step.filter),
+      );
       const n = Math.min(step.count, hand.length);
       return {
-        player,
-        options: [...hand],
+        player: decider,
+        options: hand,
         min: n,
         max: n,
-        prompt: `${ctx.sourceName}: descarte ${n} carta(s)`,
+        prompt:
+          decider === victim
+            ? `${ctx.sourceName}: descarte ${n} carta(s)`
+            : `${ctx.sourceName}: escolha ${n} carta(s) da mão do oponente para descartar`,
         mode: 'cards',
       };
     }
@@ -183,12 +205,11 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
   const { state, emit } = ctx;
   switch (step.op) {
     case 'discard': {
-      const player = choicePlayer(ctx, step.who);
       for (const id of picks) {
         const obj = state.objects[id];
         if (!obj || obj.zone !== 'hand') continue;
         moveWithEvent(state, obj, 'graveyard', 'discarded', emit);
-        emit({ type: 'discarded', player, objectId: id, cardName: obj.card.name });
+        emit({ type: 'discarded', player: obj.owner, objectId: id, cardName: obj.card.name });
       }
       return;
     }
@@ -214,10 +235,19 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
     }
     case 'search': {
       const found: string[] = [];
+      const toTop: number[] = [];
       for (const id of picks) {
         const obj = state.objects[id];
         if (!obj || obj.zone !== 'library') continue;
         found.push(obj.card.name);
+        if (step.to === 'libraryTop') {
+          // Removed now, put back on top after the shuffle (Mystical Tutor).
+          const lib = state.players[ctx.controller].zones.library;
+          const i = lib.indexOf(id);
+          if (i >= 0) lib.splice(i, 1);
+          toTop.push(id);
+          continue;
+        }
         moveWithEvent(state, obj, step.to, 'searched', emit);
         if (step.to === 'battlefield' && step.tapped) setTapped(state, obj, true, emit);
       }
@@ -225,6 +255,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       const r = shuffle(state.players[ctx.controller].zones.library, state.rngState);
       state.players[ctx.controller].zones.library = r.items;
       state.rngState = r.state;
+      if (toTop.length > 0) state.players[ctx.controller].zones.library.unshift(...toTop);
       emit({ type: 'shuffled', player: ctx.controller });
       return;
     }
@@ -295,13 +326,17 @@ export function applyEffectChoice(
   const result = runEffectScript(ctx, pending.resume.remaining);
   if (result === 'paused') {
     const next = state.pendingDecision as PendingDecision | null;
-    if (next?.type === 'effectChoice') next.resume.finishSpellId = pending.resume.finishSpellId;
+    if (next?.type === 'effectChoice') {
+      next.resume.finishSpellId = pending.resume.finishSpellId;
+      next.resume.finishSpellExile = pending.resume.finishSpellExile;
+    }
     return 'paused';
   }
   const spellId = pending.resume.finishSpellId;
   if (spellId !== null) {
     const spell = state.objects[spellId];
-    if (spell && spell.zone === 'stack') moveWithEvent(state, spell, 'graveyard', 'resolved', emit);
+    if (spell && spell.zone === 'stack')
+      moveWithEvent(state, spell, pending.resume.finishSpellExile ? 'exile' : 'graveyard', 'resolved', emit);
   }
   return 'done';
 }
@@ -325,10 +360,20 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
   switch (step.op) {
     case 'draw': {
       const count = resolveAmount(ctx, step.count);
-      for (const p of resolvePlayers(step.who, ctx.controller))
+      for (const p of resolveWho(ctx, step.who))
         for (let i = 0; i < count; i++) draw(state, p, emit);
       return;
     }
+
+    case 'discardHand':
+      for (const p of resolveWho(ctx, step.who)) {
+        for (const id of [...state.players[p].zones.hand]) {
+          const obj = state.objects[id];
+          moveWithEvent(state, obj, 'graveyard', 'discarded', emit);
+          emit({ type: 'discarded', player: p, objectId: id, cardName: obj.card.name });
+        }
+      }
+      return;
 
     case 'discardRandom':
       for (const p of resolvePlayers(step.who, ctx.controller)) {
@@ -345,7 +390,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       return;
 
     case 'mill':
-      for (const p of resolvePlayers(step.who, ctx.controller)) {
+      for (const p of resolveWho(ctx, step.who)) {
         for (let i = 0; i < step.count; i++) {
           const top = state.players[p].zones.library[0];
           if (top === undefined) break;
@@ -360,7 +405,8 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
         if (t.kind === 'player') dealDamageToPlayer(state, t.player, amount, ctx.sourceName, emit);
         else {
           const obj = objectAlive(state, t);
-          if (obj && obj.zone === 'battlefield') dealDamageToObject(state, obj, amount, ctx.sourceName, emit);
+          if (obj && obj.zone === 'battlefield')
+            dealDamageToObject(state, obj, amount, ctx.sourceName, emit, { sourceColors: sourceColors(ctx) });
         }
       }
       return;
@@ -382,7 +428,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
         if (obj && obj.zone === 'battlefield' && !hasKeyword(state, obj, 'indestructible'))
-          moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+          destroyObject(state, obj, emit);
       }
       return;
 
@@ -402,6 +448,27 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       }
       return;
 
+    case 'returnToBattlefield':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (obj && obj.zone === 'graveyard') {
+          // Enters under the effect controller's control (Zombify).
+          obj.controller = ctx.controller;
+          moveWithEvent(state, obj, 'battlefield', 'returned', emit);
+          if (step.tapped) setTapped(state, obj, true, emit);
+        }
+      }
+      return;
+
+    case 'regenerate':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (obj && obj.zone === 'battlefield') {
+          obj.counters['__regen'] = (obj.counters['__regen'] ?? 0) + 1;
+        }
+      }
+      return;
+
     case 'tap':
     case 'untap':
       for (const t of resolveSubject(ctx, step.what)) {
@@ -415,11 +482,17 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
         if (t.kind !== 'object') continue;
         const item = state.stack.find((s) => s.kind === 'spell' && s.sourceId === t.id);
         if (!item) continue;
-        state.stack = state.stack.filter((s) => s !== item);
         const obj = state.objects[t.id];
+        if (obj?.card.uncounterable) {
+          emit({ type: 'fizzled', description: `${item.cardName} não pode ser anulada` });
+          continue;
+        }
+        state.stack = state.stack.filter((s) => s !== item);
         if (obj) {
-          obj.zone = 'graveyard';
-          state.players[obj.owner].zones.graveyard.push(obj.id);
+          // Flashback: a countered flashback spell is exiled instead.
+          const dest = item.flashback ? 'exile' : 'graveyard';
+          obj.zone = dest;
+          state.players[obj.owner].zones[dest].push(obj.id);
         }
         emit({ type: 'spellCountered', objectId: t.id, cardName: item.cardName });
       }
@@ -460,14 +533,13 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
     case 'damageEach': {
       const amount = resolveAmount(ctx, step.amount);
       for (const obj of selectBattlefield(ctx, step.filter))
-        dealDamageToObject(state, obj, amount, ctx.sourceName, emit);
+        dealDamageToObject(state, obj, amount, ctx.sourceName, emit, { sourceColors: sourceColors(ctx) });
       return;
     }
 
     case 'destroyEach':
       for (const obj of selectBattlefield(ctx, step.filter))
-        if (!hasKeyword(state, obj, 'indestructible'))
-          moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+        if (!hasKeyword(state, obj, 'indestructible')) destroyObject(state, obj, emit);
       return;
 
     case 'exileEach':
@@ -494,8 +566,16 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       if (!a || !b || a.zone !== 'battlefield' || b.zone !== 'battlefield') return;
       const aPower = Math.max(0, effectivePower(state, a));
       const bPower = Math.max(0, effectivePower(state, b));
-      if (aPower > 0) dealDamageToObject(state, b, aPower, a.card.name, emit, { deathtouch: hasKeyword(state, a, 'deathtouch') });
-      if (bPower > 0) dealDamageToObject(state, a, bPower, b.card.name, emit, { deathtouch: hasKeyword(state, b, 'deathtouch') });
+      if (aPower > 0)
+        dealDamageToObject(state, b, aPower, a.card.name, emit, {
+          deathtouch: hasKeyword(state, a, 'deathtouch'),
+          sourceColors: a.card.colors,
+        });
+      if (bPower > 0)
+        dealDamageToObject(state, a, bPower, b.card.name, emit, {
+          deathtouch: hasKeyword(state, b, 'deathtouch'),
+          sourceColors: b.card.colors,
+        });
       return;
     }
 
@@ -602,6 +682,8 @@ export function targetMatchesSpec(
   controller: PlayerId,
   spec: TargetSpec,
   choice: TargetChoice,
+  /** Colors of the targeting source, for protection checks. */
+  srcColors?: import('./types.js').Color[],
 ): boolean {
   if (spec.what === 'player') return choice.kind === 'player';
   if (choice.kind === 'player') return spec.what === 'any';
@@ -618,6 +700,8 @@ export function targetMatchesSpec(
     if (spec.controlledBy === 'opponent' && obj.controller === controller) return false;
     // Hexproof: opponents' spells/abilities can't target it.
     if (obj.controller !== controller && hasKeyword(state, obj, 'hexproof')) return false;
+    // Protection from [color]: can't be targeted by sources of that color.
+    if (obj.card.protectionFrom && srcColors?.some((c) => obj.card.protectionFrom!.includes(c))) return false;
   }
   switch (spec.what) {
     case 'any':

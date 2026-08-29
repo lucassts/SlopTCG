@@ -215,15 +215,17 @@ export class Game {
       case 'playLand':
         return this.doPlayLand(playerId, action.objectId);
       case 'castSpell':
-        return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices);
+        return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices, action.kicked);
       case 'effectChoice':
         return this.doEffectChoice(playerId, action.picks);
       case 'chooseTargets':
         return this.doChooseTargets(playerId, action.targets);
       case 'activateAbility':
-        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? []);
+        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices);
+      case 'cycle':
+        return this.doCycle(playerId, action.objectId);
       case 'declareAttackers':
-        return this.doDeclareAttackers(playerId, action.attackers);
+        return this.doDeclareAttackers(playerId, action.attackers, action.defendTarget);
       case 'declareBlockers':
         return this.doDeclareBlockers(playerId, action.blocks);
       case 'chooseDiscard':
@@ -293,6 +295,7 @@ export class Game {
     s.players[playerId].landsPlayedThisTurn += 1;
     s.passCount = 0;
     this.emit({ type: 'landPlayed', player: playerId, objectId: obj.id, cardName: obj.card.name });
+    if (obj.card.entersTapped) setTapped(s, obj, true, this.emit);
     return true;
   }
 
@@ -300,6 +303,7 @@ export class Game {
     playerId: PlayerId,
     specs: TargetSpec[] | undefined,
     targets: TargetChoice[],
+    srcColors?: import('./types.js').Color[],
   ): string | null {
     const required = specs ?? [];
     if (targets.length !== required.filter((t) => !t.optional).length && targets.length !== required.length)
@@ -307,7 +311,7 @@ export class Game {
     for (let i = 0; i < targets.length; i++) {
       const spec = required[i];
       if (!spec) return 'alvo em excesso';
-      if (!targetMatchesSpec(this.state, playerId, spec, targets[i])) return 'alvo ilegal';
+      if (!targetMatchesSpec(this.state, playerId, spec, targets[i], srcColors)) return 'alvo ilegal';
     }
     return null;
   }
@@ -319,14 +323,21 @@ export class Game {
     x?: number,
     modeIndex?: number,
     sacrifices?: number[],
+    kicked?: boolean,
   ): boolean {
     const s = this.state;
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
     const obj = s.objects[objectId];
-    if (!obj || obj.zone !== 'hand' || obj.owner !== playerId)
+    if (!obj || obj.owner !== playerId)
+      { this.fail(playerId, 'carta inválida'); return false; }
+    // Flashback: castable from your graveyard for its flashback cost.
+    const viaFlashback = obj.zone === 'graveyard' && !!obj.card.flashback;
+    if (obj.zone !== 'hand' && !viaFlashback)
       { this.fail(playerId, 'carta inválida'); return false; }
     const card = obj.card;
+    if (kicked && !card.kicker)
+      { this.fail(playerId, 'essa mágica não tem kicker'); return false; }
     if (card.types.includes('Land'))
       { this.fail(playerId, 'terrenos são jogados, não conjurados'); return false; }
     if (card.automation === 'manual')
@@ -349,7 +360,7 @@ export class Game {
       : card.enchant
         ? [{ what: card.enchant.what, controlledBy: card.enchant.controlledBy }]
         : card.spellTargets;
-    const targetErr = this.validateTargets(playerId, specs, targets);
+    const targetErr = this.validateTargets(playerId, specs, targets, card.colors);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
 
     // Additional cost: sacrifice (Fling-style). Validated before any payment.
@@ -369,7 +380,14 @@ export class Game {
       { this.fail(playerId, 'essa mágica não tem custo adicional de sacrifício'); return false; }
     }
 
-    const cost = parseCost(card.manaCost);
+    const cost = parseCost(viaFlashback ? card.flashback!.cost : card.manaCost);
+    if (kicked && card.kicker) {
+      const kick = parseCost(card.kicker.cost);
+      cost.generic += kick.generic;
+      cost.colorless += kick.colorless;
+      cost.colored.push(...kick.colored);
+      cost.xCount += kick.xCount;
+    }
     let xValue: number | undefined;
     if (cost.xCount > 0) {
       if (x === undefined || !Number.isInteger(x) || x < 0)
@@ -391,8 +409,12 @@ export class Game {
     removeFromCurrentZone(s, obj);
     obj.zone = 'stack';
     const description =
-      (mode ? `${card.name} — ${mode.label}` : card.name) + (xValue !== undefined ? ` (X=${xValue})` : '');
-    const effect = mode ? mode.effect : card.spellEffect ?? [];
+      (mode ? `${card.name} — ${mode.label}` : card.name) +
+      (xValue !== undefined ? ` (X=${xValue})` : '') +
+      (kicked ? ' (com kicker)' : '') +
+      (viaFlashback ? ' (flashback)' : '');
+    const baseEffect = mode ? mode.effect : card.spellEffect ?? [];
+    const effect = kicked && card.kicker ? [...baseEffect, ...card.kicker.effect] : baseEffect;
     s.stack.push({
       id: s.nextStackId++,
       kind: 'spell',
@@ -404,6 +426,7 @@ export class Game {
       description,
       xValue,
       sacrificedPower,
+      flashback: viaFlashback,
     });
     // Storm: one copy per spell cast earlier this turn (they resolve first).
     const copies = card.storm ? s.spellsCastThisTurn : 0;
@@ -446,12 +469,14 @@ export class Game {
     objectId: number,
     abilityIndex: number,
     targets: TargetChoice[],
+    sacrifices?: number[],
   ): boolean {
     const s = this.state;
     const obj = s.objects[objectId];
     if (!obj || obj.zone !== 'battlefield' || obj.controller !== playerId)
       { this.fail(playerId, 'permanente inválida'); return false; }
     const ability = obj.card.abilities?.[abilityIndex];
+    if (ability?.kind === 'loyalty') return this.doActivateLoyalty(playerId, obj, ability, targets);
     if (!ability || ability.kind !== 'activated')
       { this.fail(playerId, 'habilidade inválida'); return false; }
 
@@ -470,8 +495,24 @@ export class Game {
       if (obj.card.types.includes('Creature') && obj.summoningSick && !hasKeyword(s, obj, 'haste'))
         { this.fail(playerId, `${obj.card.name} tem enjoo de invocação`); return false; }
     }
-    const targetErr = this.validateTargets(playerId, ability.targets, targets);
+    const targetErr = this.validateTargets(playerId, ability.targets, targets, obj.card.colors);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
+
+    // Sacrifice-another cost (Viscera Seer): validated before paying anything.
+    const abilitySacs = sacrifices ?? [];
+    if (ability.cost.sacrifice) {
+      if (abilitySacs.length !== 1)
+        { this.fail(playerId, 'escolha 1 permanente para sacrificar como custo'); return false; }
+      const sacObj = s.objects[abilitySacs[0]];
+      if (!sacObj || sacObj.zone !== 'battlefield' || sacObj.controller !== playerId)
+        { this.fail(playerId, 'sacrifício inválido'); return false; }
+      if (!matchFilter({ controller: playerId, sourceId: obj.id }, ability.cost.sacrifice, sacObj))
+        { this.fail(playerId, `${sacObj.card.name} não satisfaz o custo`); return false; }
+    } else if (abilitySacs.length > 0) {
+      { this.fail(playerId, 'essa habilidade não tem custo de sacrifício'); return false; }
+    }
+    if (ability.cost.payLife && s.players[playerId].life < ability.cost.payLife)
+      { this.fail(playerId, `você precisa de ${ability.cost.payLife} pontos de vida para pagar`); return false; }
 
     if (ability.cost.mana) {
       const plan = planPayment(s, playerId, parseCost(ability.cost.mana));
@@ -479,6 +520,9 @@ export class Game {
       this.payWithPlan(playerId, plan);
     }
     if (ability.cost.tap) setTapped(s, obj, true, this.emit);
+    if (ability.cost.payLife)
+      changeLife(s, playerId, -ability.cost.payLife, `custo de ${obj.card.name}`, this.emit);
+    for (const id of abilitySacs) moveWithEvent(s, s.objects[id], 'graveyard', 'sacrificed', this.emit);
     if (ability.cost.sacrificeSelf) moveWithEvent(s, obj, 'graveyard', 'sacrificed', this.emit);
 
     if (ability.isManaAbility) {
@@ -512,7 +556,89 @@ export class Game {
     return true;
   }
 
-  private doDeclareAttackers(playerId: PlayerId, attackerIds: number[]): boolean {
+  /** Loyalty abilities: sorcery speed, once per turn per planeswalker. */
+  private doActivateLoyalty(
+    playerId: PlayerId,
+    obj: GameObject,
+    ability: import('./cards/types.js').LoyaltyAbility,
+    targets: TargetChoice[],
+  ): boolean {
+    const s = this.state;
+    const err = this.requirePriority(playerId);
+    if (err) { this.fail(playerId, err); return false; }
+    if (!this.sorceryTiming(playerId))
+      { this.fail(playerId, 'habilidades de lealdade: só na sua fase principal com a pilha vazia'); return false; }
+    if (obj.activatedLoyaltyThisTurn)
+      { this.fail(playerId, `${obj.card.name} já ativou uma habilidade neste turno`); return false; }
+    const loyalty = obj.counters['loyalty'] ?? 0;
+    if (ability.cost < 0 && loyalty + ability.cost < 0)
+      { this.fail(playerId, 'lealdade insuficiente'); return false; }
+    const targetErr = this.validateTargets(playerId, ability.targets, targets, obj.card.colors);
+    if (targetErr) { this.fail(playerId, targetErr); return false; }
+
+    obj.activatedLoyaltyThisTurn = true;
+    const total = loyalty + ability.cost;
+    obj.counters['loyalty'] = total;
+    this.emit({
+      type: 'countersChanged',
+      objectId: obj.id,
+      cardName: obj.card.name,
+      counter: 'loyalty',
+      delta: ability.cost,
+      total,
+    });
+    s.stack.push({
+      id: s.nextStackId++,
+      kind: 'ability',
+      sourceId: obj.id,
+      controller: playerId,
+      cardName: obj.card.name,
+      effect: ability.effect,
+      targets,
+      description: `${obj.card.name}: ${ability.text}`,
+    });
+    s.passCount = 0;
+    s.priority = playerId;
+    this.emit({
+      type: 'abilityActivated',
+      player: playerId,
+      sourceId: obj.id,
+      sourceName: obj.card.name,
+      text: ability.text,
+      targets,
+    });
+    return true;
+  }
+
+  /** Cycling: pay the cost, discard the card, draw (or custom effect). */
+  private doCycle(playerId: PlayerId, objectId: number): boolean {
+    const s = this.state;
+    const err = this.requirePriority(playerId);
+    if (err) { this.fail(playerId, err); return false; }
+    const obj = s.objects[objectId];
+    if (!obj || obj.zone !== 'hand' || obj.owner !== playerId)
+      { this.fail(playerId, 'carta inválida'); return false; }
+    const cycling = obj.card.cycling;
+    if (!cycling) { this.fail(playerId, `${obj.card.name} não tem reciclar`); return false; }
+    if (cycling.life && s.players[playerId].life < cycling.life)
+      { this.fail(playerId, `você precisa de ${cycling.life} pontos de vida`); return false; }
+    if (cycling.mana) {
+      const plan = planPayment(s, playerId, parseCost(cycling.mana));
+      if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
+      this.payWithPlan(playerId, plan);
+    }
+    if (cycling.life) changeLife(s, playerId, -cycling.life, `reciclar ${obj.card.name}`, this.emit);
+    moveWithEvent(s, obj, 'graveyard', 'discarded', this.emit);
+    this.emit({ type: 'cycled', player: playerId, cardName: obj.card.name });
+    runEffectScript(
+      { state: s, controller: playerId, sourceId: obj.id, sourceName: obj.card.name, targets: [], emit: this.emit },
+      cycling.effect ?? [{ op: 'draw', who: 'controller', count: 1 }],
+    );
+    s.passCount = 0;
+    return true;
+  }
+
+  private doDeclareAttackers(playerId: PlayerId, attackerIds: number[], defendTarget?: number): boolean {
     const s = this.state;
     if (s.combatAwaiting !== 'attackers' || playerId !== s.activePlayer)
       { this.fail(playerId, 'não é hora de declarar atacantes'); return false; }
@@ -526,8 +652,20 @@ export class Game {
       if (why) { this.fail(playerId, `${obj.card.name} não pode atacar: ${why}`); return false; }
       attackers.push(obj);
     }
+    // Optional: attack a defender's planeswalker instead of the player.
+    if (defendTarget !== undefined) {
+      const pw = s.objects[defendTarget];
+      if (
+        !pw ||
+        pw.zone !== 'battlefield' ||
+        pw.controller !== opponentOf(playerId) ||
+        !pw.card.types.includes('Planeswalker')
+      )
+        { this.fail(playerId, 'alvo de ataque inválido (planeswalker do oponente)'); return false; }
+    }
     for (const obj of attackers) {
       obj.attacking = true;
+      obj.pwTarget = defendTarget;
       if (!hasKeyword(s, obj, 'vigilance')) setTapped(s, obj, true, this.emit);
     }
     s.combatAwaiting = null;
@@ -773,6 +911,7 @@ export class Game {
     s.activePlayer = opponentOf(s.activePlayer);
     s.spellsCastThisTurn = 0;
     s.combatDamagePrevented = false;
+    for (const obj of Object.values(s.objects)) obj.activatedLoyaltyThisTurn = false;
     this.emit({ type: 'turnBegan', turn: s.turn, activePlayer: s.activePlayer });
     this.enterStep('untap');
   }
@@ -871,6 +1010,7 @@ export class Game {
         obj.damage = 0;
         obj.untilEot = { power: 0, toughness: 0, keywords: [] };
         delete obj.counters['__deathtouched'];
+        delete obj.counters['__regen']; // regeneration shields expire
       }
     }
     // "Until end of turn" control effects wear off (Act of Treason).
@@ -925,11 +1065,12 @@ export class Game {
       if (!obj) return;
       if (item.targets.length > 0 && !itemStillHasLegalWork(s, item)) {
         this.emit({ type: 'fizzled', description: `${item.cardName} foi anulada (todos os alvos são ilegais)` });
-        moveWithEvent(s, obj, 'graveyard', 'resolved', this.emit);
+        moveWithEvent(s, obj, item.flashback ? 'exile' : 'graveyard', 'resolved', this.emit);
         return;
       }
       if (isPermanentCard(obj.card)) {
         moveWithEvent(s, obj, 'battlefield', 'resolved', this.emit);
+        if (obj.card.entersTapped) setTapped(s, obj, true, this.emit);
         // Aura: enters attached to its target (fizzle above covers a dead one).
         const enchantTarget = obj.card.enchant ? item.targets[0] : undefined;
         if (enchantTarget && enchantTarget.kind === 'object') {
@@ -970,6 +1111,18 @@ export class Game {
             });
           }
         }
+        // Planeswalkers enter with their printed loyalty.
+        if (obj.card.types.includes('Planeswalker') && obj.card.loyalty) {
+          obj.counters['loyalty'] = obj.card.loyalty;
+          this.emit({
+            type: 'countersChanged',
+            objectId: obj.id,
+            cardName: obj.card.name,
+            counter: 'loyalty',
+            delta: obj.card.loyalty,
+            total: obj.card.loyalty,
+          });
+        }
         this.emit({ type: 'stackResolved', description: `${item.description} entra no campo de batalha` });
         return;
       }
@@ -989,13 +1142,17 @@ export class Game {
       if (result === 'paused') {
         // Script waits for a player's choice; the card stays on the stack
         // and moves to the graveyard when applyEffectChoice finishes it.
-        if (s.pendingDecision?.type === 'effectChoice') s.pendingDecision.resume.finishSpellId = obj.id;
+        if (s.pendingDecision?.type === 'effectChoice') {
+          s.pendingDecision.resume.finishSpellId = obj.id;
+          s.pendingDecision.resume.finishSpellExile = item.flashback;
+        }
         this.emit({ type: 'stackResolved', description: `${item.description} está resolvendo` });
         return;
       }
       this.emit({ type: 'stackResolved', description: `${item.description} resolveu` });
-      // The spell finishes in the graveyard (unless an effect moved it).
-      if (obj.zone === 'stack') moveWithEvent(s, obj, 'graveyard', 'resolved', this.emit);
+      // Finishes in the graveyard — or exile, for flashback casts.
+      if (obj.zone === 'stack')
+        moveWithEvent(s, obj, item.flashback ? 'exile' : 'graveyard', 'resolved', this.emit);
       return;
     }
 
@@ -1027,10 +1184,24 @@ export class Game {
       const ev = this.buf[this.triggerCursor++];
       if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'tokenCreated') this.fireZoneTriggers(ev.objectId, 'etb');
+      if (ev.type === 'landPlayed') this.fireZoneTriggers(ev.objectId, 'etb'); // landfall
       if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.to === 'graveyard')
         this.fireZoneTriggers(ev.objectId, 'dies');
       if (ev.type === 'attackersDeclared')
         for (const a of ev.attackers) this.fireSelfTrigger(a.objectId, 'attacks');
+      if (ev.type === 'lifeChanged' && ev.delta > 0) this.fireLifeGainTriggers(ev.player);
+    }
+  }
+
+  /** "Whenever you gain life" (Ajani's Pridemate). */
+  private fireLifeGainTriggers(player: PlayerId): void {
+    const s = this.state;
+    for (const id of [...s.players[player].zones.battlefield]) {
+      const obj = s.objects[id];
+      for (const ability of obj.card.abilities ?? []) {
+        if (ability.kind !== 'triggered' || ability.trigger.on !== 'youGainLife') continue;
+        this.pushTrigger(obj, ability);
+      }
     }
   }
 
@@ -1131,7 +1302,8 @@ export class Game {
     const s = this.state;
     const trig = s.triggerQueue.shift();
     if (!trig) return;
-    const anyLegal = trig.specs.every((spec) => this.hasLegalTarget(trig.controller, spec));
+    const srcColors = s.objects[trig.sourceId]?.card.colors;
+    const anyLegal = trig.specs.every((spec) => this.hasLegalTarget(trig.controller, spec, srcColors));
     if (!anyLegal) {
       this.emit({ type: 'fizzled', description: `${trig.cardName}: ${trig.text} — removida (sem alvos legais)` });
       return;
@@ -1148,10 +1320,14 @@ export class Game {
     this.emit({ type: 'decisionRequired', player: trig.controller, decision: `targets:${trig.cardName}` });
   }
 
-  private hasLegalTarget(controller: PlayerId, spec: import('./cards/types.js').TargetSpec): boolean {
+  private hasLegalTarget(
+    controller: PlayerId,
+    spec: import('./cards/types.js').TargetSpec,
+    srcColors?: import('./types.js').Color[],
+  ): boolean {
     if (spec.what === 'player' || spec.what === 'any') return true;
     return Object.values(this.state.objects).some((o) =>
-      targetMatchesSpec(this.state, controller, spec, { kind: 'object', id: o.id }),
+      targetMatchesSpec(this.state, controller, spec, { kind: 'object', id: o.id }, srcColors),
     );
   }
 
@@ -1160,7 +1336,7 @@ export class Game {
     const pending = s.pendingDecision;
     if (!pending || pending.type !== 'chooseTargets' || pending.player !== playerId)
       { this.fail(playerId, 'nenhuma escolha de alvos pendente para você'); return false; }
-    const err = this.validateTargets(playerId, pending.specs, targets);
+    const err = this.validateTargets(playerId, pending.specs, targets, s.objects[pending.sourceId]?.card.colors);
     if (err) { this.fail(playerId, err); return false; }
     s.pendingDecision = null;
     s.stack.push({

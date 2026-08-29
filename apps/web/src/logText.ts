@@ -94,10 +94,18 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${name(ev.to)} assumiu o controle de ${ev.cardName}.`;
     case 'scried':
       return `${name(ev.player)} olhou as ${ev.looked} carta(s) do topo e mandou ${ev.bottomed} para o fundo.`;
-    case 'searched':
+    case 'searched': {
+      const dest = ev.to === 'hand' ? 'mão' : ev.to === 'battlefield' ? 'campo de batalha' : 'topo da biblioteca';
       return ev.found.length > 0
-        ? `${name(ev.player)} buscou ${ev.found.join(', ')} (→ ${ev.to === 'hand' ? 'mão' : 'campo de batalha'}).`
+        ? `${name(ev.player)} buscou ${ev.found.join(', ')} (→ ${dest}).`
         : `${name(ev.player)} não encontrou nada na busca.`;
+    }
+    case 'damagePrevented':
+      return `${ev.amount} de dano de ${ev.sourceName} a ${ev.targetName} foi prevenido (proteção).`;
+    case 'regenerated':
+      return `${ev.cardName} regenerou.`;
+    case 'cycled':
+      return `${name(ev.player)} reciclou ${ev.cardName}.`;
     case 'mulliganTaken':
       return `${name(ev.player)} fez mulligan (${ev.taken}º).`;
     case 'handKept':

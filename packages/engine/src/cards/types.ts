@@ -24,10 +24,13 @@ export type SubjectRef = `target:${number}` | 'self' | PlayerSel;
  * sacrifice choices and library searches.
  */
 export interface FilterSpec {
-  what?: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent';
+  what?: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent' | 'instant' | 'sorcery';
   subtype?: string;
   /** Restrict by supertype 'Basic' (library searches for basic lands). */
   basic?: boolean;
+  /** Negations (Duress: "noncreature, nonland card"). */
+  nonland?: boolean;
+  noncreature?: boolean;
   controlledBy?: 'you' | 'opponent' | 'any';
   /** Exclude the effect's own source ("another creature…"). */
   other?: boolean;
@@ -67,12 +70,21 @@ export interface TargetSpec {
  * Steps marked (choice) pause resolution and ask a player to pick — the
  * engine resumes the script automatically after the pick.
  */
+/** Who an effect applies to, including targeted players ("target player draws…"). */
+export type WhoSel = PlayerSel | `target:${number}`;
+
 export type EffectStep =
-  | { op: 'draw'; who: PlayerSel; count: DynAmount }
+  | { op: 'draw'; who: WhoSel; count: DynAmount }
   | { op: 'discardRandom'; who: PlayerSel; count: number }
-  /** (choice) The player chooses which cards to discard. */
-  | { op: 'discard'; who: 'controller' | 'opponent' | `target:${number}`; count: number }
-  | { op: 'mill'; who: PlayerSel; count: number }
+  /**
+   * (choice) Cards are chosen and discarded. By default the discarding
+   * player chooses; `chooser: 'caster'` makes the effect's controller pick
+   * from that hand instead (Duress), optionally restricted by `filter`.
+   */
+  | { op: 'discard'; who: WhoSel; count: number; chooser?: 'caster'; filter?: FilterSpec }
+  /** The whole hand goes to the graveyard (wheels). */
+  | { op: 'discardHand'; who: WhoSel }
+  | { op: 'mill'; who: WhoSel; count: number }
   | { op: 'damage'; to: SubjectRef; amount: DynAmount }
   | { op: 'gainLife'; who: PlayerSel; amount: DynAmount }
   | { op: 'loseLife'; who: PlayerSel; amount: DynAmount }
@@ -97,7 +109,7 @@ export type EffectStep =
   /** Two creatures deal damage equal to their power to each other. */
   | { op: 'fight'; a: SubjectRef; b: SubjectRef }
   /** (choice) The player sacrifices `count` permanents matching the filter. */
-  | { op: 'sacrifice'; who: 'controller' | 'opponent' | `target:${number}`; filter?: FilterSpec; count: number }
+  | { op: 'sacrifice'; who: WhoSel; filter?: FilterSpec; count: number }
   /** (choice) Look at the top N; chosen cards go to the bottom. */
   | { op: 'scry'; count: number }
   /** (choice) Search your library for up to `count` cards matching the filter. */
@@ -105,9 +117,13 @@ export type EffectStep =
       op: 'search';
       filter?: FilterSpec;
       count: number;
-      to: 'hand' | 'battlefield';
+      to: 'hand' | 'battlefield' | 'libraryTop';
       tapped?: boolean;
     }
+  /** Reanimation: move a (graveyard) target onto the battlefield. */
+  | { op: 'returnToBattlefield'; what: SubjectRef; tapped?: boolean }
+  /** Regeneration shield: the next destruction this turn is replaced. */
+  | { op: 'regenerate'; what: SubjectRef }
   | { op: 'shuffle'; who: PlayerSel }
   /** Take control of a permanent (optionally until end of turn, Act of Treason-style). */
   | { op: 'gainControl'; what: SubjectRef; untilEndOfTurn?: boolean }
@@ -142,7 +158,9 @@ export type TriggerSpec =
   | { on: 'upkeep'; whose: 'controller' | 'each' }
   | { on: 'endStep'; whose: 'controller' | 'each' }
   /** The controller casts a spell (prowess-style). */
-  | { on: 'youCastSpell'; noncreatureOnly?: boolean };
+  | { on: 'youCastSpell'; noncreatureOnly?: boolean }
+  /** The controller gains life (Ajani's Pridemate). */
+  | { on: 'youGainLife' };
 
 export interface TriggeredAbility {
   kind: 'triggered';
@@ -160,7 +178,15 @@ export interface TriggeredAbility {
 
 export interface ActivatedAbility {
   kind: 'activated';
-  cost: { tap?: boolean; mana?: string; sacrificeSelf?: boolean };
+  cost: {
+    tap?: boolean;
+    mana?: string;
+    sacrificeSelf?: boolean;
+    /** Sacrifice another permanent matching this filter (chosen in the action). */
+    sacrifice?: FilterSpec;
+    /** Pay N life (requires having at least N). */
+    payLife?: number;
+  };
   targets?: TargetSpec[];
   effect: EffectScript;
   text: string;
@@ -168,6 +194,16 @@ export interface ActivatedAbility {
   isManaAbility?: boolean;
   /** Equip-style: only during your main phase with an empty stack. */
   sorceryOnly?: boolean;
+}
+
+/** Planeswalker loyalty ability: sorcery speed, once per turn per walker. */
+export interface LoyaltyAbility {
+  kind: 'loyalty';
+  /** Loyalty cost: +N adds counters, -N requires and removes them. */
+  cost: number;
+  targets?: TargetSpec[];
+  effect: EffectScript;
+  text: string;
 }
 
 /** Continuous effect from a permanent (anthems, lords). */
@@ -181,7 +217,7 @@ export interface StaticAbility {
   text: string;
 }
 
-export type AbilityDef = TriggeredAbility | ActivatedAbility | StaticAbility;
+export type AbilityDef = TriggeredAbility | ActivatedAbility | StaticAbility | LoyaltyAbility;
 
 /** One mode of a modal spell ("Choose one —"). */
 export interface SpellMode {
@@ -218,6 +254,20 @@ export interface CardDefinition {
   storm?: boolean;
   /** Additional cost paid at cast time (e.g. Fling's sacrifice). */
   additionalCost?: { sacrifice: FilterSpec; count?: number };
+  /** Kicker: optional extra mana cost; when paid, `effect` is appended. */
+  kicker?: { cost: string; effect: EffectScript };
+  /** Flashback: castable from the graveyard for this cost; exiles after. */
+  flashback?: { cost: string };
+  /** Cycling: pay the cost, discard this card, apply `effect` (default: draw 1). */
+  cycling?: { mana?: string; life?: number; effect?: EffectScript };
+  /** This spell can't be countered. */
+  uncounterable?: boolean;
+  /** Protection from these colors: can't be targeted, blocked, or damaged by them. */
+  protectionFrom?: Color[];
+  /** Planeswalkers enter with this many loyalty counters. */
+  loyalty?: number;
+  /** Taplands and permanents that enter the battlefield tapped. */
+  entersTapped?: boolean;
   abilities?: AbilityDef[];
   /** Permanent that "enters the battlefield with N counters" (N may be X). */
   entersWithCounters?: { counter: string; count: DynAmount };
@@ -260,6 +310,8 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   }
   if (filter.subtype && !card.subtypes.includes(filter.subtype)) return false;
   if (filter.basic && !card.supertypes?.includes('Basic')) return false;
+  if (filter.nonland && card.types.includes('Land')) return false;
+  if (filter.noncreature && card.types.includes('Creature')) return false;
   return true;
 }
 

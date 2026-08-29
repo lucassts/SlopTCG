@@ -40,8 +40,11 @@ export type GameEvent =
   | { type: 'attached'; sourceId: number; sourceName: string; hostId: number; hostName: string }
   | { type: 'scried'; player: PlayerId; looked: number; bottomed: number }
   | { type: 'copiesCreated'; cardName: string; count: number; reason: 'storm' | 'copy' }
+  | { type: 'damagePrevented'; sourceName: string; targetName: string; amount: number }
+  | { type: 'regenerated'; objectId: number; cardName: string }
+  | { type: 'cycled'; player: PlayerId; cardName: string }
   | { type: 'controlChanged'; objectId: number; cardName: string; to: PlayerId }
-  | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' }
+  | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' | 'libraryTop' }
   | { type: 'mulliganTaken'; player: PlayerId; taken: number }
   | { type: 'handKept'; player: PlayerId; bottomed: number }
   | { type: 'attackersDeclared'; player: PlayerId; attackers: { objectId: number; cardName: string }[] }

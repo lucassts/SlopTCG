@@ -16,11 +16,34 @@ export type PlayerAction =
   /** Keep the hand, putting exactly `bottom` (= mulligans taken) on the bottom. */
   | { type: 'keepHand'; bottom: number[] }
   | { type: 'playLand'; objectId: number }
-  | { type: 'castSpell'; objectId: number; targets?: TargetChoice[]; x?: number; mode?: number; sacrifices?: number[] }
+  | {
+      type: 'castSpell';
+      objectId: number;
+      targets?: TargetChoice[];
+      x?: number;
+      mode?: number;
+      sacrifices?: number[];
+      /** Pay the optional kicker cost. */
+      kicked?: boolean;
+    }
+  /** Cycle a card from hand (pay its cycling cost, discard it, draw). */
+  | { type: 'cycle'; objectId: number }
   /** Choose targets for a triggered ability waiting on the queue. */
   | { type: 'chooseTargets'; targets: TargetChoice[] }
-  | { type: 'activateAbility'; objectId: number; abilityIndex: number; targets?: TargetChoice[] }
-  | { type: 'declareAttackers'; attackers: number[] }
+  | {
+      type: 'activateAbility';
+      objectId: number;
+      abilityIndex: number;
+      targets?: TargetChoice[];
+      /** Permanents sacrificed to pay the ability's sacrifice cost. */
+      sacrifices?: number[];
+    }
+  | {
+      type: 'declareAttackers';
+      attackers: number[];
+      /** Planeswalker (of the defender) these attackers attack instead of the player. */
+      defendTarget?: number;
+    }
   | { type: 'declareBlockers'; blocks: { blocker: number; attacker: number }[] }
   | { type: 'chooseDiscard'; objectIds: number[] }
   /** Answer to a pending effectChoice (discard/sacrifice/scry/search…). */

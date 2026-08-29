@@ -35,8 +35,35 @@ export function changeLife(state: GameState, playerId: PlayerId, delta: number, 
   emit({ type: 'lifeChanged', player: playerId, delta, total: player.life, reason });
 }
 
-export function dealDamageToObject(state: GameState, target: GameObject, amount: number, sourceName: string, emit: Emit, opts?: { deathtouch?: boolean }): void {
+export function dealDamageToObject(
+  state: GameState,
+  target: GameObject,
+  amount: number,
+  sourceName: string,
+  emit: Emit,
+  opts?: { deathtouch?: boolean; sourceColors?: import('./types.js').Color[] },
+): void {
   if (amount <= 0) return;
+  // Protection from [color]: all damage from sources of that color is prevented.
+  const prot = target.card.protectionFrom;
+  if (prot && opts?.sourceColors?.some((c) => prot.includes(c))) {
+    emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
+    return;
+  }
+  // Planeswalkers take damage as loyalty loss.
+  if (target.card.types.includes('Planeswalker')) {
+    const total = Math.max(0, (target.counters['loyalty'] ?? 0) - amount);
+    target.counters['loyalty'] = total;
+    emit({
+      type: 'damageDealt',
+      sourceName,
+      target: { kind: 'object', id: target.id },
+      targetName: target.card.name,
+      amount,
+    });
+    emit({ type: 'countersChanged', objectId: target.id, cardName: target.card.name, counter: 'loyalty', delta: -amount, total });
+    return;
+  }
   target.damage += amount;
   if (opts?.deathtouch) target.counters['__deathtouched'] = 1;
   emit({
@@ -46,6 +73,27 @@ export function dealDamageToObject(state: GameState, target: GameObject, amount:
     targetName: target.card.name,
     amount,
   });
+}
+
+/**
+ * Destruction with regeneration replacement (614.8): if the object has a
+ * regeneration shield, consume it — tap, clear damage, leave combat —
+ * instead of dying. Returns true if the object actually died.
+ */
+export function destroyObject(state: GameState, obj: GameObject, emit: Emit): boolean {
+  if ((obj.counters['__regen'] ?? 0) > 0) {
+    obj.counters['__regen'] -= 1;
+    if (obj.counters['__regen'] === 0) delete obj.counters['__regen'];
+    obj.damage = 0;
+    delete obj.counters['__deathtouched'];
+    obj.attacking = false;
+    obj.blocking = undefined;
+    if (!obj.tapped) setTapped(state, obj, true, emit);
+    emit({ type: 'regenerated', objectId: obj.id, cardName: obj.card.name });
+    return false;
+  }
+  moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+  return true;
 }
 
 export function dealDamageToPlayer(state: GameState, playerId: PlayerId, amount: number, sourceName: string, emit: Emit): void {

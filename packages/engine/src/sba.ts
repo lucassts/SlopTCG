@@ -3,7 +3,7 @@
  * and after combat damage. Loop until nothing changes (704.3).
  */
 import type { Emit } from './ops.js';
-import { lose, moveWithEvent } from './ops.js';
+import { destroyObject, lose, moveWithEvent } from './ops.js';
 import { battlefield, effectiveToughness, hasKeyword, type GameState } from './state.js';
 import { PLAYER_IDS } from './types.js';
 
@@ -26,12 +26,27 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
         const deathtouched = (obj.counters['__deathtouched'] ?? 0) > 0 && obj.damage > 0;
         // Indestructible ignores lethal damage/deathtouch, NOT toughness ≤ 0.
         const lethal = (obj.damage >= toughness || deathtouched) && !hasKeyword(state, obj, 'indestructible');
-        if (toughness <= 0 || lethal) {
+        if (toughness <= 0) {
+          // Toughness ≤ 0 is not destruction: regeneration can't save it.
           moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+          changed = true;
+          anyChange = true;
+          break;
+        }
+        if (lethal) {
+          destroyObject(state, obj, emit); // regeneration may replace this
           changed = true;
           anyChange = true;
           break; // battlefield list changed; rescan
         }
+      }
+
+      // Planeswalker with no loyalty goes to the graveyard.
+      if (obj.card.types.includes('Planeswalker') && (obj.counters['loyalty'] ?? 0) <= 0) {
+        moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+        changed = true;
+        anyChange = true;
+        break;
       }
 
       // Aura attached to nothing (or to something gone) goes to the graveyard;
