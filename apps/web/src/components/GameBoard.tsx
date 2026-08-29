@@ -46,6 +46,9 @@ interface Targeting {
   specs: { what: string }[];
   chosen: TargetChoice[];
   label: string;
+  /** Extras carried into the cast action (X spells, modal spells). */
+  x?: number;
+  mode?: number;
 }
 
 interface MenuState {
@@ -74,6 +77,8 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const [selBlocker, setSelBlocker] = useState<number | null>(null);
   const [discardSel, setDiscardSel] = useState<Set<number>>(new Set());
   const [bottomSel, setBottomSel] = useState<Set<number>>(new Set());
+  const [choiceSel, setChoiceSel] = useState<Set<number>>(new Set());
+  const [modalPick, setModalPick] = useState<CardView | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [showStops, setShowStops] = useState(false);
@@ -85,7 +90,9 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const awaitingMyAttack = view.combatAwaiting === 'attackers' && view.activePlayer === you;
   const awaitingMyBlocks = view.combatAwaiting === 'blockers' && view.activePlayer === oppId;
   const myDiscard = view.pendingDecision?.type === 'discardToHandSize' && view.pendingDecision.player === you;
-  const discardCount = myDiscard ? (view.pendingDecision?.count ?? 0) : 0;
+  const discardCount = myDiscard && view.pendingDecision?.type === 'discardToHandSize' ? view.pendingDecision.count : 0;
+  const effectChoice = view.pendingDecision?.type === 'effectChoice' ? view.pendingDecision : null;
+  const myChoice = effectChoice !== null && effectChoice.player === you ? effectChoice : null;
   const myMulligan = view.mulligan?.phase[you] === 'deciding';
   const mullTaken = view.mulligan?.taken[you] ?? 0;
 
@@ -97,6 +104,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   }, [view.combatAwaiting, view.turn]);
   useEffect(() => setDiscardSel(new Set()), [myDiscard]);
   useEffect(() => setBottomSel(new Set()), [mullTaken, myMulligan]);
+  useEffect(() => setChoiceSel(new Set()), [view.pendingDecision]);
   useEffect(() => setTargeting(null), [view.turn, view.step]);
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -155,7 +163,8 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
 
   const finishTargetingIfDone = (t: Targeting) => {
     if (t.chosen.length >= t.specs.length) {
-      if (t.kind === 'spell') onAction({ type: 'castSpell', objectId: t.objectId, targets: t.chosen });
+      if (t.kind === 'spell')
+        onAction({ type: 'castSpell', objectId: t.objectId, targets: t.chosen, x: t.x, mode: t.mode });
       else onAction({ type: 'activateAbility', objectId: t.objectId, abilityIndex: t.abilityIndex ?? 0, targets: t.chosen });
       setTargeting(null);
     } else {
@@ -194,13 +203,33 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       return;
     }
     if (def.automation === 'manual') return; // menu de contexto cuida
-    const specs = def.enchant
-      ? [{ what: def.enchant.what }]
-      : def.spellTargets ?? [];
+    if (def.spellModes && def.spellModes.length > 0) {
+      setModalPick(cv);
+      return;
+    }
+    beginCast(cv, undefined);
+  };
+
+  /** Start casting: asks for X if needed, then targets, then sends. */
+  const beginCast = (cv: CardView, mode: number | undefined) => {
+    const def = cv.card;
+    let x: number | undefined;
+    if (def.manaCost && def.manaCost.includes('{X}')) {
+      const raw = prompt(`${def.name}: escolha o valor de X`, '1');
+      if (raw === null) return;
+      x = parseInt(raw, 10);
+      if (!Number.isInteger(x) || x < 0) return;
+    }
+    const specs = mode !== undefined
+      ? def.spellModes?.[mode]?.targets ?? []
+      : def.enchant
+        ? [{ what: def.enchant.what }]
+        : def.spellTargets ?? [];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode });
     } else {
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label: def.name });
+      const label = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode });
     }
   };
 
@@ -296,6 +325,8 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       return 'Aguardando o oponente decidir a mão…';
     }
     if (targeting) return `${targeting.label}: escolha o alvo (${targeting.chosen.length + 1}/${targeting.specs.length}) — Esc cancela`;
+    if (myChoice) return myChoice.prompt;
+    if (effectChoice) return 'Aguardando a escolha do oponente…';
     if (myDiscard) return `Descarte ${discardCount} carta(s): selecione na mão e confirme`;
     if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
     if (awaitingMyBlocks) return 'Clique num bloqueador seu, depois no atacante; confirme';
@@ -587,6 +618,67 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
             <div className="muted">
               Oponente: {view.mulligan.phase[oppId] === 'kept' ? 'manteve' : `decidindo (mulligan ${view.mulligan.taken[oppId]})`}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------- escolha de efeito (descarte, sacrifício, vidência, busca) -------- */}
+      {myChoice && myChoice.options && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>{myChoice.mode === 'scry' ? 'Vidência' : 'Escolha'}</h2>
+            <div className="muted">{myChoice.prompt}</div>
+            <div className="mulligan-hand choice-hand">
+              {myChoice.options.map((c) => (
+                <CardTile
+                  key={c.objectId}
+                  card={c}
+                  size="hand"
+                  selected={choiceSel.has(c.objectId)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const next = new Set(choiceSel);
+                    if (next.has(c.objectId)) next.delete(c.objectId);
+                    else if (next.size < myChoice.max) next.add(c.objectId);
+                    setChoiceSel(next);
+                  }}
+                />
+              ))}
+            </div>
+            {myChoice.mode === 'scry' && (
+              <div className="muted">Selecionadas vão para o fundo; as demais continuam no topo, na mesma ordem.</div>
+            )}
+            <button
+              className="primary"
+              disabled={choiceSel.size < myChoice.min || choiceSel.size > myChoice.max}
+              onClick={() => onAction({ type: 'effectChoice', picks: [...choiceSel] })}
+            >
+              Confirmar ({choiceSel.size}
+              {myChoice.min === myChoice.max ? `/${myChoice.max}` : ` de até ${myChoice.max}`})
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* -------- escolha de modo (mágicas modais) -------- */}
+      {modalPick && (
+        <div className="mulligan-overlay" onClick={() => setModalPick(null)}>
+          <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
+            <h2>{modalPick.card.name}</h2>
+            <div className="muted">Escolha um modo:</div>
+            {(modalPick.card.spellModes ?? []).map((m, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  const cv = modalPick;
+                  setModalPick(null);
+                  beginCast(cv, i);
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+            <button className="danger" onClick={() => setModalPick(null)}>Cancelar</button>
           </div>
         </div>
       )}

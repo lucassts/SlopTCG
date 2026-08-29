@@ -16,11 +16,13 @@ export type PlayerAction =
   /** Keep the hand, putting exactly `bottom` (= mulligans taken) on the bottom. */
   | { type: 'keepHand'; bottom: number[] }
   | { type: 'playLand'; objectId: number }
-  | { type: 'castSpell'; objectId: number; targets?: TargetChoice[] }
+  | { type: 'castSpell'; objectId: number; targets?: TargetChoice[]; x?: number; mode?: number }
   | { type: 'activateAbility'; objectId: number; abilityIndex: number; targets?: TargetChoice[] }
   | { type: 'declareAttackers'; attackers: number[] }
   | { type: 'declareBlockers'; blocks: { blocker: number; attacker: number }[] }
   | { type: 'chooseDiscard'; objectIds: number[] }
+  /** Answer to a pending effectChoice (discard/sacrifice/scry/search…). */
+  | { type: 'effectChoice'; picks: number[] }
   | { type: 'concede' }
   | { type: 'chat'; text: string }
   // --- manual mode (Tier 3) ---

@@ -357,6 +357,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 }
 .mulligan-box h2 { margin: 0; }
 .mulligan-hand { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.choice-hand { max-height: 46vh; overflow-y: auto; }
 
 .stops-panel { min-width: 220px; }
 .stops-grid {

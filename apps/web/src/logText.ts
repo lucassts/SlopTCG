@@ -86,6 +86,12 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${name(ev.player)} criou uma ficha: ${ev.name}.`;
     case 'attached':
       return `${ev.sourceName} foi anexada a ${ev.hostName}.`;
+    case 'scried':
+      return `${name(ev.player)} olhou as ${ev.looked} carta(s) do topo e mandou ${ev.bottomed} para o fundo.`;
+    case 'searched':
+      return ev.found.length > 0
+        ? `${name(ev.player)} buscou ${ev.found.join(', ')} (→ ${ev.to === 'hand' ? 'mão' : 'campo de batalha'}).`
+        : `${name(ev.player)} não encontrou nada na busca.`;
     case 'mulliganTaken':
       return `${name(ev.player)} fez mulligan (${ev.taken}º).`;
     case 'handKept':

@@ -19,7 +19,7 @@ export type GameEvent =
       from: ZoneName;
       to: ZoneName;
       player: PlayerId;
-      reason?: 'destroyed' | 'sacrificed' | 'discarded' | 'milled' | 'exiled' | 'returned' | 'resolved' | 'manual';
+      reason?: 'destroyed' | 'sacrificed' | 'discarded' | 'milled' | 'exiled' | 'returned' | 'resolved' | 'searched' | 'manual';
       hiddenFrom?: PlayerId;
     }
   | { type: 'landPlayed'; player: PlayerId; objectId: number; cardName: string }
@@ -38,6 +38,8 @@ export type GameEvent =
   | { type: 'countersChanged'; objectId: number; cardName: string; counter: string; delta: number; total: number }
   | { type: 'tokenCreated'; player: PlayerId; objectId: number; name: string }
   | { type: 'attached'; sourceId: number; sourceName: string; hostId: number; hostName: string }
+  | { type: 'scried'; player: PlayerId; looked: number; bottomed: number }
+  | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' }
   | { type: 'mulliganTaken'; player: PlayerId; taken: number }
   | { type: 'handKept'; player: PlayerId; bottomed: number }
   | { type: 'attackersDeclared'; player: PlayerId; attackers: { objectId: number; cardName: string }[] }

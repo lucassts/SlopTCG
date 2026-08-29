@@ -3,7 +3,7 @@
  * library index 0 is the top. Helpers here mutate state but never emit
  * events — that is game.ts / effects.ts territory.
  */
-import type { CardDefinition, PlayerConfig } from './cards/types.js';
+import type { CardDefinition, EffectStep, FilterSpec, PlayerConfig } from './cards/types.js';
 import { shuffle } from './rng.js';
 import {
   emptyManaPool,
@@ -25,8 +25,8 @@ export interface GameObject {
   damage: number;
   counters: Record<string, number>;
   summoningSick: boolean;
-  /** Temporary power/toughness modification, reset at cleanup. */
-  untilEot: { power: number; toughness: number };
+  /** Temporary modifications, reset at cleanup. */
+  untilEot: { power: number; toughness: number; keywords: import('./types.js').Keyword[] };
   attacking: boolean;
   /** Attacker object id this creature is blocking, if any. */
   blocking?: number;
@@ -48,6 +48,8 @@ export interface StackItem {
   effect: import('./cards/types.js').EffectScript;
   targets: TargetChoice[];
   description: string;
+  /** Value chosen for {X} at cast time, if any. */
+  xValue?: number;
 }
 
 export interface PlayerState {
@@ -59,7 +61,34 @@ export interface PlayerState {
   zones: Record<Exclude<ZoneName, 'stack'>, number[]>;
 }
 
-export type PendingDecision = { type: 'discardToHandSize'; player: PlayerId; count: number };
+/** Info needed to resume a paused effect script after a player's choice. */
+export interface EffectResume {
+  controller: PlayerId;
+  sourceId: number;
+  sourceName: string;
+  targets: TargetChoice[];
+  xValue?: number;
+  /** The step that asked for the choice. */
+  current: EffectStep;
+  /** Steps still to run after the current one. */
+  remaining: EffectStep[];
+  /** Spell card to move to the graveyard once the whole script finishes. */
+  finishSpellId: number | null;
+}
+
+export type PendingDecision =
+  | { type: 'discardToHandSize'; player: PlayerId; count: number }
+  | {
+      type: 'effectChoice';
+      player: PlayerId;
+      prompt: string;
+      /** 'cards' → pick objects from options; 'scry' → picks go to the bottom. */
+      mode: 'cards' | 'scry';
+      options: number[];
+      min: number;
+      max: number;
+      resume: EffectResume;
+    };
 
 /** London mulligan bookkeeping, active only before turn 1. */
 export interface MulliganState {
@@ -152,7 +181,7 @@ export function createObject(state: GameState, card: CardDefinition, owner: Play
     damage: 0,
     counters: {},
     summoningSick: false,
-    untilEot: { power: 0, toughness: 0 },
+    untilEot: { power: 0, toughness: 0, keywords: [] },
     attacking: false,
     wasBlocked: false,
     isToken: false,
@@ -194,7 +223,7 @@ export function moveObject(
     obj.blocking = undefined;
     obj.wasBlocked = false;
     obj.attachedTo = undefined;
-    obj.untilEot = { power: 0, toughness: 0 };
+    obj.untilEot = { power: 0, toughness: 0, keywords: [] };
     obj.summoningSick = false;
   } else {
     obj.summoningSick = obj.card.types.includes('Creature');
@@ -218,12 +247,50 @@ export function attachmentsOf(state: GameState, obj: GameObject): GameObject[] {
   );
 }
 
+/**
+ * Does a battlefield object match a filter, relative to a source
+ * (controller decides 'you'/'opponent'; sourceId decides 'other')?
+ */
+export function matchFilter(
+  ctx: { controller: PlayerId; sourceId: number },
+  filter: FilterSpec,
+  obj: GameObject,
+): boolean {
+  if (filter.what && filter.what !== 'permanent') {
+    const typeName = (filter.what.charAt(0).toUpperCase() + filter.what.slice(1)) as CardDefinition['types'][number];
+    if (!obj.card.types.includes(typeName)) return false;
+  }
+  if (filter.subtype && !obj.card.subtypes.includes(filter.subtype)) return false;
+  if (filter.basic && !obj.card.supertypes?.includes('Basic')) return false;
+  if (filter.controlledBy === 'you' && obj.controller !== ctx.controller) return false;
+  if (filter.controlledBy === 'opponent' && obj.controller === ctx.controller) return false;
+  if (filter.other && obj.id === ctx.sourceId) return false;
+  return true;
+}
+
+/** Static abilities on the battlefield that currently apply to `obj`. */
+function staticsFor(state: GameState, obj: GameObject): { power: number; toughness: number; keywords: import('./types.js').Keyword[] } {
+  const total = { power: 0, toughness: 0, keywords: [] as import('./types.js').Keyword[] };
+  if (obj.zone !== 'battlefield') return total;
+  for (const source of battlefield(state)) {
+    for (const ability of source.card.abilities ?? []) {
+      if (ability.kind !== 'static') continue;
+      if (!matchFilter({ controller: source.controller, sourceId: source.id }, ability.filter, obj)) continue;
+      total.power += ability.power ?? 0;
+      total.toughness += ability.toughness ?? 0;
+      if (ability.keywords) total.keywords.push(...ability.keywords);
+    }
+  }
+  return total;
+}
+
 export function effectivePower(state: GameState, obj: GameObject): number {
   const fromAttachments = attachmentsOf(state, obj).reduce(
     (sum, a) => sum + (a.card.attachEffect?.power ?? 0),
     0,
   );
-  return (obj.card.power ?? 0) + obj.untilEot.power + (obj.counters['+1/+1'] ?? 0) + fromAttachments;
+  const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
+  return (obj.card.power ?? 0) + obj.untilEot.power + counters + fromAttachments + staticsFor(state, obj).power;
 }
 
 export function effectiveToughness(state: GameState, obj: GameObject): number {
@@ -231,12 +298,15 @@ export function effectiveToughness(state: GameState, obj: GameObject): number {
     (sum, a) => sum + (a.card.attachEffect?.toughness ?? 0),
     0,
   );
-  return (obj.card.toughness ?? 0) + obj.untilEot.toughness + (obj.counters['+1/+1'] ?? 0) + fromAttachments;
+  const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
+  return (obj.card.toughness ?? 0) + obj.untilEot.toughness + counters + fromAttachments + staticsFor(state, obj).toughness;
 }
 
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
   if (obj.card.keywords?.includes(kw)) return true;
-  return attachmentsOf(state, obj).some((a) => a.card.attachEffect?.keywords?.includes(kw));
+  if (obj.untilEot.keywords.includes(kw)) return true;
+  if (attachmentsOf(state, obj).some((a) => a.card.attachEffect?.keywords?.includes(kw))) return true;
+  return staticsFor(state, obj).keywords.includes(kw);
 }
 
 /** True if an attachment forbids this creature from attacking/blocking. */

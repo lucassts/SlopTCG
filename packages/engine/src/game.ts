@@ -9,7 +9,13 @@ import type { PlayerAction } from './actions.js';
 import type { ActivatedAbility, CardDefinition, PlayerConfig, TargetSpec } from './cards/types.js';
 import { isPermanentCard } from './cards/types.js';
 import { canAttack, canBlock, clearCombat, resolveCombatDamage } from './combat.js';
-import { itemStillHasLegalWork, runEffectScript, targetMatchesSpec } from './effects.js';
+import {
+  applyEffectChoice,
+  itemStillHasLegalWork,
+  resolveAmount,
+  runEffectScript,
+  targetMatchesSpec,
+} from './effects.js';
 import type { GameEvent } from './events.js';
 import { canPay, parseCost, planPayment } from './mana.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped } from './ops.js';
@@ -17,6 +23,7 @@ import { checkStateBasedActions } from './sba.js';
 import {
   createGameState,
   hasKeyword,
+  matchFilter,
   MAX_HAND_SIZE,
   removeFromCurrentZone,
   STARTING_HAND,
@@ -206,7 +213,9 @@ export class Game {
       case 'playLand':
         return this.doPlayLand(playerId, action.objectId);
       case 'castSpell':
-        return this.doCastSpell(playerId, action.objectId, action.targets ?? []);
+        return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode);
+      case 'effectChoice':
+        return this.doEffectChoice(playerId, action.picks);
       case 'activateAbility':
         return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? []);
       case 'declareAttackers':
@@ -299,7 +308,13 @@ export class Game {
     return null;
   }
 
-  private doCastSpell(playerId: PlayerId, objectId: number, targets: TargetChoice[]): boolean {
+  private doCastSpell(
+    playerId: PlayerId,
+    objectId: number,
+    targets: TargetChoice[],
+    x?: number,
+    modeIndex?: number,
+  ): boolean {
     const s = this.state;
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
@@ -315,33 +330,54 @@ export class Game {
     if (!isInstant && !this.sorceryTiming(playerId))
       { this.fail(playerId, 'só pode ser conjurada na sua fase principal com a pilha vazia'); return false; }
 
+    // Modal spells: exactly one mode chosen at cast time.
+    let mode: import('./cards/types.js').SpellMode | undefined;
+    if (card.spellModes && card.spellModes.length > 0) {
+      if (modeIndex === undefined || !card.spellModes[modeIndex])
+        { this.fail(playerId, 'escolha um modo da mágica'); return false; }
+      mode = card.spellModes[modeIndex];
+    }
+
     // Auras derive their (mandatory) target from the enchant spec.
-    const specs = card.enchant
-      ? [{ what: card.enchant.what, controlledBy: card.enchant.controlledBy }]
-      : card.spellTargets;
+    const specs = mode
+      ? mode.targets
+      : card.enchant
+        ? [{ what: card.enchant.what, controlledBy: card.enchant.controlledBy }]
+        : card.spellTargets;
     const targetErr = this.validateTargets(playerId, specs, targets);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
 
     const cost = parseCost(card.manaCost);
+    let xValue: number | undefined;
+    if (cost.xCount > 0) {
+      if (x === undefined || !Number.isInteger(x) || x < 0)
+        { this.fail(playerId, 'escolha um valor de X'); return false; }
+      xValue = x;
+      cost.generic += x * cost.xCount;
+    }
     const plan = planPayment(s, playerId, cost);
     if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
     this.payWithPlan(playerId, plan);
 
     removeFromCurrentZone(s, obj);
     obj.zone = 'stack';
+    const description =
+      (mode ? `${card.name} — ${mode.label}` : card.name) + (xValue !== undefined ? ` (X=${xValue})` : '');
     s.stack.push({
       id: s.nextStackId++,
       kind: 'spell',
       sourceId: obj.id,
       controller: playerId,
       cardName: card.name,
-      effect: card.spellEffect ?? [],
+      effect: mode ? mode.effect : card.spellEffect ?? [],
       targets,
-      description: card.name,
+      description,
+      xValue,
     });
     s.passCount = 0;
     s.priority = playerId;
     this.emit({ type: 'spellCast', player: playerId, objectId: obj.id, cardName: card.name, targets });
+    this.fireCastTriggers(playerId, card);
     return true;
   }
 
@@ -504,6 +540,21 @@ export class Game {
     });
     s.passCount = 0;
     s.priority = s.activePlayer;
+    return true;
+  }
+
+  private doEffectChoice(playerId: PlayerId, picks: number[]): boolean {
+    const s = this.state;
+    const pending = s.pendingDecision;
+    if (!pending || pending.type !== 'effectChoice' || pending.player !== playerId)
+      { this.fail(playerId, 'nenhuma escolha pendente para você'); return false; }
+    if (new Set(picks).size !== picks.length)
+      { this.fail(playerId, 'escolha repetida'); return false; }
+    if (picks.length < pending.min || picks.length > pending.max)
+      { this.fail(playerId, `escolha entre ${pending.min} e ${pending.max} carta(s)`); return false; }
+    if (!picks.every((p) => pending.options.includes(p)))
+      { this.fail(playerId, 'escolha inválida'); return false; }
+    applyEffectChoice(s, pending, picks, this.emit);
     return true;
   }
 
@@ -699,7 +750,12 @@ export class Game {
         return;
       }
       case 'upkeep': {
-        this.fireUpkeepTriggers();
+        this.fireStepTriggers('upkeep');
+        s.priority = s.activePlayer;
+        return;
+      }
+      case 'end': {
+        this.fireStepTriggers('endStep');
         s.priority = s.activePlayer;
         return;
       }
@@ -758,7 +814,7 @@ export class Game {
     for (const obj of Object.values(s.objects)) {
       if (obj.zone === 'battlefield') {
         obj.damage = 0;
-        obj.untilEot = { power: 0, toughness: 0 };
+        obj.untilEot = { power: 0, toughness: 0, keywords: [] };
         delete obj.counters['__deathtouched'];
       }
     }
@@ -798,21 +854,54 @@ export class Game {
             });
           }
         }
-        this.emit({ type: 'stackResolved', description: `${item.cardName} entra no campo de batalha` });
+        // "Enters the battlefield with N +1/+1 counters" (N may be X).
+        if (obj.card.entersWithCounters) {
+          const ctx = {
+            state: s,
+            controller: item.controller,
+            sourceId: obj.id,
+            sourceName: item.cardName,
+            targets: item.targets,
+            xValue: item.xValue,
+            emit: this.emit,
+          };
+          const count = resolveAmount(ctx, obj.card.entersWithCounters.count);
+          if (count > 0) {
+            const counter = obj.card.entersWithCounters.counter;
+            obj.counters[counter] = (obj.counters[counter] ?? 0) + count;
+            this.emit({
+              type: 'countersChanged',
+              objectId: obj.id,
+              cardName: obj.card.name,
+              counter,
+              delta: count,
+              total: obj.counters[counter],
+            });
+          }
+        }
+        this.emit({ type: 'stackResolved', description: `${item.description} entra no campo de batalha` });
         return;
       }
-      runEffectScript(
+      const result = runEffectScript(
         {
           state: s,
           controller: item.controller,
           sourceId: obj.id,
           sourceName: item.cardName,
           targets: item.targets,
+          xValue: item.xValue,
           emit: this.emit,
         },
         item.effect,
       );
-      this.emit({ type: 'stackResolved', description: `${item.cardName} resolveu` });
+      if (result === 'paused') {
+        // Script waits for a player's choice; the card stays on the stack
+        // and moves to the graveyard when applyEffectChoice finishes it.
+        if (s.pendingDecision?.type === 'effectChoice') s.pendingDecision.resume.finishSpellId = obj.id;
+        this.emit({ type: 'stackResolved', description: `${item.description} está resolvendo` });
+        return;
+      }
+      this.emit({ type: 'stackResolved', description: `${item.description} resolveu` });
       // The spell finishes in the graveyard (unless an effect moved it).
       if (obj.zone === 'stack') moveWithEvent(s, obj, 'graveyard', 'resolved', this.emit);
       return;
@@ -830,6 +919,7 @@ export class Game {
         sourceId: item.sourceId,
         sourceName: item.cardName,
         targets: item.targets,
+        xValue: item.xValue,
         emit: this.emit,
       },
       item.effect,
@@ -841,35 +931,65 @@ export class Game {
 
   /** Derive triggered abilities from events emitted since the last scan. */
   private scanTriggers(): void {
-    const s = this.state;
     while (this.triggerCursor < this.buf.length) {
       const ev = this.buf[this.triggerCursor++];
-      if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireObjectTriggers(ev.objectId, 'etb');
+      if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireZoneTriggers(ev.objectId, 'etb');
+      if (ev.type === 'tokenCreated') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.to === 'graveyard')
-        this.fireObjectTriggers(ev.objectId, 'dies');
+        this.fireZoneTriggers(ev.objectId, 'dies');
       if (ev.type === 'attackersDeclared')
-        for (const a of ev.attackers) this.fireObjectTriggers(a.objectId, 'attacks');
+        for (const a of ev.attackers) this.fireSelfTrigger(a.objectId, 'attacks');
     }
   }
 
-  private fireObjectTriggers(objectId: number, on: 'etb' | 'dies' | 'attacks'): void {
+  /** Self triggers on the moved object + global filter triggers everywhere. */
+  private fireZoneTriggers(subjectId: number, on: 'etb' | 'dies'): void {
     const s = this.state;
-    const obj = s.objects[objectId];
+    const subject = s.objects[subjectId];
+    if (!subject) return;
+    this.fireSelfTrigger(subjectId, on);
+    for (const source of Object.values(s.objects)) {
+      if (source.zone !== 'battlefield') continue;
+      for (const ability of source.card.abilities ?? []) {
+        if (ability.kind !== 'triggered' || ability.trigger.on !== on) continue;
+        if (!('what' in ability.trigger)) continue;
+        if (!matchFilter({ controller: source.controller, sourceId: source.id }, ability.trigger.what, subject))
+          continue;
+        this.pushTrigger(source, ability.text, ability.effect);
+      }
+    }
+  }
+
+  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks'): void {
+    const obj = this.state.objects[objectId];
     if (!obj) return;
     for (const ability of obj.card.abilities ?? []) {
       if (ability.kind !== 'triggered') continue;
-      if (ability.trigger.on !== on) continue;
+      if (ability.trigger.on !== on || !('self' in ability.trigger)) continue;
       this.pushTrigger(obj, ability.text, ability.effect);
     }
   }
 
-  private fireUpkeepTriggers(): void {
+  /** Prowess-style: "whenever you cast a (noncreature) spell". */
+  private fireCastTriggers(caster: PlayerId, card: CardDefinition): void {
+    const s = this.state;
+    for (const id of s.players[caster].zones.battlefield) {
+      const obj = s.objects[id];
+      for (const ability of obj.card.abilities ?? []) {
+        if (ability.kind !== 'triggered' || ability.trigger.on !== 'youCastSpell') continue;
+        if (ability.trigger.noncreatureOnly && card.types.includes('Creature')) continue;
+        this.pushTrigger(obj, ability.text, ability.effect);
+      }
+    }
+  }
+
+  private fireStepTriggers(on: 'upkeep' | 'endStep'): void {
     const s = this.state;
     for (const p of PLAYER_IDS) {
       for (const id of s.players[p].zones.battlefield) {
         const obj = s.objects[id];
         for (const ability of obj.card.abilities ?? []) {
-          if (ability.kind !== 'triggered' || ability.trigger.on !== 'upkeep') continue;
+          if (ability.kind !== 'triggered' || ability.trigger.on !== on) continue;
           const whose = ability.trigger.whose;
           if (whose === 'controller' && obj.controller !== s.activePlayer) continue;
           this.pushTrigger(obj, ability.text, ability.effect);

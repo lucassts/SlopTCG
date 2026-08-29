@@ -438,6 +438,337 @@ export const krenkosCommand = def({
   automation: 'full',
 });
 
+// ----------------------------------------------------- M2: mass effects
+export const pyroclasm = def({
+  id: 'pyroclasm',
+  name: 'Pyroclasm',
+  manaCost: '{1}{R}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'Pyroclasm deals 2 damage to each creature.',
+  spellEffect: [{ op: 'damageEach', filter: { what: 'creature', controlledBy: 'any' }, amount: 2 }],
+  automation: 'full',
+});
+
+export const dayOfJudgment = def({
+  id: 'day-of-judgment',
+  name: 'Day of Judgment',
+  manaCost: '{2}{W}{W}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['W'],
+  text: 'Destroy all creatures.',
+  spellEffect: [{ op: 'destroyEach', filter: { what: 'creature', controlledBy: 'any' } }],
+  automation: 'full',
+});
+
+export const overrun = def({
+  id: 'overrun',
+  name: 'Overrun',
+  manaCost: '{2}{G}{G}{G}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['G'],
+  text: 'Creatures you control get +3/+3 and gain trample until end of turn.',
+  spellEffect: [
+    { op: 'pumpEach', filter: { what: 'creature', controlledBy: 'you' }, power: 3, toughness: 3, keywords: ['trample'] },
+  ],
+  automation: 'full',
+});
+
+// -------------------------------------------------- M2: choices (pausas)
+export const mindRot = def({
+  id: 'mind-rot',
+  name: 'Mind Rot',
+  manaCost: '{2}{B}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['B'],
+  text: 'Target player discards two cards.',
+  spellTargets: [{ what: 'player' }],
+  spellEffect: [{ op: 'discard', who: 'target:0', count: 2 }],
+  automation: 'full',
+});
+
+export const diabolicEdict = def({
+  id: 'diabolic-edict',
+  name: 'Diabolic Edict',
+  manaCost: '{1}{B}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['B'],
+  text: 'Target player sacrifices a creature.',
+  spellTargets: [{ what: 'player' }],
+  spellEffect: [{ op: 'sacrifice', who: 'target:0', filter: { what: 'creature' }, count: 1 }],
+  automation: 'full',
+});
+
+export const opt = def({
+  id: 'opt',
+  name: 'Opt',
+  manaCost: '{U}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['U'],
+  text: 'Scry 1. Draw a card.',
+  spellEffect: [
+    { op: 'scry', count: 1 },
+    { op: 'draw', who: 'controller', count: 1 },
+  ],
+  automation: 'full',
+});
+
+export const preordain = def({
+  id: 'preordain',
+  name: 'Preordain',
+  manaCost: '{U}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['U'],
+  text: 'Scry 2, then draw a card.',
+  spellEffect: [
+    { op: 'scry', count: 2 },
+    { op: 'draw', who: 'controller', count: 1 },
+  ],
+  automation: 'full',
+});
+
+export const rampantGrowth = def({
+  id: 'rampant-growth',
+  name: 'Rampant Growth',
+  manaCost: '{1}{G}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['G'],
+  text: 'Search your library for a basic land card, put that card onto the battlefield tapped, then shuffle.',
+  spellEffect: [{ op: 'search', filter: { what: 'land', basic: true }, count: 1, to: 'battlefield', tapped: true }],
+  automation: 'full',
+});
+
+export const diabolicTutor = def({
+  id: 'diabolic-tutor',
+  name: 'Diabolic Tutor',
+  manaCost: '{2}{B}{B}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['B'],
+  text: 'Search your library for a card, put that card into your hand, then shuffle.',
+  spellEffect: [{ op: 'search', count: 1, to: 'hand' }],
+  automation: 'full',
+});
+
+export const raiseDead = def({
+  id: 'raise-dead',
+  name: 'Raise Dead',
+  manaCost: '{B}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['B'],
+  text: 'Return target creature card from your graveyard to your hand.',
+  spellTargets: [{ what: 'creature', zone: 'graveyard', ownedBy: 'you' }],
+  spellEffect: [{ op: 'returnToHand', what: 'target:0' }],
+  automation: 'full',
+});
+
+export const preyUpon = def({
+  id: 'prey-upon',
+  name: 'Prey Upon',
+  manaCost: '{G}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['G'],
+  text: "Target creature you control fights target creature you don't control.",
+  spellTargets: [
+    { what: 'creature', controlledBy: 'you' },
+    { what: 'creature', controlledBy: 'opponent' },
+  ],
+  spellEffect: [{ op: 'fight', a: 'target:0', b: 'target:1' }],
+  automation: 'full',
+});
+
+// ------------------------------------------------ M2: gatilhos globais
+export const zulaportCutthroat = def({
+  id: 'zulaport-cutthroat',
+  name: 'Zulaport Cutthroat',
+  manaCost: '{1}{B}',
+  types: ['Creature'],
+  subtypes: ['Human', 'Rogue', 'Ally'],
+  colors: ['B'],
+  power: 1,
+  toughness: 1,
+  text: 'Whenever Zulaport Cutthroat or another creature you control dies, each opponent loses 1 life and you gain 1 life.',
+  abilities: [
+    {
+      kind: 'triggered',
+      trigger: { on: 'dies', what: { what: 'creature', controlledBy: 'you' } },
+      effect: [
+        { op: 'loseLife', who: 'opponent', amount: 1 },
+        { op: 'gainLife', who: 'controller', amount: 1 },
+      ],
+      text: 'Quando uma criatura sua morre, o oponente perde 1 e você ganha 1 ponto de vida',
+    },
+  ],
+  automation: 'full',
+});
+
+export const soulWarden = def({
+  id: 'soul-warden',
+  name: 'Soul Warden',
+  manaCost: '{W}',
+  types: ['Creature'],
+  subtypes: ['Human', 'Cleric'],
+  colors: ['W'],
+  power: 1,
+  toughness: 1,
+  text: 'Whenever another creature enters the battlefield, you gain 1 life.',
+  abilities: [
+    {
+      kind: 'triggered',
+      trigger: { on: 'etb', what: { what: 'creature', controlledBy: 'any', other: true } },
+      effect: [{ op: 'gainLife', who: 'controller', amount: 1 }],
+      text: 'Quando outra criatura entra no campo de batalha, você ganha 1 ponto de vida',
+    },
+  ],
+  automation: 'full',
+});
+
+export const monasterySwiftspear = def({
+  id: 'monastery-swiftspear',
+  name: 'Monastery Swiftspear',
+  manaCost: '{R}',
+  types: ['Creature'],
+  subtypes: ['Human', 'Monk'],
+  colors: ['R'],
+  power: 1,
+  toughness: 2,
+  keywords: ['haste'],
+  text: 'Haste. Prowess (Whenever you cast a noncreature spell, this creature gets +1/+1 until end of turn.)',
+  abilities: [
+    {
+      kind: 'triggered',
+      trigger: { on: 'youCastSpell', noncreatureOnly: true },
+      effect: [{ op: 'pump', what: 'self', power: 1, toughness: 1 }],
+      text: 'Destreza: +1/+1 até o fim do turno',
+    },
+  ],
+  automation: 'full',
+});
+
+// --------------------------------------------------- M2: estáticas (lords)
+export const gloriousAnthem = def({
+  id: 'glorious-anthem',
+  name: 'Glorious Anthem',
+  manaCost: '{1}{W}{W}',
+  types: ['Enchantment'],
+  subtypes: [],
+  colors: ['W'],
+  text: 'Creatures you control get +1/+1.',
+  abilities: [
+    {
+      kind: 'static',
+      filter: { what: 'creature', controlledBy: 'you' },
+      power: 1,
+      toughness: 1,
+      text: 'Criaturas que você controla recebem +1/+1',
+    },
+  ],
+  automation: 'full',
+});
+
+export const goblinChieftain = def({
+  id: 'goblin-chieftain',
+  name: 'Goblin Chieftain',
+  manaCost: '{1}{R}{R}',
+  types: ['Creature'],
+  subtypes: ['Goblin'],
+  colors: ['R'],
+  power: 2,
+  toughness: 2,
+  keywords: ['haste'],
+  text: 'Haste. Other Goblins you control get +1/+1 and have haste.',
+  abilities: [
+    {
+      kind: 'static',
+      filter: { what: 'creature', subtype: 'Goblin', controlledBy: 'you', other: true },
+      power: 1,
+      toughness: 1,
+      keywords: ['haste'],
+      text: 'Outros Goblins que você controla recebem +1/+1 e têm ímpeto',
+    },
+  ],
+  automation: 'full',
+});
+
+// ------------------------------------------------------------- M2: X e afins
+export const blaze = def({
+  id: 'blaze',
+  name: 'Blaze',
+  manaCost: '{X}{R}',
+  types: ['Sorcery'],
+  subtypes: [],
+  colors: ['R'],
+  text: 'Blaze deals X damage to any target.',
+  spellTargets: [{ what: 'any' }],
+  spellEffect: [{ op: 'damage', to: 'target:0', amount: 'X' }],
+  automation: 'full',
+});
+
+export const endlessOne = def({
+  id: 'endless-one',
+  name: 'Endless One',
+  manaCost: '{X}',
+  types: ['Creature'],
+  subtypes: ['Eldrazi'],
+  colors: [],
+  power: 0,
+  toughness: 0,
+  text: 'Endless One enters the battlefield with X +1/+1 counters on it.',
+  entersWithCounters: { counter: '+1/+1', count: 'X' },
+  automation: 'full',
+});
+
+export const battlegrowth = def({
+  id: 'battlegrowth',
+  name: 'Battlegrowth',
+  manaCost: '{G}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['G'],
+  text: 'Put a +1/+1 counter on target creature.',
+  spellTargets: [{ what: 'creature' }],
+  spellEffect: [{ op: 'putCounters', what: 'target:0', counter: '+1/+1', count: 1 }],
+  automation: 'full',
+});
+
+// -------------------------------------------------------------- M2: modal
+export const grixisCharm = def({
+  id: 'grixis-charm',
+  name: 'Grixis Charm',
+  manaCost: '{U}{B}{R}',
+  types: ['Instant'],
+  subtypes: [],
+  colors: ['U', 'B', 'R'],
+  text: "Choose one — Return target permanent to its owner's hand; or target creature gets -4/-4 until end of turn; or creatures you control get +2/+0 until end of turn.",
+  spellModes: [
+    {
+      label: 'Devolver permanente alvo para a mão do dono',
+      targets: [{ what: 'permanent' }],
+      effect: [{ op: 'returnToHand', what: 'target:0' }],
+    },
+    {
+      label: 'Criatura alvo recebe -4/-4 até o fim do turno',
+      targets: [{ what: 'creature' }],
+      effect: [{ op: 'pump', what: 'target:0', power: -4, toughness: -4 }],
+    },
+    {
+      label: 'Criaturas que você controla recebem +2/+0 até o fim do turno',
+      effect: [{ op: 'pumpEach', filter: { what: 'creature', controlledBy: 'you' }, power: 2, toughness: 0 }],
+    },
+  ],
+  automation: 'full',
+});
+
 // ------------------------------------------------------------ demo decks
 function copies(card: CardDefinition, n: number): CardDefinition[] {
   return Array.from({ length: n }, () => card);

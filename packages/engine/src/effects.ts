@@ -1,12 +1,23 @@
 /**
  * Interpreter for the declarative effect DSL (Tier 1 automation).
  *
- * Runs when a stack item resolves. Targets were validated at cast time;
- * here they are re-checked ("fizzle" rules: an illegal target is skipped,
- * and a spell whose every target is illegal does nothing).
+ * Runs when a stack item resolves. Steps marked as "choice" ops pause the
+ * script (state.pendingDecision) and resume via applyEffectChoice once the
+ * player picks; forced choices auto-resolve without a round-trip.
+ *
+ * Targets were validated at cast time; here they are re-checked ("fizzle"
+ * rules: an illegal target is skipped).
  */
-import type { EffectScript, EffectStep, PlayerSel, SubjectRef, TargetSpec } from './cards/types.js';
-import type { GameEvent } from './events.js';
+import type {
+  DynAmount,
+  EffectScript,
+  EffectStep,
+  FilterSpec,
+  PlayerSel,
+  SubjectRef,
+  TargetSpec,
+} from './cards/types.js';
+import { cardMatchesFilter } from './cards/types.js';
 import {
   changeLife,
   dealDamageToObject,
@@ -16,7 +27,17 @@ import {
   setTapped,
   type Emit,
 } from './ops.js';
-import { createObject, hasKeyword, type GameObject, type GameState, type StackItem } from './state.js';
+import {
+  battlefield,
+  createObject,
+  effectivePower,
+  hasKeyword,
+  matchFilter,
+  type GameObject,
+  type GameState,
+  type PendingDecision,
+  type StackItem,
+} from './state.js';
 import { opponentOf, type PlayerId, type TargetChoice } from './types.js';
 import { shuffle } from './rng.js';
 
@@ -27,6 +48,7 @@ export interface EffectContext {
   sourceId: number;
   sourceName: string;
   targets: TargetChoice[];
+  xValue?: number;
   emit: Emit;
 }
 
@@ -45,26 +67,266 @@ function resolveSubject(ctx: EffectContext, ref: SubjectRef): TargetChoice[] {
   return t ? [t] : [];
 }
 
-/** A target is still legal if the object is where a target can be hit. */
+export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
+  if (typeof amount === 'number') return amount;
+  if (amount === 'X') return ctx.xValue ?? 0;
+  return battlefield(ctx.state).filter((o) =>
+    matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId }, amount.per, o),
+  ).length;
+}
+
+function selectBattlefield(ctx: EffectContext, filter: FilterSpec): GameObject[] {
+  return battlefield(ctx.state).filter((o) =>
+    matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId }, filter, o),
+  );
+}
+
+/** A target is still legal if the object is somewhere it can be affected. */
 function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
   if (t.kind !== 'object') return null;
   const obj = state.objects[t.id];
   if (!obj) return null;
-  if (obj.zone !== 'battlefield' && obj.zone !== 'stack') return null;
+  if (obj.zone !== 'battlefield' && obj.zone !== 'stack' && obj.zone !== 'graveyard') return null;
   return obj;
 }
 
-export function runEffectScript(ctx: EffectContext, script: EffectScript): void {
-  for (const step of script) runStep(ctx, step);
+// ------------------------------------------------------------- choice ops
+
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'search' }>;
+
+function isChoiceStep(step: EffectStep): step is ChoiceStep {
+  return step.op === 'discard' || step.op === 'sacrifice' || step.op === 'scry' || step.op === 'search';
 }
 
-function runStep(ctx: EffectContext, step: EffectStep): void {
+interface ChoiceSetup {
+  player: PlayerId;
+  options: number[];
+  min: number;
+  max: number;
+  prompt: string;
+  mode: 'cards' | 'scry';
+}
+
+/** Resolve who a choice belongs to ('target:N' → the targeted player). */
+function choicePlayer(ctx: EffectContext, who: 'controller' | 'opponent' | `target:${number}`): PlayerId {
+  if (who === 'controller') return ctx.controller;
+  if (who === 'opponent') return opponentOf(ctx.controller);
+  const t = ctx.targets[parseInt(who.slice('target:'.length), 10)];
+  return t?.kind === 'player' ? t.player : ctx.controller;
+}
+
+function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
+  const { state, controller } = ctx;
+  switch (step.op) {
+    case 'discard': {
+      const player = choicePlayer(ctx, step.who);
+      const hand = state.players[player].zones.hand;
+      const n = Math.min(step.count, hand.length);
+      return {
+        player,
+        options: [...hand],
+        min: n,
+        max: n,
+        prompt: `${ctx.sourceName}: descarte ${n} carta(s)`,
+        mode: 'cards',
+      };
+    }
+    case 'sacrifice': {
+      const player = choicePlayer(ctx, step.who);
+      const filter = step.filter ?? { what: 'permanent' as const };
+      const options = state.players[player].zones.battlefield
+        .map((id) => state.objects[id])
+        .filter((o) => matchFilter({ controller: player, sourceId: ctx.sourceId }, { ...filter, controlledBy: undefined }, o))
+        .map((o) => o.id);
+      const n = Math.min(step.count, options.length);
+      return {
+        player,
+        options,
+        min: n,
+        max: n,
+        prompt: `${ctx.sourceName}: sacrifique ${n} permanente(s)`,
+        mode: 'cards',
+      };
+    }
+    case 'scry': {
+      const top = state.players[controller].zones.library.slice(0, step.count);
+      return {
+        player: controller,
+        options: top,
+        min: 0,
+        max: top.length,
+        prompt: `Vidência ${top.length}: selecione as cartas que vão para o FUNDO (as demais ficam no topo)`,
+        mode: 'scry',
+      };
+    }
+    case 'search': {
+      const options = state.players[controller].zones.library
+        .map((id) => state.objects[id])
+        .filter((o) => cardMatchesFilter(o.card, step.filter))
+        .map((o) => o.id);
+      return {
+        player: controller,
+        options,
+        min: 0,
+        max: Math.min(step.count, options.length),
+        prompt: `Busque até ${step.count} carta(s) na sua biblioteca`,
+        mode: 'cards',
+      };
+    }
+  }
+}
+
+/** Execute a choice step once the picks are known. */
+export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: number[]): void {
   const { state, emit } = ctx;
   switch (step.op) {
-    case 'draw':
-      for (const p of resolvePlayers(step.who, ctx.controller))
-        for (let i = 0; i < step.count; i++) draw(state, p, emit);
+    case 'discard': {
+      const player = choicePlayer(ctx, step.who);
+      for (const id of picks) {
+        const obj = state.objects[id];
+        if (!obj || obj.zone !== 'hand') continue;
+        moveWithEvent(state, obj, 'graveyard', 'discarded', emit);
+        emit({ type: 'discarded', player, objectId: id, cardName: obj.card.name });
+      }
       return;
+    }
+    case 'sacrifice': {
+      for (const id of picks) {
+        const obj = state.objects[id];
+        if (!obj || obj.zone !== 'battlefield') continue;
+        moveWithEvent(state, obj, 'graveyard', 'sacrificed', emit);
+      }
+      return;
+    }
+    case 'scry': {
+      const library = state.players[ctx.controller].zones.library;
+      for (const id of picks) {
+        const i = library.indexOf(id);
+        if (i >= 0) {
+          library.splice(i, 1);
+          library.push(id);
+        }
+      }
+      emit({ type: 'scried', player: ctx.controller, looked: Math.min(step.count, library.length), bottomed: picks.length });
+      return;
+    }
+    case 'search': {
+      const found: string[] = [];
+      for (const id of picks) {
+        const obj = state.objects[id];
+        if (!obj || obj.zone !== 'library') continue;
+        found.push(obj.card.name);
+        moveWithEvent(state, obj, step.to, 'searched', emit);
+        if (step.to === 'battlefield' && step.tapped) setTapped(state, obj, true, emit);
+      }
+      emit({ type: 'searched', player: ctx.controller, found, to: step.to });
+      const r = shuffle(state.players[ctx.controller].zones.library, state.rngState);
+      state.players[ctx.controller].zones.library = r.items;
+      state.rngState = r.state;
+      emit({ type: 'shuffled', player: ctx.controller });
+      return;
+    }
+  }
+}
+
+/**
+ * Handle a choice step inline: auto-resolve forced/empty choices, otherwise
+ * pause the script by setting state.pendingDecision.
+ */
+function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep[]): 'done' | 'paused' {
+  const setup = setupChoice(ctx, step);
+  // Forced choice (all options must be picked) or nothing to pick → no round-trip.
+  if (setup.mode === 'cards' && setup.options.length <= setup.min) {
+    executeChoice(ctx, step, setup.options);
+    return 'done';
+  }
+  if (setup.options.length === 0) {
+    executeChoice(ctx, step, []);
+    return 'done';
+  }
+  const pending: PendingDecision = {
+    type: 'effectChoice',
+    player: setup.player,
+    prompt: setup.prompt,
+    mode: setup.mode,
+    options: setup.options,
+    min: setup.min,
+    max: setup.max,
+    resume: {
+      controller: ctx.controller,
+      sourceId: ctx.sourceId,
+      sourceName: ctx.sourceName,
+      targets: ctx.targets,
+      xValue: ctx.xValue,
+      current: step,
+      remaining,
+      finishSpellId: null,
+    },
+  };
+  ctx.state.pendingDecision = pending;
+  ctx.emit({ type: 'decisionRequired', player: setup.player, decision: setup.prompt });
+  return 'paused';
+}
+
+/**
+ * Resume after the player picked. Returns 'paused' if a later step paused
+ * again (finishSpellId is carried over), 'done' when the script completed
+ * (the finished spell, if any, is moved to the graveyard here).
+ */
+export function applyEffectChoice(
+  state: GameState,
+  pending: Extract<PendingDecision, { type: 'effectChoice' }>,
+  picks: number[],
+  emit: Emit,
+): 'done' | 'paused' {
+  const ctx: EffectContext = {
+    state,
+    controller: pending.resume.controller,
+    sourceId: pending.resume.sourceId,
+    sourceName: pending.resume.sourceName,
+    targets: pending.resume.targets,
+    xValue: pending.resume.xValue,
+    emit,
+  };
+  state.pendingDecision = null;
+  executeChoice(ctx, pending.resume.current as ChoiceStep, picks);
+  const result = runEffectScript(ctx, pending.resume.remaining);
+  if (result === 'paused') {
+    const next = state.pendingDecision as PendingDecision | null;
+    if (next?.type === 'effectChoice') next.resume.finishSpellId = pending.resume.finishSpellId;
+    return 'paused';
+  }
+  const spellId = pending.resume.finishSpellId;
+  if (spellId !== null) {
+    const spell = state.objects[spellId];
+    if (spell && spell.zone === 'stack') moveWithEvent(state, spell, 'graveyard', 'resolved', emit);
+  }
+  return 'done';
+}
+
+// ------------------------------------------------------------ interpreter
+
+export function runEffectScript(ctx: EffectContext, script: EffectScript): 'done' | 'paused' {
+  for (let i = 0; i < script.length; i++) {
+    const step = script[i];
+    if (isChoiceStep(step)) {
+      if (beginChoice(ctx, step, script.slice(i + 1)) === 'paused') return 'paused';
+      continue;
+    }
+    runStep(ctx, step);
+  }
+  return 'done';
+}
+
+function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): void {
+  const { state, emit } = ctx;
+  switch (step.op) {
+    case 'draw': {
+      const count = resolveAmount(ctx, step.count);
+      for (const p of resolvePlayers(step.who, ctx.controller))
+        for (let i = 0; i < count; i++) draw(state, p, emit);
+      return;
+    }
 
     case 'discardRandom':
       for (const p of resolvePlayers(step.who, ctx.controller)) {
@@ -90,25 +352,29 @@ function runStep(ctx: EffectContext, step: EffectStep): void {
       }
       return;
 
-    case 'damage':
+    case 'damage': {
+      const amount = resolveAmount(ctx, step.amount);
       for (const t of resolveSubject(ctx, step.to)) {
-        if (t.kind === 'player') dealDamageToPlayer(state, t.player, step.amount, ctx.sourceName, emit);
+        if (t.kind === 'player') dealDamageToPlayer(state, t.player, amount, ctx.sourceName, emit);
         else {
           const obj = objectAlive(state, t);
-          if (obj) dealDamageToObject(state, obj, step.amount, ctx.sourceName, emit);
+          if (obj && obj.zone === 'battlefield') dealDamageToObject(state, obj, amount, ctx.sourceName, emit);
         }
       }
       return;
+    }
 
-    case 'gainLife':
-      for (const p of resolvePlayers(step.who, ctx.controller))
-        changeLife(state, p, step.amount, ctx.sourceName, emit);
+    case 'gainLife': {
+      const amount = resolveAmount(ctx, step.amount);
+      for (const p of resolvePlayers(step.who, ctx.controller)) changeLife(state, p, amount, ctx.sourceName, emit);
       return;
+    }
 
-    case 'loseLife':
-      for (const p of resolvePlayers(step.who, ctx.controller))
-        changeLife(state, p, -step.amount, ctx.sourceName, emit);
+    case 'loseLife': {
+      const amount = resolveAmount(ctx, step.amount);
+      for (const p of resolvePlayers(step.who, ctx.controller)) changeLife(state, p, -amount, ctx.sourceName, emit);
       return;
+    }
 
     case 'destroy':
       for (const t of resolveSubject(ctx, step.what)) {
@@ -120,14 +386,16 @@ function runStep(ctx: EffectContext, step: EffectStep): void {
     case 'exile':
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
-        if (obj) moveWithEvent(state, obj, 'exile', 'exiled', emit);
+        if (obj && (obj.zone === 'battlefield' || obj.zone === 'graveyard'))
+          moveWithEvent(state, obj, 'exile', 'exiled', emit);
       }
       return;
 
     case 'returnToHand':
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
-        if (obj && obj.zone === 'battlefield') moveWithEvent(state, obj, 'hand', 'returned', emit);
+        if (obj && (obj.zone === 'battlefield' || obj.zone === 'graveyard'))
+          moveWithEvent(state, obj, 'hand', 'returned', emit);
       }
       return;
 
@@ -157,31 +425,84 @@ function runStep(ctx: EffectContext, step: EffectStep): void {
     case 'pump':
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
+        if (obj && obj.zone === 'battlefield') applyPump(ctx, obj, step.power, step.toughness, step.keywords);
+      }
+      return;
+
+    case 'putCounters': {
+      const count = resolveAmount(ctx, step.count);
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
         if (obj && obj.zone === 'battlefield') {
-          obj.untilEot.power += step.power;
-          obj.untilEot.toughness += step.toughness;
-          emit({ type: 'pumped', objectId: obj.id, cardName: obj.card.name, power: step.power, toughness: step.toughness });
+          const total = (obj.counters[step.counter] ?? 0) + count;
+          obj.counters[step.counter] = total;
+          emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: step.counter, delta: count, total });
         }
       }
       return;
+    }
 
     case 'attach': {
       const source = state.objects[ctx.sourceId];
       const t = ctx.targets[0];
       if (!source || source.zone !== 'battlefield') return;
       if (!t || t.kind !== 'object') return;
-      const host = objectAlive(state, t);
+      const host = state.objects[t.id];
       if (!host || host.zone !== 'battlefield') return;
       source.attachedTo = host.id;
-      emit({
-        type: 'attached',
-        sourceId: source.id,
-        sourceName: source.card.name,
-        hostId: host.id,
-        hostName: host.card.name,
-      });
+      emit({ type: 'attached', sourceId: source.id, sourceName: source.card.name, hostId: host.id, hostName: host.card.name });
       return;
     }
+
+    case 'damageEach': {
+      const amount = resolveAmount(ctx, step.amount);
+      for (const obj of selectBattlefield(ctx, step.filter))
+        dealDamageToObject(state, obj, amount, ctx.sourceName, emit);
+      return;
+    }
+
+    case 'destroyEach':
+      for (const obj of selectBattlefield(ctx, step.filter))
+        moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
+      return;
+
+    case 'exileEach':
+      for (const obj of selectBattlefield(ctx, step.filter))
+        moveWithEvent(state, obj, 'exile', 'exiled', emit);
+      return;
+
+    case 'pumpEach':
+      for (const obj of selectBattlefield(ctx, step.filter))
+        applyPump(ctx, obj, step.power, step.toughness, step.keywords);
+      return;
+
+    case 'tapEach':
+    case 'untapEach':
+      for (const obj of selectBattlefield(ctx, step.filter))
+        setTapped(state, obj, step.op === 'tapEach', emit);
+      return;
+
+    case 'fight': {
+      const [ta] = resolveSubject(ctx, step.a);
+      const [tb] = resolveSubject(ctx, step.b);
+      const a = ta ? objectAlive(state, ta) : null;
+      const b = tb ? objectAlive(state, tb) : null;
+      if (!a || !b || a.zone !== 'battlefield' || b.zone !== 'battlefield') return;
+      const aPower = Math.max(0, effectivePower(state, a));
+      const bPower = Math.max(0, effectivePower(state, b));
+      if (aPower > 0) dealDamageToObject(state, b, aPower, a.card.name, emit, { deathtouch: hasKeyword(state, a, 'deathtouch') });
+      if (bPower > 0) dealDamageToObject(state, a, bPower, b.card.name, emit, { deathtouch: hasKeyword(state, b, 'deathtouch') });
+      return;
+    }
+
+    case 'shuffle':
+      for (const p of resolvePlayers(step.who, ctx.controller)) {
+        const r = shuffle(state.players[p].zones.library, state.rngState);
+        state.players[p].zones.library = r.items;
+        state.rngState = r.state;
+        emit({ type: 'shuffled', player: p });
+      }
+      return;
 
     case 'addMana':
       for (const p of resolvePlayers(step.who, ctx.controller)) {
@@ -215,6 +536,19 @@ function runStep(ctx: EffectContext, step: EffectStep): void {
   }
 }
 
+function applyPump(
+  ctx: EffectContext,
+  obj: GameObject,
+  power: number,
+  toughness: number,
+  keywords?: import('./types.js').Keyword[],
+): void {
+  obj.untilEot.power += power;
+  obj.untilEot.toughness += toughness;
+  if (keywords) obj.untilEot.keywords.push(...keywords);
+  ctx.emit({ type: 'pumped', objectId: obj.id, cardName: obj.card.name, power, toughness });
+}
+
 /** Validate a chosen target against its spec at cast/activation time. */
 export function targetMatchesSpec(
   state: GameState,
@@ -227,13 +561,20 @@ export function targetMatchesSpec(
   const obj = state.objects[choice.id];
   if (!obj) return false;
   if (spec.what === 'spell') return obj.zone === 'stack';
-  if (obj.zone !== 'battlefield') return false;
-  if (spec.controlledBy === 'you' && obj.controller !== controller) return false;
-  if (spec.controlledBy === 'opponent' && obj.controller === controller) return false;
+
+  const requiredZone = spec.zone ?? 'battlefield';
+  if (obj.zone !== requiredZone) return false;
+  if (requiredZone === 'graveyard') {
+    if (spec.ownedBy === 'you' && obj.owner !== controller) return false;
+  } else {
+    if (spec.controlledBy === 'you' && obj.controller !== controller) return false;
+    if (spec.controlledBy === 'opponent' && obj.controller === controller) return false;
+  }
   switch (spec.what) {
     case 'any':
+      return true;
     case 'creature':
-      return spec.what === 'any' ? true : obj.card.types.includes('Creature');
+      return obj.card.types.includes('Creature');
     case 'permanent':
       return true;
     case 'land':
@@ -253,6 +594,6 @@ export function itemStillHasLegalWork(state: GameState, item: StackItem): boolea
   return item.targets.some((t) => {
     if (t.kind === 'player') return true;
     const obj = state.objects[t.id];
-    return !!obj && (obj.zone === 'battlefield' || obj.zone === 'stack');
+    return !!obj && (obj.zone === 'battlefield' || obj.zone === 'stack' || obj.zone === 'graveyard');
   });
 }

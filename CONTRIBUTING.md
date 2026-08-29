@@ -36,12 +36,27 @@ abilities: [{
 
 ### Primitivas disponíveis
 
-`draw · discardRandom · mill · damage · gainLife · loseLife · destroy ·
-exile · returnToHand · tap · untap · counterSpell · pump · addMana · token`
+Diretas: `draw · discardRandom · mill · damage · gainLife · loseLife ·
+destroy · exile · returnToHand · tap · untap · counterSpell · pump (com
+keywords até o fim do turno) · putCounters (+1/+1, -1/-1…) · attach ·
+addMana · token · shuffle · fight`
 
-Gatilhos: `etb` · `dies` · `attacks` · `upkeep`.
+Em massa (com `FilterSpec`): `damageEach · destroyEach · exileEach ·
+pumpEach · tapEach · untapEach`
+
+Com escolha do jogador (pausam a resolução e retomam sozinhas):
+`discard · sacrifice · scry · search`
+
+Além disso: quantidades dinâmicas (`amount: 'X'` ou `{ per: filtro }`),
+custos com `{X}`, mágicas modais (`spellModes`), alvos no cemitério
+(`zone: 'graveyard'`), permanentes que entram com marcadores
+(`entersWithCounters`) e habilidades estáticas (`kind: 'static'` — anthems
+e lords).
+
+Gatilhos: `etb`/`dies` (de si ou de qualquer objeto casando um filtro) ·
+`attacks` · `upkeep` · `endStep` · `youCastSpell` (destreza).
 Keywords automatizadas: `flying · reach · haste · vigilance · trample ·
-lifelink · deathtouch · defender · menace`.
+lifelink · deathtouch · defender · menace · firstStrike · doubleStrike`.
 
 Definições em [`packages/engine/src/cards/types.ts`](packages/engine/src/cards/types.ts).
 

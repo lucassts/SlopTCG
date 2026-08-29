@@ -13,18 +13,21 @@ export interface ParsedCost {
   generic: number;
   colored: Color[]; // one entry per colored symbol
   colorless: number; // {C} symbols
+  /** Number of {X} symbols; the chosen X multiplies into generic at cast. */
+  xCount: number;
 }
 
 export function parseCost(cost: string | undefined): ParsedCost {
-  const parsed: ParsedCost = { generic: 0, colored: [], colorless: 0 };
+  const parsed: ParsedCost = { generic: 0, colored: [], colorless: 0, xCount: 0 };
   if (!cost) return parsed;
   const symbols = cost.match(/\{([^}]+)\}/g) ?? [];
   for (const raw of symbols) {
     const sym = raw.slice(1, -1);
     if (/^\d+$/.test(sym)) parsed.generic += parseInt(sym, 10);
+    else if (sym === 'X') parsed.xCount += 1;
     else if (sym === 'C') parsed.colorless += 1;
     else if (['W', 'U', 'B', 'R', 'G'].includes(sym)) parsed.colored.push(sym as Color);
-    else parsed.generic += 1; // unknown symbol: treat as generic (X handled later)
+    else parsed.generic += 1; // unknown symbol: treat as generic
   }
   return parsed;
 }

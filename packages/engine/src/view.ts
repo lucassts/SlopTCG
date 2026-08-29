@@ -22,6 +22,19 @@ export interface CardView {
   isToken: boolean;
 }
 
+export type PendingDecisionView =
+  | { type: 'discardToHandSize'; player: PlayerId; count: number }
+  | {
+      type: 'effectChoice';
+      player: PlayerId;
+      prompt: string;
+      mode: 'cards' | 'scry';
+      min: number;
+      max: number;
+      /** Card data of the options — only for the deciding player. */
+      options: CardView[] | null;
+    };
+
 export interface StackItemView {
   id: number;
   kind: 'spell' | 'ability';
@@ -56,13 +69,31 @@ export interface GameView {
   activePlayer: PlayerId;
   priority: PlayerId | null;
   combatAwaiting: 'attackers' | 'blockers' | null;
-  pendingDecision: { type: string; player: PlayerId; count?: number } | null;
+  pendingDecision: PendingDecisionView | null;
   /** Non-null while opening hands are being decided. */
   mulligan: { taken: Record<PlayerId, number>; phase: Record<PlayerId, 'deciding' | 'kept'> } | null;
   stack: StackItemView[];
   players: Record<PlayerId, PlayerView>;
   status: 'playing' | 'finished';
   winner?: PlayerId | 'draw';
+}
+
+function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisionView | null {
+  const pd = state.pendingDecision;
+  if (!pd) return null;
+  if (pd.type === 'discardToHandSize') return { type: 'discardToHandSize', player: pd.player, count: pd.count };
+  return {
+    type: 'effectChoice',
+    player: pd.player,
+    prompt: pd.prompt,
+    mode: pd.mode,
+    min: pd.min,
+    max: pd.max,
+    options:
+      viewer === pd.player
+        ? pd.options.map((id) => cardView(state, state.objects[id])).filter((c) => !!c.card)
+        : null,
+  };
 }
 
 function cardView(state: GameState, obj: GameObject): CardView {
@@ -108,7 +139,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
     activePlayer: state.activePlayer,
     priority: state.priority,
     combatAwaiting: state.combatAwaiting,
-    pendingDecision: state.pendingDecision,
+    pendingDecision: pendingDecisionView(state, viewer),
     mulligan: state.mulligan,
     stack: state.stack.map((item) => ({
       id: item.id,
