@@ -1,7 +1,7 @@
 {
-  "name": "@slopmtg/protocol",
+  "name": "@sloptcg/protocol",
   "version": "0.1.0",
-  "description": "SlopMTG shared client/server message types.",
+  "description": "SlopTCG shared client/server message types.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,7 +16,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@slopmtg/engine": "*"
+    "@sloptcg/engine": "*"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

@@ -1,5 +1,5 @@
 /**
- * SlopMTG room server: WebSocket, 5-letter room codes, authoritative engine.
+ * SlopTCG room server: WebSocket, 5-letter room codes, authoritative engine.
  *
  * Every game rule runs here. Clients send intents; the server validates via
  * the engine and broadcasts per-player redacted events + views. Anyone can
@@ -24,9 +24,9 @@ import {
   type DeckList,
   type GameEvent,
   type PlayerId,
-} from '@slopmtg/engine';
-import type { ClientMessage, DeckSpec, ExternalCard, LobbyPlayer, ServerMessage } from '@slopmtg/protocol';
-import { PROTOCOL_VERSION } from '@slopmtg/protocol';
+} from '@sloptcg/engine';
+import type { ClientMessage, DeckSpec, ExternalCard, LobbyPlayer, ServerMessage } from '@sloptcg/protocol';
+import { PROTOCOL_VERSION } from '@sloptcg/protocol';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const ROOM_TTL_MS = 1000 * 60 * 60 * 3;
@@ -128,7 +128,7 @@ async function resolveOfficialCards(names: string[]): Promise<Map<string, Scryfa
     const batch = missing.slice(i, i + 75);
     const res = await fetch('https://api.scryfall.com/cards/collection', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'SlopMTG/0.1 (open source card game client)' },
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'SlopTCG/0.1 (open source card game client)' },
       body: JSON.stringify({ identifiers: batch.map((n) => ({ name: n.split('//')[0].trim() })) }),
     });
     if (!res.ok) throw new Error(`Scryfall respondeu ${res.status}`);
@@ -368,7 +368,7 @@ async function fetchArchidektDeck(deckUrl: string): Promise<{ name: string; card
   const m = deckUrl.match(/archidekt\.com\/(?:api\/)?decks\/(\d+)/);
   if (!m) throw new Error('URL não reconhecida — cole um link de deck do Archidekt');
   const res = await fetch(`https://archidekt.com/api/decks/${m[1]}/`, {
-    headers: { 'User-Agent': 'SlopMTG/0.1 (open source card game client)' },
+    headers: { 'User-Agent': 'SlopTCG/0.1 (open source card game client)' },
   });
   if (!res.ok) throw new Error(`Archidekt respondeu ${res.status}`);
   const deck = (await res.json()) as {
@@ -396,7 +396,7 @@ async function fetchArchidektDeck(deckUrl: string): Promise<{ name: string; card
  * the WebSocket, so a host runs `npm start` and shares http://<ip>:8080.
  */
 const WEB_DIR =
-  process.env.SLOPMTG_WEB_DIR ??
+  process.env.SLOPTCG_WEB_DIR ??
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../apps/web/dist');
 
 const MIME: Record<string, string> = {
@@ -489,5 +489,5 @@ setInterval(() => {
 }, 60_000).unref();
 
 httpServer.listen(PORT, () => {
-  console.log(`SlopMTG server ouvindo em ws://localhost:${PORT} (HTTP: /api/deck)`);
+  console.log(`SlopTCG server ouvindo em ws://localhost:${PORT} (HTTP: /api/deck)`);
 });

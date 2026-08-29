@@ -1,5 +1,5 @@
 /** WebSocket client with rejoin support. */
-import type { ClientMessage, ServerMessage } from '@slopmtg/protocol';
+import type { ClientMessage, ServerMessage } from '@sloptcg/protocol';
 
 const env = (import.meta as { env?: Record<string, string | boolean> }).env ?? {};
 
@@ -71,12 +71,12 @@ export class NetClient {
 }
 
 export function saveSession(session: Session): void {
-  sessionStorage.setItem('slopmtg-session', JSON.stringify(session));
+  sessionStorage.setItem('sloptcg-session', JSON.stringify(session));
 }
 
 export function loadSession(): Session | null {
   try {
-    const raw = sessionStorage.getItem('slopmtg-session');
+    const raw = sessionStorage.getItem('sloptcg-session');
     return raw ? (JSON.parse(raw) as Session) : null;
   } catch {
     return null;
@@ -84,5 +84,5 @@ export function loadSession(): Session | null {
 }
 
 export function clearSession(): void {
-  sessionStorage.removeItem('slopmtg-session');
+  sessionStorage.removeItem('sloptcg-session');
 }

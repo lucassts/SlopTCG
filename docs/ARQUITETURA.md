@@ -1,4 +1,4 @@
-# SlopMTG — Arquitetura
+# SlopTCG — Arquitetura
 
 > Webapp open source para jogar card games no navegador, instalável como PWA.
 > Primeiro jogo: Magic: The Gathering. A engine é genérica o bastante para a

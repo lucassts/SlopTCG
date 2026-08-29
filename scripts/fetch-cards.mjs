@@ -12,7 +12,7 @@ const outDir = path.join(root, 'data');
 const outFile = path.join(outDir, 'oracle-cards.json');
 
 const meta = await fetch('https://api.scryfall.com/bulk-data/oracle-cards', {
-  headers: { 'User-Agent': 'SlopMTG/0.1 (open source card game client)' },
+  headers: { 'User-Agent': 'SlopTCG/0.1 (open source card game client)' },
 }).then((r) => r.json());
 
 console.log(`Baixando ${meta.download_uri} (~${Math.round(meta.size / 1024 / 1024)} MB)…`);

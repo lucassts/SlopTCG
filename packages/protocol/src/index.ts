@@ -15,7 +15,7 @@ import type {
   PlayerId,
   PlayerView,
   StackItemView,
-} from '@slopmtg/engine';
+} from '@sloptcg/engine';
 
 export const PROTOCOL_VERSION = 1;
 

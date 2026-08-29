@@ -1,4 +1,4 @@
-import type { CardView } from '@slopmtg/protocol';
+import type { CardView } from '@sloptcg/protocol';
 import { imageUrlById, imageUrlByName } from '../scryfall';
 import { useState } from 'react';
 

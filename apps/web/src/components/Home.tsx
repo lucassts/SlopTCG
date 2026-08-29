@@ -7,18 +7,18 @@ export interface HomeProps {
 }
 
 export function Home({ onCreate, onJoin, connecting }: HomeProps) {
-  const [name, setName] = useState(localStorage.getItem('slopmtg-name') ?? '');
+  const [name, setName] = useState(localStorage.getItem('sloptcg-name') ?? '');
   const [code, setCode] = useState('');
 
   const remember = (n: string) => {
     setName(n);
-    localStorage.setItem('slopmtg-name', n);
+    localStorage.setItem('sloptcg-name', n);
   };
 
   return (
     <div className="screen-center">
       <div className="brand">
-        SlopMTG
+        SlopTCG
         <small>card games no navegador · código aberto</small>
       </div>
       <div className="home-card">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CardView, GameView, PlayerAction, PlayerId } from '@slopmtg/protocol';
-import type { Step, TargetChoice } from '@slopmtg/engine';
+import type { CardView, GameView, PlayerAction, PlayerId } from '@sloptcg/protocol';
+import type { Step, TargetChoice } from '@sloptcg/engine';
 import { CardTile } from './CardTile';
 import { stepName } from '../logText';
 
@@ -30,7 +30,7 @@ const DEFAULT_STOPS: StopsConfig = { myTurn: ['main1', 'main2'], oppTurn: ['end'
 
 function loadStops(): StopsConfig {
   try {
-    const raw = localStorage.getItem('slopmtg-stops');
+    const raw = localStorage.getItem('sloptcg-stops');
     if (!raw) return DEFAULT_STOPS;
     const parsed = JSON.parse(raw) as StopsConfig;
     return { myTurn: parsed.myTurn ?? DEFAULT_STOPS.myTurn, oppTurn: parsed.oppTurn ?? DEFAULT_STOPS.oppTurn };
@@ -134,7 +134,7 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const saveStops = (next: StopsConfig) => {
     setStops(next);
     try {
-      localStorage.setItem('slopmtg-stops', JSON.stringify(next));
+      localStorage.setItem('sloptcg-stops', JSON.stringify(next));
     } catch {
       // localStorage indisponível: config só vale para a sessão
     }

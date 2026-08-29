@@ -1,5 +1,5 @@
 /** Render GameEvents as human-readable PT-BR log lines. */
-import type { GameEvent, GameView } from '@slopmtg/protocol';
+import type { GameEvent, GameView } from '@sloptcg/protocol';
 
 const STEP_NAMES: Record<string, string> = {
   untap: 'Desvirar',

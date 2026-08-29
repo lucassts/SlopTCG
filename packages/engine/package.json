@@ -1,7 +1,7 @@
 {
-  "name": "@slopmtg/engine",
+  "name": "@sloptcg/engine",
   "version": "0.1.0",
-  "description": "SlopMTG rules engine — pure TypeScript, no dependencies, runs in Node and the browser.",
+  "description": "SlopTCG rules engine — pure TypeScript, no dependencies, runs in Node and the browser.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

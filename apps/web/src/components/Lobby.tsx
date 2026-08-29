@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DeckSpec, LobbyPlayer } from '@slopmtg/protocol';
+import type { DeckSpec, LobbyPlayer } from '@sloptcg/protocol';
 import { serverHttpBase } from '../net';
 import { parseDecklist, resolveDecklist } from '../scryfall';
 

@@ -8,8 +8,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'SlopMTG',
-        short_name: 'SlopMTG',
+        name: 'SlopTCG',
+        short_name: 'SlopTCG',
         description: 'Card games no navegador, de código aberto.',
         theme_color: '#0f1115',
         background_color: '#0f1115',

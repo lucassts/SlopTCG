@@ -1,7 +1,7 @@
 {
-  "name": "@slopmtg/server",
+  "name": "@sloptcg/server",
   "version": "0.1.0",
-  "description": "SlopMTG authoritative room server (WebSocket).",
+  "description": "SlopTCG authoritative room server (WebSocket).",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,8 +11,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@slopmtg/engine": "*",
-    "@slopmtg/protocol": "*",
+    "@sloptcg/engine": "*",
+    "@sloptcg/protocol": "*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

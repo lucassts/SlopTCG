@@ -3,7 +3,7 @@
  * All Wizards card data stays out of the repo — fetched at runtime, cached
  * by the service worker / localStorage.
  */
-import type { ExternalCard } from '@slopmtg/protocol';
+import type { ExternalCard } from '@sloptcg/protocol';
 
 const API = 'https://api.scryfall.com';
 

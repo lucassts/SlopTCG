@@ -1,4 +1,4 @@
-# Contribuindo com o SlopMTG
+# Contribuindo com o SlopTCG
 
 A contribuição de maior impacto é **implementar cartas**. O sistema tem três
 níveis, do mais simples ao mais poderoso:

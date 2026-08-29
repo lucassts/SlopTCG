@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DeckSpec, GameView, LobbyPlayer, PlayerAction, ServerMessage } from '@slopmtg/protocol';
+import type { DeckSpec, GameView, LobbyPlayer, PlayerAction, ServerMessage } from '@sloptcg/protocol';
 import { GameBoard } from './components/GameBoard';
 import { Home } from './components/Home';
 import { Lobby } from './components/Lobby';

@@ -1,5 +1,5 @@
 {
-  "name": "slopmtg",
+  "name": "sloptcg",
   "private": true,
   "version": "0.1.0",
   "description": "Open source web engine for playing trading card games in any browser. First game: Magic: The Gathering.",
@@ -9,11 +9,11 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w @slopmtg/engine -w @slopmtg/protocol -w @slopmtg/server -w @slopmtg/web",
-    "test": "npm run test -w @slopmtg/engine",
+    "build": "npm run build -w @sloptcg/engine -w @sloptcg/protocol -w @sloptcg/server -w @sloptcg/web",
+    "test": "npm run test -w @sloptcg/engine",
     "start": "node packages/server/dist/index.js",
-    "dev:server": "npm run dev -w @slopmtg/server",
-    "dev:web": "npm run dev -w @slopmtg/web"
+    "dev:server": "npm run dev -w @sloptcg/server",
+    "dev:web": "npm run dev -w @sloptcg/web"
   },
   "engines": {
     "node": ">=20"

@@ -1,9 +1,9 @@
-# SlopMTG
+# SlopTCG
 
 **Card games no navegador. De código aberto, de verdade.**
 
 Os clientes oficiais dos grandes card games são pesados, fechados e presos a
-plataformas. O SlopMTG é uma engine de card game que roda em qualquer
+plataformas. O SlopTCG é uma engine de card game que roda em qualquer
 navegador, instala como PWA (vira um atalho, funciona offline) e pertence à
 comunidade. O primeiro jogo suportado é **Magic: The Gathering**; a
 arquitetura foi desenhada para a comunidade portar outros jogos.
