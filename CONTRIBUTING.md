@@ -39,7 +39,8 @@ abilities: [{
 Diretas: `draw · discardRandom · mill · damage · gainLife · loseLife ·
 destroy · exile · returnToHand · tap · untap · counterSpell · pump (com
 keywords até o fim do turno) · putCounters (+1/+1, -1/-1…) · attach ·
-addMana · token · shuffle · fight`
+addMana · token · shuffle · fight · gainControl (com reversão no fim do
+turno) · copySpell · preventCombatDamage`
 
 Em massa (com `FilterSpec`): `damageEach · destroyEach · exileEach ·
 pumpEach · tapEach · untapEach`
@@ -54,9 +55,15 @@ custos com `{X}`, mágicas modais (`spellModes`), alvos no cemitério
 e lords).
 
 Gatilhos: `etb`/`dies` (de si ou de qualquer objeto casando um filtro) ·
-`attacks` · `upkeep` · `endStep` · `youCastSpell` (destreza).
+`attacks` · `upkeep` · `endStep` · `youCastSpell` (destreza). Gatilhos
+podem ter `targets` — o controlador escolhe quando a habilidade vai para a
+pilha (Flametongue Kavu); sem alvo legal, o gatilho é removido.
 Keywords automatizadas: `flying · reach · haste · vigilance · trample ·
-lifelink · deathtouch · defender · menace · firstStrike · doubleStrike`.
+lifelink · deathtouch · defender · menace · firstStrike · doubleStrike ·
+indestructible · hexproof`.
+Mecânicas de carta: `storm` (cópias na pilha por mágica conjurada antes no
+turno) e `additionalCost` (sacrifício pago no cast, com `'sacrificedPower'`
+como quantidade dinâmica — Fling).
 
 Definições em [`packages/engine/src/cards/types.ts`](packages/engine/src/cards/types.ts).
 
