@@ -114,8 +114,8 @@ export type PendingDecision =
       type: 'effectChoice';
       player: PlayerId;
       prompt: string;
-      /** 'cards' → pick objects from options; 'scry' → picks go to the bottom. */
-      mode: 'cards' | 'scry';
+      /** 'cards' → pick objects; 'scry' → picks go to the bottom; 'nameCard' → free-text card name. */
+      mode: 'cards' | 'scry' | 'nameCard';
       options: number[];
       min: number;
       max: number;

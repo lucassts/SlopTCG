@@ -31,6 +31,8 @@ export interface FilterSpec {
   /** Negations (Duress: "noncreature, nonland card"). */
   nonland?: boolean;
   noncreature?: boolean;
+  /** Card color ("exile a blue card from your hand"). */
+  color?: Color;
   controlledBy?: 'you' | 'opponent' | 'any';
   /** Exclude the effect's own source ("another creature…"). */
   other?: boolean;
@@ -132,6 +134,14 @@ export type EffectStep =
   /** Fog: no combat damage is dealt for the rest of this turn. */
   | { op: 'preventCombatDamage' }
   | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[] }
+  /** "Add one mana of any color" (or "of these colors") — the activation
+   *  carries the chosen color; `colors` restricts the legal choices. */
+  | { op: 'addManaChoice'; who: PlayerSel; count?: number; colors?: Color[] }
+  /**
+   * (choice) Cabal Therapy: the controller names a nonland card; the `who`
+   * player reveals their hand and discards every card with that name.
+   */
+  | { op: 'nameCardDiscard'; who: WhoSel }
   | {
       op: 'token';
       who: PlayerSel;
@@ -194,6 +204,8 @@ export interface ActivatedAbility {
   isManaAbility?: boolean;
   /** Equip-style: only during your main phase with an empty stack. */
   sorceryOnly?: boolean;
+  /** Metalcraft-style: activatable only while controlling ≥ count of filter. */
+  condition?: { controlsAtLeast: { count: number; filter: FilterSpec } };
 }
 
 /** Planeswalker loyalty ability: sorcery speed, once per turn per walker. */
@@ -256,8 +268,14 @@ export interface CardDefinition {
   additionalCost?: { sacrifice: FilterSpec; count?: number };
   /** Kicker: optional extra mana cost; when paid, `effect` is appended. */
   kicker?: { cost: string; effect: EffectScript };
-  /** Flashback: castable from the graveyard for this cost; exiles after. */
-  flashback?: { cost: string };
+  /** Flashback: castable from the graveyard for this cost; exiles after.
+   *  `cost` is mana; `sacrifice` an additional non-mana cost (Cabal Therapy). */
+  flashback?: { cost?: string; sacrifice?: FilterSpec };
+  /**
+   * Alternative cost (Force of Will): instead of the mana cost, pay life
+   * and/or exile matching cards from your hand.
+   */
+  altCost?: { payLife?: number; exileFromHand?: { count: number; filter: FilterSpec }; label: string };
   /** Cycling: pay the cost, discard this card, apply `effect` (default: draw 1). */
   cycling?: { mana?: string; life?: number; effect?: EffectScript };
   /** This spell can't be countered. */
@@ -285,10 +303,14 @@ export interface CardDefinition {
     cantBlock?: boolean;
   };
   /**
-   * 'full'   → the engine automates this card entirely.
-   * 'manual' → playable via manual mode only (Tier 3); engine logs, players adjudicate.
+   * 'full'    → the engine automates this card entirely.
+   * 'partial' → castable/playable with the recognized parts automated; the
+   *             lines in `automationNotes` still need manual adjudication.
+   * 'manual'  → playable via manual mode only (Tier 3); engine logs, players adjudicate.
    */
-  automation: 'full' | 'manual';
+  automation: 'full' | 'partial' | 'manual';
+  /** Rules-text lines the oracle compiler did NOT automate (partial cards). */
+  automationNotes?: string[];
 }
 
 export function isType(card: CardDefinition, t: CardType): boolean {
@@ -312,6 +334,7 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.basic && !card.supertypes?.includes('Basic')) return false;
   if (filter.nonland && card.types.includes('Land')) return false;
   if (filter.noncreature && card.types.includes('Creature')) return false;
+  if (filter.color && !card.colors.includes(filter.color)) return false;
   return true;
 }
 

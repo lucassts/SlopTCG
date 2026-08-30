@@ -165,5 +165,10 @@ function tooltip(card: CardView): string {
   parts.push(d.types.join(' ') + (d.subtypes.length > 0 ? ` — ${d.subtypes.join(' ')}` : ''));
   if (d.text) parts.push(d.text);
   if (d.automation === 'manual') parts.push('⚠ carta em modo manual (mecânica ainda não automatizada)');
+  if (d.automation === 'partial')
+    parts.push(
+      '⚠ parcialmente automatizada — ajuste manualmente:\n' +
+        (d.automationNotes ?? []).map((n) => `• ${n}`).join('\n'),
+    );
   return parts.join('\n');
 }

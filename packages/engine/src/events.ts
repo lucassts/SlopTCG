@@ -53,6 +53,9 @@ export type GameEvent =
   | { type: 'attackersDeclared'; player: PlayerId; attackers: { objectId: number; cardName: string }[] }
   | { type: 'blockersDeclared'; player: PlayerId; blocks: { blocker: number; blockerName: string; attacker: number; attackerName: string }[] }
   | { type: 'discarded'; player: PlayerId; objectId: number; cardName: string }
+  /** A hand is revealed to everyone (Cabal Therapy naming). */
+  | { type: 'handRevealed'; player: PlayerId; cards: string[] }
+  | { type: 'cardNamed'; player: PlayerId; name: string }
   | { type: 'shuffled'; player: PlayerId }
   | { type: 'priorityChanged'; player: PlayerId | null }
   | { type: 'decisionRequired'; player: PlayerId; decision: string }

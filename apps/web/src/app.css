@@ -492,6 +492,16 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .sb-col:has(.deck-grid) { min-width: 0; }
 .home-card:has(.deck-preview[open]) { width: min(980px, 96vw); }
 
+.color-pick-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 700;
+  color: #14161c;
+  flex: 0 0 auto;
+}
+
 .stops-panel { min-width: 220px; }
 .stops-grid {
   display: grid;

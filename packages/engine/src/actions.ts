@@ -29,6 +29,10 @@ export type PlayerAction =
       sacrifices?: number[];
       /** Pay the optional kicker cost. */
       kicked?: boolean;
+      /** Pay the card's alternative cost (Force of Will) instead of mana. */
+      useAltCost?: boolean;
+      /** Hand cards exiled to pay the alternative cost. */
+      altExile?: number[];
     }
   /** Cycle a card from hand (pay its cycling cost, discard it, draw). */
   | { type: 'cycle'; objectId: number }
@@ -41,6 +45,8 @@ export type PlayerAction =
       targets?: TargetChoice[];
       /** Permanents sacrificed to pay the ability's sacrifice cost. */
       sacrifices?: number[];
+      /** Chosen color for "add one mana of any color" abilities. */
+      manaColor?: 'W' | 'U' | 'B' | 'R' | 'G';
     }
   | {
       type: 'declareAttackers';
@@ -50,8 +56,8 @@ export type PlayerAction =
     }
   | { type: 'declareBlockers'; blocks: { blocker: number; attacker: number }[] }
   | { type: 'chooseDiscard'; objectIds: number[] }
-  /** Answer to a pending effectChoice (discard/sacrifice/scry/search…). */
-  | { type: 'effectChoice'; picks: number[] }
+  /** Answer to a pending effectChoice (discard/sacrifice/scry/search/nameCard…). */
+  | { type: 'effectChoice'; picks: number[]; text?: string }
   | { type: 'concede' }
   | { type: 'chat'; text: string }
   // --- manual mode (Tier 3) ---

@@ -51,6 +51,8 @@ export interface EffectContext {
   targets: TargetChoice[];
   xValue?: number;
   sacrificedPower?: number;
+  /** Color chosen by the player for 'addManaChoice' abilities. */
+  chosenMana?: 'W' | 'U' | 'B' | 'R' | 'G';
   emit: Emit;
 }
 
@@ -108,10 +110,13 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'search' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'search' | 'nameCardDiscard' }>;
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
-  return step.op === 'discard' || step.op === 'sacrifice' || step.op === 'scry' || step.op === 'search';
+  return (
+    step.op === 'discard' || step.op === 'sacrifice' || step.op === 'scry' ||
+    step.op === 'search' || step.op === 'nameCardDiscard'
+  );
 }
 
 interface ChoiceSetup {
@@ -120,7 +125,7 @@ interface ChoiceSetup {
   min: number;
   max: number;
   prompt: string;
-  mode: 'cards' | 'scry';
+  mode: 'cards' | 'scry' | 'nameCard';
 }
 
 /** Resolve who a choice belongs to ('target:N' → the targeted player). */
@@ -197,13 +202,40 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         mode: 'cards',
       };
     }
+    case 'nameCardDiscard':
+      return {
+        player: controller,
+        options: [],
+        min: 0,
+        max: 0,
+        prompt: `${ctx.sourceName}: escolha o nome de uma carta que não seja terreno`,
+        mode: 'nameCard',
+      };
   }
 }
 
 /** Execute a choice step once the picks are known. */
-export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: number[]): void {
+export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: number[], text?: string): void {
   const { state, emit } = ctx;
   switch (step.op) {
+    case 'nameCardDiscard': {
+      const name = (text ?? '').trim();
+      if (!name) return;
+      emit({ type: 'cardNamed', player: ctx.controller, name });
+      for (const victim of resolveWho(ctx, step.who)) {
+        const hand = state.players[victim].zones.hand;
+        emit({ type: 'handRevealed', player: victim, cards: hand.map((id) => state.objects[id].card.name) });
+        const matching = hand.filter(
+          (id) => state.objects[id].card.name.toLowerCase() === name.toLowerCase(),
+        );
+        for (const id of matching) {
+          const obj = state.objects[id];
+          moveWithEvent(state, obj, 'graveyard', 'discarded', emit);
+          emit({ type: 'discarded', player: victim, objectId: id, cardName: obj.card.name });
+        }
+      }
+      return;
+    }
     case 'discard': {
       for (const id of picks) {
         const obj = state.objects[id];
@@ -268,14 +300,17 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
  */
 function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep[]): 'done' | 'paused' {
   const setup = setupChoice(ctx, step);
-  // Forced choice (all options must be picked) or nothing to pick → no round-trip.
-  if (setup.mode === 'cards' && setup.options.length <= setup.min) {
-    executeChoice(ctx, step, setup.options);
-    return 'done';
-  }
-  if (setup.options.length === 0) {
-    executeChoice(ctx, step, []);
-    return 'done';
+  // nameCard always needs the round-trip (the answer is text, not picks).
+  if (setup.mode !== 'nameCard') {
+    // Forced choice (all options must be picked) or nothing to pick → no round-trip.
+    if (setup.mode === 'cards' && setup.options.length <= setup.min) {
+      executeChoice(ctx, step, setup.options);
+      return 'done';
+    }
+    if (setup.options.length === 0) {
+      executeChoice(ctx, step, []);
+      return 'done';
+    }
   }
   const pending: PendingDecision = {
     type: 'effectChoice',
@@ -311,6 +346,7 @@ export function applyEffectChoice(
   pending: Extract<PendingDecision, { type: 'effectChoice' }>,
   picks: number[],
   emit: Emit,
+  text?: string,
 ): 'done' | 'paused' {
   const ctx: EffectContext = {
     state,
@@ -322,7 +358,7 @@ export function applyEffectChoice(
     emit,
   };
   state.pendingDecision = null;
-  executeChoice(ctx, pending.resume.current as ChoiceStep, picks);
+  executeChoice(ctx, pending.resume.current as ChoiceStep, picks, text);
   const result = runEffectScript(ctx, pending.resume.remaining);
   if (result === 'paused') {
     const next = state.pendingDecision as PendingDecision | null;
@@ -637,6 +673,17 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
         emit({ type: 'manaAdded', player: p, mana: step.mana, sourceName: ctx.sourceName });
       }
       return;
+
+    case 'addManaChoice': {
+      const sym = ctx.chosenMana;
+      if (!sym) return; // guarded at activation; never silently guess a color
+      const count = step.count ?? 1;
+      for (const p of resolvePlayers(step.who, ctx.controller)) {
+        state.players[p].manaPool[sym] += count;
+        emit({ type: 'manaAdded', player: p, mana: Array(count).fill(sym), sourceName: ctx.sourceName });
+      }
+      return;
+    }
 
     case 'token':
       for (const p of resolvePlayers(step.who, ctx.controller)) {

@@ -83,12 +83,27 @@ interface ParseState {
   entersTapped: boolean;
   cyclingMana?: string;
   flashbackCost?: string;
+  flashbackSacrifice?: import('./types.js').FilterSpec;
+  altCost?: CardDefinition['altCost'];
   abilities: AbilityDef[];
   spellTargets: TargetSpec[];
   spellEffect: EffectStep[];
   enchant?: { what: 'creature' };
   attachEffect?: { power?: number; toughness?: number; keywords?: Keyword[] };
   equipCost?: string;
+}
+
+/** "Activate only if you control three or more artifacts." → condition. */
+function parseActivationCondition(
+  clause: string,
+): NonNullable<Extract<AbilityDef, { kind: 'activated' }>['condition']> | null {
+  const m = clause.match(
+    /^Activate only if you control (a|an|\w+)(?: or more)? (artifact|creature|land|enchantment)s?$/i,
+  );
+  if (!m) return null;
+  const count = m[1].toLowerCase() === 'a' || m[1].toLowerCase() === 'an' ? 1 : num(m[1]);
+  if (count === null) return null;
+  return { controlsAtLeast: { count, filter: { what: m[2].toLowerCase() as 'artifact' } } };
 }
 
 /** Parse one simple effect clause (no targets). Returns null if unknown. */
@@ -238,15 +253,64 @@ function parseLine(line: string, st: ParseState, isSpell: boolean): boolean {
     return true;
   }
 
-  if ((m = line.match(/^\{T\}: Add \{([WUBRGC])\}\.$/))) {
+  // "{T}: Add {B}." / "{T}: Add {C}{C}." (Sol Ring)
+  if ((m = line.match(/^\{T\}: Add ((?:\{[WUBRGC]\})+)\.$/))) {
+    const mana = [...m[1].matchAll(/\{([WUBRGC])\}/g)].map((x) => x[1] as Color | 'C');
     st.abilities.push({
       kind: 'activated',
       cost: { tap: true },
-      effect: [{ op: 'addMana', who: 'controller', mana: [m[1] as Color | 'C'] }],
-      text: `Adicionar {${m[1]}}`,
+      effect: [{ op: 'addMana', who: 'controller', mana }],
+      text: `Adicionar ${m[1]}`,
       isManaAbility: true,
     });
     return true;
+  }
+
+  // Duais/trilands: "{T}: Add {W} or {U}." / "{T}: Add {B}, {R}, or {G}."
+  if ((m = line.match(/^\{T\}: Add ((?:\{[WUBRG]\},? )*(?:or )?\{[WUBRG]\})\.$/)) && m[1].includes('or')) {
+    const colors = [...m[1].matchAll(/\{([WUBRG])\}/g)].map((x) => x[1] as Color);
+    st.abilities.push({
+      kind: 'activated',
+      cost: { tap: true },
+      effect: [{ op: 'addManaChoice', who: 'controller', colors }],
+      text: `Adicionar ${colors.map((c) => `{${c}}`).join(' ou ')}`,
+      isManaAbility: true,
+    });
+    return true;
+  }
+
+  // Mana de qualquer cor, com custos extras e condição de ativação:
+  //   "{T}: Add one mana of any color."
+  //   "{T}, Sacrifice ~: Add one mana of any color."                (Lotus Petal)
+  //   "{T}, Pay 1 life: Add one mana of any color. Activate only if
+  //    you control an artifact."                                    (Spire of Industry)
+  //   "Metalcraft — {T}: Add one mana of any color. Activate only if
+  //    you control three or more artifacts."                        (Mox Opal)
+  {
+    // Palavra de habilidade ("Metalcraft — ") é rótulo, não regra: descarta.
+    const bare = line.replace(/^[A-Z][a-z]+(?: [a-z]+)* — /, '');
+    if ((m = bare.match(/^\{T\}(?:, Sacrifice ~)?(?:, Pay (\d+) life)?: Add one mana of any color\.(?: (Activate only if [^.]+)\.)?$/))) {
+      const sacSelf = bare.includes(', Sacrifice ~');
+      const payLife = m[1] ? parseInt(m[1], 10) : undefined;
+      let condition: Extract<AbilityDef, { kind: 'activated' }>['condition'];
+      if (m[2]) {
+        const parsed = parseActivationCondition(m[2]);
+        if (!parsed) return false;
+        condition = parsed;
+      }
+      st.abilities.push({
+        kind: 'activated',
+        cost: { tap: true, sacrificeSelf: sacSelf || undefined, payLife },
+        effect: [{ op: 'addManaChoice', who: 'controller' }],
+        text:
+          'Adicionar uma mana de qualquer cor' +
+          (sacSelf ? ' (sacrificando)' : '') +
+          (payLife ? ` (pague ${payLife} de vida)` : ''),
+        isManaAbility: true,
+        condition,
+      });
+      return true;
+    }
   }
 
   if ((m = line.match(/^Cycling (\{[^}]+\})$/i))) {
@@ -256,6 +320,27 @@ function parseLine(line: string, st: ParseState, isSpell: boolean): boolean {
 
   if ((m = line.match(/^Flashback (\{[^ ]+?\})$/i)) || (m = line.match(/^Flashback ((?:\{[^}]+\})+)$/i))) {
     st.flashbackCost = m[1];
+    return true;
+  }
+
+  // Flashback com custo não-mana (Cabal Therapy).
+  if (/^Flashback—Sacrifice a creature\.$/i.test(line)) {
+    st.flashbackSacrifice = { what: 'creature' };
+    return true;
+  }
+
+  // Custo alternativo (Force of Will / Misdirection / Daze-like com carta exilada).
+  if ((m = line.match(/^You may (?:pay (\d+) life and )?exile a (white|blue|black|red|green) card from your hand rather than pay this spell's mana cost\.$/i))) {
+    const payLife = m[1] ? parseInt(m[1], 10) : undefined;
+    const color = COLOR_WORDS[m[2].toLowerCase()];
+    const COLOR_PT: Record<string, string> = { white: 'branca', blue: 'azul', black: 'preta', red: 'vermelha', green: 'verde' };
+    st.altCost = {
+      payLife,
+      exileFromHand: { count: 1, filter: { color } },
+      label:
+        (payLife ? `pague ${payLife} de vida e ` : '') +
+        `exile uma carta ${COLOR_PT[m[2].toLowerCase()]} da mão`,
+    };
     return true;
   }
 
@@ -300,6 +385,13 @@ function parseLine(line: string, st: ParseState, isSpell: boolean): boolean {
 
   // Spell text: every sentence must parse; at most one target overall.
   if (isSpell) {
+    // Linhas de sentenças acopladas, tratadas inteiras (antes do split).
+    if (/^Choose a nonland card name\. Target player reveals their hand and discards all cards with that name\.$/i.test(line)) {
+      if (st.spellTargets.length > 0) return false;
+      st.spellTargets.push({ what: 'player' });
+      st.spellEffect.push({ op: 'nameCardDiscard', who: 'target:0' });
+      return true;
+    }
     const sentences = line.split(/\.\s+|\.$/).map((s) => s.trim()).filter(Boolean);
     if (sentences.length === 0) return false;
     for (const sentence of sentences) {
@@ -342,10 +434,17 @@ export function compileOracleCard(input: OracleInput): CardDefinition | null {
     spellEffect: [],
   };
 
+  // Spells stay all-or-nothing (a resolução tem que estar certa); permanentes
+  // sem linhas de spell podem ser jogados mesmo com habilidades não
+  // reconhecidas — elas ficam listadas em automationNotes (Tier 1.5 parcial).
+  const unparsed: string[] = [];
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
-    if (!parseLine(line, st, isSpell)) return null;
+    if (!parseLine(line, st, isSpell)) {
+      if (isSpell) return null;
+      unparsed.push(line);
+    }
   }
 
   if (isSpell && st.spellEffect.length === 0) return null;
@@ -353,6 +452,8 @@ export function compileOracleCard(input: OracleInput): CardDefinition | null {
   if (st.enchant && !st.attachEffect) return null;
   if (st.equipCost && !st.attachEffect) return null;
   if (st.attachEffect && !st.enchant && !st.equipCost) return null;
+  // Uma aura sem enchant reconhecido não pode ser conjurada nem parcialmente.
+  if (!st.enchant && subtypes.includes('Aura')) return null;
 
   if (st.equipCost) {
     st.abilities.push({
@@ -382,12 +483,18 @@ export function compileOracleCard(input: OracleInput): CardDefinition | null {
     protectionFrom: st.protectionFrom.length > 0 ? st.protectionFrom : undefined,
     entersTapped: st.entersTapped || undefined,
     cycling: st.cyclingMana ? { mana: st.cyclingMana } : undefined,
-    flashback: st.flashbackCost ? { cost: st.flashbackCost } : undefined,
+    flashback: st.flashbackCost
+      ? { cost: st.flashbackCost }
+      : st.flashbackSacrifice
+        ? { sacrifice: st.flashbackSacrifice }
+        : undefined,
+    altCost: st.altCost,
     enchant: st.enchant,
     attachEffect: st.attachEffect,
     spellTargets: isSpell && st.spellTargets.length > 0 ? st.spellTargets : undefined,
     spellEffect: isSpell ? st.spellEffect : undefined,
     abilities: st.abilities.length > 0 ? st.abilities : undefined,
-    automation: 'full',
+    automation: unparsed.length > 0 ? 'partial' : 'full',
+    automationNotes: unparsed.length > 0 ? unparsed.slice(0, 8) : undefined,
   };
 }

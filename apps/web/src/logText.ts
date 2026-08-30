@@ -130,6 +130,10 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
         : ev.blocks.map((b) => `${b.blockerName} bloqueou ${b.attackerName}`).join('; ') + '.';
     case 'discarded':
       return `${name(ev.player)} descartou ${ev.cardName}.`;
+    case 'cardNamed':
+      return `${name(ev.player)} nomeou "${ev.name}".`;
+    case 'handRevealed':
+      return `${name(ev.player)} revelou a mão: ${ev.cards.length > 0 ? ev.cards.join(', ') : '(vazia)'}.`;
     case 'shuffled':
       return `${name(ev.player)} embaralhou a biblioteca.`;
     case 'priorityChanged':

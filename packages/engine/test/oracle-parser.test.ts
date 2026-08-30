@@ -165,29 +165,34 @@ describe('oracle parser · aceita', () => {
 });
 
 describe('oracle parser · recusa (conservador)', () => {
-  it('linha não reconhecida → null (fica manual)', () => {
-    expect(
-      compileOracleCard({
-        name: 'Guttersnipe',
-        manaCost: '{2}{R}',
-        typeLine: 'Creature — Goblin Shaman',
-        oracleText: 'Whenever you cast an instant or sorcery spell, Guttersnipe deals 2 damage to each opponent.',
-        power: 2,
-        toughness: 2,
-        colors: ['R'],
-      }),
-    ).toBeNull();
+  it('permanente com linha não reconhecida → parcial (jogável, com nota)', () => {
+    const def = compileOracleCard({
+      name: 'Guttersnipe',
+      manaCost: '{2}{R}',
+      typeLine: 'Creature — Goblin Shaman',
+      oracleText: 'Whenever you cast an instant or sorcery spell, Guttersnipe deals 2 damage to each opponent.',
+      power: 2,
+      toughness: 2,
+      colors: ['R'],
+    });
+    expect(def!.automation).toBe('partial');
+    expect(def!.automationNotes).toHaveLength(1);
   });
 
-  it('mana dupla ("Add {W} or {U}") → null', () => {
-    expect(
-      compileOracleCard({
-        name: 'Tranquil Cove',
-        typeLine: 'Land',
-        oracleText: 'Tranquil Cove enters the battlefield tapped.\nWhen Tranquil Cove enters the battlefield, you gain 1 life.\n{T}: Add {W} or {U}.',
-        colors: [],
-      }),
-    ).toBeNull();
+  it('mana dupla ("Add {W} or {U}") → escolha restrita às duas cores', () => {
+    const def = compileOracleCard({
+      name: 'Tranquil Cove',
+      typeLine: 'Land',
+      oracleText: 'Tranquil Cove enters the battlefield tapped.\nWhen Tranquil Cove enters the battlefield, you gain 1 life.\n{T}: Add {W} or {U}.',
+      colors: [],
+    });
+    expect(def!.automation).toBe('full');
+    const mana = def!.abilities!.find((a) => a.kind === 'activated' && a.isManaAbility);
+    expect(mana && mana.kind === 'activated' ? mana.effect[0] : null).toEqual({
+      op: 'addManaChoice',
+      who: 'controller',
+      colors: ['W', 'U'],
+    });
   });
 
   it('mais de um alvo → null', () => {

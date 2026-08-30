@@ -80,6 +80,19 @@ interface Targeting {
   kicked?: boolean;
   /** First N picks are sacrifices for an additional cost (Fling). */
   sacCount?: number;
+  /** Cast via alternative cost (Force of Will). */
+  useAltCost?: boolean;
+  /** Before sacrifices/targets: pick N cards from hand to exile (alt cost). */
+  handPickCount?: number;
+  handPickColor?: string;
+}
+
+/** A little menu of things a clicked card can do (cast / cycle / abilities…). */
+interface ActionMenu {
+  x: number;
+  y: number;
+  title: string;
+  options: { label: string; run: () => void }[];
 }
 
 interface MenuState {
@@ -114,6 +127,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
   const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [actionMenu, setActionMenu] = useState<ActionMenu | null>(null);
+  const [colorPick, setColorPick] = useState<{ objectId: number; abilityIndex: number; colors: string[]; name: string } | null>(null);
+  const [nameText, setNameText] = useState('');
   const [showManual, setShowManual] = useState(false);
   const [showStops, setShowStops] = useState(false);
   const [stops, setStops] = useState<StopsConfig>(loadStops);
@@ -299,18 +315,24 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       if (t.kind === 'trigger') {
         onAction({ type: 'chooseTargets', targets: t.chosen });
       } else if (t.kind === 'spell') {
+        // Ordem dos picks: cartas da mão (custo alternativo) → sacrifícios → alvos.
+        const handPick = t.handPickCount ?? 0;
+        const altExile = t.chosen.slice(0, handPick).flatMap((c) => (c.kind === 'object' ? [c.id] : []));
+        const afterHand = t.chosen.slice(handPick);
         const sacCount = t.sacCount ?? 0;
-        const sacrifices = t.chosen
+        const sacrifices = afterHand
           .slice(0, sacCount)
           .flatMap((c) => (c.kind === 'object' ? [c.id] : []));
         onAction({
           type: 'castSpell',
           objectId: t.objectId,
-          targets: t.chosen.slice(sacCount),
+          targets: afterHand.slice(sacCount),
           x: t.x,
           mode: t.mode,
           kicked: t.kicked,
           sacrifices: sacCount > 0 ? sacrifices : undefined,
+          useAltCost: t.useAltCost,
+          altExile: handPick > 0 ? altExile : undefined,
         });
       } else {
         const sacCount = t.sacCount ?? 0;
@@ -337,8 +359,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     finishTargetingIfDone(t);
   };
 
-  const clickHandCard = (cv: CardView) => {
+  const clickHandCard = (cv: CardView, e?: React.MouseEvent) => {
     setMenu(null);
+    setActionMenu(null);
     if (myMulligan) {
       if (mullTaken === 0) return;
       const next = new Set(bottomSel);
@@ -354,23 +377,78 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       setDiscardSel(next);
       return;
     }
-    if (targeting) return;
+    if (targeting) {
+      // Custo alternativo: os primeiros picks são cartas da mão para exilar.
+      const t = targeting;
+      if (t.handPickCount && t.chosen.length < t.handPickCount) {
+        if (cv.objectId === t.objectId) return;
+        if (t.handPickColor && !cv.card.colors.includes(t.handPickColor as (typeof cv.card.colors)[number])) return;
+        addTarget({ kind: 'object', id: cv.objectId });
+      }
+      return;
+    }
     if (!myPriority) return;
     const def = cv.card;
-    if (def.types.includes('Land')) {
-      onAction({ type: 'playLand', objectId: cv.objectId });
+    const castable = def.automation !== 'manual';
+    const opts: ActionMenu['options'] = [];
+    if (def.types.includes('Land') && castable) {
+      opts.push({ label: '⛰ Jogar terreno', run: () => onAction({ type: 'playLand', objectId: cv.objectId }) });
+    }
+    if (!def.types.includes('Land') && castable) {
+      if (def.spellModes && def.spellModes.length > 0)
+        opts.push({ label: `✨ Conjurar ${def.manaCost ?? ''} (escolher modo)`, run: () => setModalPick(cv) });
+      else opts.push({ label: `✨ Conjurar ${def.manaCost ?? ''}`, run: () => beginCast(cv, undefined) });
+      if (def.altCost)
+        opts.push({ label: `⚡ Conjurar — ${def.altCost.label}`, run: () => beginAltCast(cv) });
+    }
+    if (def.cycling)
+      opts.push({
+        label: `♻ Reciclar (${def.cycling.mana ?? ''}${def.cycling.life ? `${def.cycling.life} vidas` : ''})`,
+        run: () => onAction({ type: 'cycle', objectId: cv.objectId }),
+      });
+    if (!castable) {
+      opts.push({ label: '⚠ Manual: → campo de batalha', run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'battlefield' }) });
+      opts.push({ label: '⚠ Manual: → cemitério', run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'graveyard' }) });
+    }
+    if (opts.length === 0) return;
+    if (opts.length === 1) {
+      opts[0].run();
       return;
     }
-    if (def.automation === 'manual') return; // menu de contexto cuida
-    if (def.spellModes && def.spellModes.length > 0) {
-      setModalPick(cv);
+    setActionMenu({
+      x: Math.min(e?.clientX ?? 200, window.innerWidth - 280),
+      y: Math.min(e?.clientY ?? 200, window.innerHeight - 60 - opts.length * 34),
+      title: def.name,
+      options: opts,
+    });
+  };
+
+  /** Cast paying the alternative cost (Force of Will): exiles first, then targets. */
+  const beginAltCast = (cv: CardView) => {
+    const def = cv.card;
+    const alt = def.altCost;
+    if (!alt) return;
+    const exCount = alt.exileFromHand?.count ?? 0;
+    const exSpecs = Array.from({ length: exCount }, () => ({ what: 'carta da sua mão para exilar' }));
+    const specs = [...exSpecs, ...(def.spellTargets ?? [])];
+    if (specs.length === 0) {
+      onAction({ type: 'castSpell', objectId: cv.objectId, useAltCost: true, altExile: [] });
       return;
     }
-    beginCast(cv, undefined);
+    setTargeting({
+      kind: 'spell',
+      objectId: cv.objectId,
+      specs,
+      chosen: [],
+      label: `${def.name} (${alt.label})`,
+      useAltCost: true,
+      handPickCount: exCount,
+      handPickColor: alt.exileFromHand?.filter.color,
+    });
   };
 
   /** Start casting: asks for X/kicker, then sacrifices/targets, then sends. */
-  const beginCast = (cv: CardView, mode: number | undefined) => {
+  const beginCast = (cv: CardView, mode: number | undefined, fromGraveyard = false) => {
     const def = cv.card;
     let x: number | undefined;
     if (def.manaCost && def.manaCost.includes('{X}')) {
@@ -381,10 +459,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     }
     let kicked: boolean | undefined;
     if (def.kicker) kicked = confirm(`${def.name}: pagar o kicker ${def.kicker.cost}?`);
-    // Custo adicional de sacrifício (Fling): escolhido como os primeiros "alvos".
-    const sacCount = def.additionalCost ? def.additionalCost.count ?? 1 : 0;
+    // Custo adicional de sacrifício (Fling; flashback da Cabal Therapy):
+    // escolhido como os primeiros "alvos".
+    const fbSac = fromGraveyard ? def.flashback?.sacrifice : undefined;
+    const sacCount = def.additionalCost ? def.additionalCost.count ?? 1 : fbSac ? 1 : 0;
     const sacSpecs = Array.from({ length: sacCount }, () => ({
-      what: def.additionalCost?.sacrifice.what ?? 'permanent',
+      what: def.additionalCost?.sacrifice.what ?? fbSac?.what ?? 'permanent',
     }));
     const targetSpecs = mode !== undefined
       ? def.spellModes?.[mode]?.targets ?? []
@@ -401,7 +481,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     }
   };
 
-  const clickFieldCard = (cv: CardView, owner: PlayerId) => {
+  const clickFieldCard = (cv: CardView, owner: PlayerId, e?: React.MouseEvent) => {
     setMenu(null);
     if (targeting) {
       addTarget({ kind: 'object', id: cv.objectId });
@@ -440,13 +520,40 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         setLoyaltyPick(cv);
         return;
       }
-      const idx = abilities.findIndex((a) => a.kind === 'activated');
-      if (idx >= 0) {
-        const ability = abilities[idx];
-        if (ability.kind !== 'activated') return;
-        beginAbility(cv, idx, ability);
+      const activated = abilities
+        .map((a, i) => ({ a, i }))
+        .filter((x): x is { a: Extract<typeof x.a, { kind: 'activated' }>; i: number } => x.a.kind === 'activated');
+      if (activated.length === 0) return;
+      if (activated.length === 1) {
+        startAbility(cv, activated[0].i, activated[0].a);
+        return;
       }
+      setActionMenu({
+        x: Math.min(e?.clientX ?? 200, window.innerWidth - 280),
+        y: Math.min(e?.clientY ?? 200, window.innerHeight - 60 - activated.length * 34),
+        title: cv.card.name,
+        options: activated.map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) })),
+      });
     }
+  };
+
+  /** Route an activated ability: color choice first when it produces "any color" mana. */
+  const startAbility = (
+    cv: CardView,
+    idx: number,
+    ability: Extract<NonNullable<CardView['card']['abilities']>[number], { kind: 'activated' }>,
+  ) => {
+    const choice = ability.effect.find((s) => s.op === 'addManaChoice');
+    if (choice && choice.op === 'addManaChoice') {
+      setColorPick({
+        objectId: cv.objectId,
+        abilityIndex: idx,
+        colors: choice.colors ?? ['W', 'U', 'B', 'R', 'G'],
+        name: cv.card.name,
+      });
+      return;
+    }
+    beginAbility(cv, idx, ability);
   };
 
   /** Activate an ability, collecting sacrifice cost and targets by clicks. */
@@ -538,7 +645,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   })();
 
   return (
-    <div className="table" onClick={() => { setMenu(null); setShowStops(false); }}>
+    <div className="table" onClick={() => { setMenu(null); setShowStops(false); setActionMenu(null); }}>
       {/* -------- oponente -------- */}
       <div className={`opp-bar player-bar ${view.priority === oppId ? 'priority-holder' : ''}`}>
         <div
@@ -580,14 +687,14 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               attachment={attachment}
               targetable={isTargetableCard(c)}
               selected={selBlocker !== null && c.attacking}
-              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }}
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId), e); }}
             />
           ))}
         </div>
         <div className="field-row">
           {rowCards(opp.battlefield, true).map(({ card: c, attachment }) => (
             <CardTile key={c.objectId} card={c} attachment={attachment} targetable={isTargetableCard(c)}
-              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }} />
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId), e); }} />
           ))}
         </div>
       </div>
@@ -688,7 +795,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               attachment={attachment}
               targetable={isTargetableCard(c)}
               selected={attackSel.has(c.objectId) || selBlocker === c.objectId || blockSel.has(c.objectId)}
-              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }}
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId), e); }}
               onContextMenu={(e) => openMenu(e, c)}
             />
           ))}
@@ -700,7 +807,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               card={c}
               attachment={attachment}
               targetable={isTargetableCard(c)}
-              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId)); }}
+              onClick={(e) => { e.stopPropagation(); clickFieldCard(c, controllerOf(c.objectId), e); }}
               onContextMenu={(e) => openMenu(e, c)}
             />
           ))}
@@ -738,7 +845,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               size="hand"
               selected={discardSel.has(c.objectId) || bottomSel.has(c.objectId)}
               dimmed={myDiscard && !discardSel.has(c.objectId) && discardSel.size >= discardCount}
-              onClick={(e) => { e.stopPropagation(); clickHandCard(c); }}
+              onClick={(e) => { e.stopPropagation(); clickHandCard(c, e); }}
               onContextMenu={(e) => openMenu(e, c)}
             />
           ))}
@@ -880,6 +987,85 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         </div>
       )}
 
+      {/* -------- menu de ações da carta (conjurar / reciclar / habilidades) -------- */}
+      {actionMenu && (
+        <div className="context-menu" style={{ left: actionMenu.x, top: actionMenu.y }} onClick={(e) => e.stopPropagation()}>
+          <div className="panel-title" style={{ padding: '4px 10px' }}>{actionMenu.title}</div>
+          {actionMenu.options.map((opt, i) => (
+            <button key={i} onClick={() => { setActionMenu(null); opt.run(); }}>
+              {opt.label}
+            </button>
+          ))}
+          <button className="danger" onClick={() => setActionMenu(null)}>Cancelar</button>
+        </div>
+      )}
+
+      {/* -------- escolha da cor de mana ("any color") -------- */}
+      {colorPick && (
+        <div className="mulligan-overlay" onClick={() => setColorPick(null)}>
+          <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
+            <h2>{colorPick.name}</h2>
+            <div className="muted">Escolha a cor da mana:</div>
+            <div className="row" style={{ justifyContent: 'center' }}>
+              {colorPick.colors.map((c) => (
+                <button
+                  key={c}
+                  className="color-pick-btn"
+                  style={{ background: MANA_COLORS[c] }}
+                  title={`{${c}}`}
+                  onClick={() => {
+                    const pick = colorPick;
+                    setColorPick(null);
+                    onAction({
+                      type: 'activateAbility',
+                      objectId: pick.objectId,
+                      abilityIndex: pick.abilityIndex,
+                      manaColor: c as 'W' | 'U' | 'B' | 'R' | 'G',
+                    });
+                  }}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+            <button className="danger" onClick={() => setColorPick(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* -------- nomear uma carta (Cabal Therapy) -------- */}
+      {myChoice && myChoice.mode === 'nameCard' && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>Nomear carta</h2>
+            <div className="muted">{myChoice.prompt}</div>
+            <input
+              autoFocus
+              placeholder="ex.: Lightning Bolt"
+              value={nameText}
+              onChange={(e) => setNameText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && nameText.trim()) {
+                  onAction({ type: 'effectChoice', picks: [], text: nameText.trim() });
+                  setNameText('');
+                }
+              }}
+              style={{ width: 'min(360px, 80vw)' }}
+            />
+            <button
+              className="primary"
+              disabled={!nameText.trim()}
+              onClick={() => {
+                onAction({ type: 'effectChoice', picks: [], text: nameText.trim() });
+                setNameText('');
+              }}
+            >
+              Confirmar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* -------- menu de contexto (modo manual) -------- */}
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
@@ -914,7 +1100,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                   card={c}
                   size="hand"
                   selected={bottomSel.has(c.objectId)}
-                  onClick={(e) => { e.stopPropagation(); clickHandCard(c); }}
+                  onClick={(e) => { e.stopPropagation(); clickHandCard(c, e); }}
                 />
               ))}
             </div>
@@ -949,7 +1135,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       )}
 
       {/* -------- escolha de efeito (descarte, sacrifício, vidência, busca) -------- */}
-      {myChoice && myChoice.options && (
+      {myChoice && myChoice.mode !== 'nameCard' && myChoice.options && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
             <h2>{myChoice.mode === 'scry' ? 'Vidência' : 'Escolha'}</h2>
@@ -1050,10 +1236,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                     <button
                       onClick={() => {
                         setZonePick(null);
-                        beginCast(c, undefined);
+                        beginCast(c, undefined, true);
                       }}
                     >
-                      ⚡ Flashback {c.card.flashback.cost}
+                      ⚡ Flashback {c.card.flashback.cost ?? (c.card.flashback.sacrifice ? `(sacrifique ${c.card.flashback.sacrifice.what === 'creature' ? 'uma criatura' : 'uma permanente'})` : '')}
                     </button>
                   )}
                 </div>
@@ -1156,8 +1342,10 @@ function StopRow({ step, stops, onChange }: { step: Step; stops: StopsConfig; on
   );
 }
 
+const MANA_COLORS: Record<string, string> = { W: '#e8e2d0', U: '#5b9bd5', B: '#9b8fb0', R: '#d5745b', G: '#6bbf7e', C: '#b0b0b0' };
+
 function ManaChips({ pool }: { pool: Record<string, number> }) {
-  const COLORS: Record<string, string> = { W: '#e8e2d0', U: '#5b9bd5', B: '#9b8fb0', R: '#d5745b', G: '#6bbf7e', C: '#b0b0b0' };
+  const COLORS = MANA_COLORS;
   const chips = Object.entries(pool).filter(([, n]) => n > 0);
   if (chips.length === 0) return null;
   return (

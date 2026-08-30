@@ -7,7 +7,7 @@
  */
 import type { PlayerAction } from './actions.js';
 import type { ActivatedAbility, CardDefinition, PlayerConfig, TargetSpec } from './cards/types.js';
-import { isPermanentCard } from './cards/types.js';
+import { cardMatchesFilter, isPermanentCard } from './cards/types.js';
 import { canAttack, canBlock, clearCombat, resolveCombatDamage } from './combat.js';
 import {
   applyEffectChoice,
@@ -252,7 +252,10 @@ export class Game {
 
   private fail(playerId: PlayerId, message: string): ApplyResult {
     this.buf.push({ type: 'error', player: playerId, message });
-    return { ok: false, events: this.flush() };
+    // NÃO fazer flush aqui: os do* usam fail() como expressão e o apply()
+    // faz o flush final — flushar duas vezes engolia a mensagem de erro
+    // (todo erro chegava ao cliente como "ação inválida").
+    return { ok: false, events: [...this.buf] };
   }
 
   // ---------------------------------------------------------------- actions
@@ -279,13 +282,13 @@ export class Game {
       case 'playLand':
         return this.doPlayLand(playerId, action.objectId);
       case 'castSpell':
-        return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices, action.kicked);
+        return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices, action.kicked, action.useAltCost, action.altExile);
       case 'effectChoice':
-        return this.doEffectChoice(playerId, action.picks);
+        return this.doEffectChoice(playerId, action.picks, action.text);
       case 'chooseTargets':
         return this.doChooseTargets(playerId, action.targets);
       case 'activateAbility':
-        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices);
+        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices, action.manaColor);
       case 'cycle':
         return this.doCycle(playerId, action.objectId);
       case 'declareAttackers':
@@ -411,6 +414,8 @@ export class Game {
     modeIndex?: number,
     sacrifices?: number[],
     kicked?: boolean,
+    useAltCost?: boolean,
+    altExile?: number[],
   ): boolean {
     const s = this.state;
     const err = this.requirePriority(playerId);
@@ -450,41 +455,78 @@ export class Game {
     const targetErr = this.validateTargets(playerId, specs, targets, card.colors);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
 
-    // Additional cost: sacrifice (Fling-style). Validated before any payment.
+    // Additional cost: sacrifice (Fling-style; flashback may also demand one,
+    // e.g. Cabal Therapy). Validated before any payment.
+    const sacReq =
+      card.additionalCost ??
+      (viaFlashback && card.flashback?.sacrifice
+        ? { sacrifice: card.flashback.sacrifice, count: 1 }
+        : undefined);
     const sacs = sacrifices ?? [];
-    if (card.additionalCost) {
-      const need = card.additionalCost.count ?? 1;
+    if (sacReq) {
+      const need = sacReq.count ?? 1;
       if (sacs.length !== need)
         { this.fail(playerId, `custo adicional: sacrifique ${need} permanente(s)`); return false; }
       for (const id of sacs) {
         const sacObj = s.objects[id];
         if (!sacObj || sacObj.zone !== 'battlefield' || sacObj.controller !== playerId)
           { this.fail(playerId, 'sacrifício inválido'); return false; }
-        if (!matchFilter({ controller: playerId, sourceId: obj.id }, card.additionalCost.sacrifice, sacObj))
+        if (!matchFilter({ controller: playerId, sourceId: obj.id }, sacReq.sacrifice, sacObj))
           { this.fail(playerId, `${sacObj.card.name} não satisfaz o custo adicional`); return false; }
       }
     } else if (sacs.length > 0) {
       { this.fail(playerId, 'essa mágica não tem custo adicional de sacrifício'); return false; }
     }
 
-    const cost = parseCost(viaFlashback ? card.flashback!.cost : card.manaCost);
-    if (kicked && card.kicker) {
-      const kick = parseCost(card.kicker.cost);
-      cost.generic += kick.generic;
-      cost.colorless += kick.colorless;
-      cost.colored.push(...kick.colored);
-      cost.xCount += kick.xCount;
+    // Alternative cost (Force of Will): life and/or exiling hand cards
+    // replace the mana cost entirely.
+    const alt = useAltCost ? card.altCost : undefined;
+    if (useAltCost && !alt)
+      { this.fail(playerId, 'essa mágica não tem custo alternativo'); return false; }
+    if (useAltCost && viaFlashback)
+      { this.fail(playerId, 'custo alternativo não se combina com flashback'); return false; }
+    const exiles = altExile ?? [];
+    if (alt) {
+      const needExile = alt.exileFromHand?.count ?? 0;
+      if (exiles.length !== needExile || new Set(exiles).size !== exiles.length)
+        { this.fail(playerId, `custo alternativo: exile ${needExile} carta(s) da mão`); return false; }
+      for (const id of exiles) {
+        const exObj = s.objects[id];
+        if (!exObj || exObj.zone !== 'hand' || exObj.owner !== playerId || id === obj.id)
+          { this.fail(playerId, 'carta inválida para exilar'); return false; }
+        if (alt.exileFromHand && !cardMatchesFilter(exObj.card, alt.exileFromHand.filter))
+          { this.fail(playerId, `${exObj.card.name} não satisfaz o custo alternativo`); return false; }
+      }
+      if (alt.payLife && s.players[playerId].life < alt.payLife)
+        { this.fail(playerId, `você precisa de ${alt.payLife} pontos de vida para pagar`); return false; }
+    } else if (exiles.length > 0) {
+      { this.fail(playerId, 'essa mágica não tem custo alternativo'); return false; }
     }
+
     let xValue: number | undefined;
-    if (cost.xCount > 0) {
-      if (x === undefined || !Number.isInteger(x) || x < 0)
-        { this.fail(playerId, 'escolha um valor de X'); return false; }
-      xValue = x;
-      cost.generic += x * cost.xCount;
+    if (alt) {
+      // X with an alternative cost is untypical; treat as 0 when present.
+      if (alt.payLife) changeLife(s, playerId, -alt.payLife, `custo de ${card.name}`, this.emit);
+      for (const id of exiles) moveWithEvent(s, s.objects[id], 'exile', 'exiled', this.emit);
+    } else {
+      const cost = parseCost(viaFlashback ? card.flashback!.cost : card.manaCost);
+      if (kicked && card.kicker) {
+        const kick = parseCost(card.kicker.cost);
+        cost.generic += kick.generic;
+        cost.colorless += kick.colorless;
+        cost.colored.push(...kick.colored);
+        cost.xCount += kick.xCount;
+      }
+      if (cost.xCount > 0) {
+        if (x === undefined || !Number.isInteger(x) || x < 0)
+          { this.fail(playerId, 'escolha um valor de X'); return false; }
+        xValue = x;
+        cost.generic += x * cost.xCount;
+      }
+      const plan = planPayment(s, playerId, cost);
+      if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
+      this.payWithPlan(playerId, plan);
     }
-    const plan = planPayment(s, playerId, cost);
-    if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
-    this.payWithPlan(playerId, plan);
 
     // Pay the sacrifice cost (power recorded first, for 'sacrificedPower').
     let sacrificedPower: number | undefined;
@@ -499,7 +541,8 @@ export class Game {
       (mode ? `${card.name} — ${mode.label}` : card.name) +
       (xValue !== undefined ? ` (X=${xValue})` : '') +
       (kicked ? ' (com kicker)' : '') +
-      (viaFlashback ? ' (flashback)' : '');
+      (viaFlashback ? ' (flashback)' : '') +
+      (alt ? ' (custo alternativo)' : '');
     const baseEffect = mode ? mode.effect : card.spellEffect ?? [];
     const effect = kicked && card.kicker ? [...baseEffect, ...card.kicker.effect] : baseEffect;
     s.stack.push({
@@ -558,6 +601,7 @@ export class Game {
     abilityIndex: number,
     targets: TargetChoice[],
     sacrifices?: number[],
+    manaColor?: 'W' | 'U' | 'B' | 'R' | 'G',
   ): boolean {
     const s = this.state;
     const obj = s.objects[objectId];
@@ -576,6 +620,26 @@ export class Game {
         { this.fail(playerId, 'só na sua fase principal com a pilha vazia (como uma feitiçaria)'); return false; }
     } else if (s.pendingDecision || s.status !== 'playing') {
       { this.fail(playerId, 'agora não'); return false; }
+    }
+
+    // Metalcraft-style activation condition.
+    if (ability.condition) {
+      const req = ability.condition.controlsAtLeast;
+      const have = s.players[playerId].zones.battlefield
+        .map((id) => s.objects[id])
+        .filter((o) => matchFilter({ controller: playerId, sourceId: obj.id }, req.filter, o)).length;
+      if (have < req.count) {
+        this.fail(playerId, `${obj.card.name}: requer ${req.count} ${req.filter.what ?? 'permanente'}(s) — você controla ${have}`);
+        return false;
+      }
+    }
+
+    // "Add one mana of any color": the activation must carry the color.
+    const choiceStep = ability.effect.find((e) => e.op === 'addManaChoice');
+    if (choiceStep && choiceStep.op === 'addManaChoice') {
+      if (!manaColor) { this.fail(playerId, 'escolha a cor da mana'); return false; }
+      if (choiceStep.colors && !choiceStep.colors.includes(manaColor))
+        { this.fail(playerId, `${obj.card.name} não produz {${manaColor}}`); return false; }
     }
 
     if (ability.cost.tap) {
@@ -615,12 +679,15 @@ export class Game {
 
     if (ability.isManaAbility) {
       runEffectScript(
-        { state: s, controller: playerId, sourceId: obj.id, sourceName: obj.card.name, targets, emit: this.emit },
+        { state: s, controller: playerId, sourceId: obj.id, sourceName: obj.card.name, targets, chosenMana: manaColor, emit: this.emit },
         ability.effect,
       );
-      // A tap for mana can be undone until the mana is spent or priority moves.
-      if (ability.cost.tap) {
-        const mana = ability.effect.flatMap((step) => (step.op === 'addMana' ? step.mana : []));
+      // A tap for mana can be undone until the mana is spent or priority
+      // moves — but never when other costs were paid (sacrifice, life).
+      if (ability.cost.tap && !ability.cost.sacrificeSelf && !ability.cost.sacrifice && !ability.cost.payLife) {
+        const mana = ability.effect.flatMap((step) =>
+          step.op === 'addMana' ? step.mana : step.op === 'addManaChoice' && manaColor ? [manaColor] : [],
+        );
         if (mana.length > 0) s.reversibleTaps.push({ objectId: obj.id, mana });
       }
       return true;
@@ -823,11 +890,18 @@ export class Game {
     return true;
   }
 
-  private doEffectChoice(playerId: PlayerId, picks: number[]): boolean {
+  private doEffectChoice(playerId: PlayerId, picks: number[], text?: string): boolean {
     const s = this.state;
     const pending = s.pendingDecision;
     if (!pending || pending.type !== 'effectChoice' || pending.player !== playerId)
       { this.fail(playerId, 'nenhuma escolha pendente para você'); return false; }
+    if (pending.mode === 'nameCard') {
+      const name = (text ?? '').trim();
+      if (!name || name.length > 120)
+        { this.fail(playerId, 'digite o nome de uma carta'); return false; }
+      applyEffectChoice(s, pending, [], this.emit, name);
+      return true;
+    }
     if (new Set(picks).size !== picks.length)
       { this.fail(playerId, 'escolha repetida'); return false; }
     if (picks.length < pending.min || picks.length > pending.max)
