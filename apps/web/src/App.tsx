@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DeckSpec, GameView, LobbyPlayer, PlayerAction, ServerMessage } from '@sloptcg/protocol';
+import type { CountedCard, DeckSpec, GameView, LobbyPlayer, MatchStateMsg, PlayerAction, ServerMessage } from '@sloptcg/protocol';
 import { GameBoard } from './components/GameBoard';
 import { Home } from './components/Home';
 import { Lobby } from './components/Lobby';
+import { Sideboard } from './components/Sideboard';
 import { eventText } from './logText';
 import { clearSession, loadSession, NetClient, saveSession, type Session } from './net';
 
 type Screen = 'home' | 'lobby' | 'game';
+
+interface SideboardInfo {
+  main: CountedCard[];
+  side: CountedCard[];
+  ready: boolean;
+  opponentReady: boolean;
+}
 
 export function App() {
   const netRef = useRef<NetClient | null>(null);
@@ -17,6 +25,8 @@ export function App() {
   const [view, setView] = useState<GameView | null>(null);
   const [syncSeq, setSyncSeq] = useState(0);
   const [log, setLog] = useState<string[]>([]);
+  const [match, setMatch] = useState<MatchStateMsg | null>(null);
+  const [sideboard, setSideboard] = useState<SideboardInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const viewRef = useRef<GameView | null>(null);
 
@@ -53,6 +63,13 @@ export function App() {
         }
         return;
       }
+      case 'matchState':
+        setMatch(msg);
+        if (msg.phase === 'playing') setSideboard(null);
+        return;
+      case 'sideboardState':
+        setSideboard({ main: msg.main, side: msg.side, ready: msg.ready, opponentReady: msg.opponentReady });
+        return;
       case 'serverError':
         showError(msg.message);
         return;
@@ -127,6 +144,8 @@ export function App() {
     setSession(null);
     setView(null);
     setLog([]);
+    setMatch(null);
+    setSideboard(null);
     setLobbyPlayers([]);
     setScreen('home');
   };
@@ -147,8 +166,24 @@ export function App() {
           onStart={() => netRef.current?.send({ type: 'startGame' })}
         />
       )}
-      {screen === 'game' && view && (
-        <GameBoard view={view} syncSeq={syncSeq} log={log} onAction={sendAction} onExit={exitToHome} />
+      {screen === 'game' && match?.phase === 'sideboarding' && sideboard && session && (
+        <Sideboard
+          info={sideboard}
+          match={match}
+          you={session.playerId}
+          onSubmit={(main) => netRef.current?.send({ type: 'sideboard', main })}
+          onReady={() => netRef.current?.send({ type: 'readyNextGame' })}
+        />
+      )}
+      {screen === 'game' && match?.phase !== 'sideboarding' && view && (
+        <GameBoard
+          view={view}
+          syncSeq={syncSeq}
+          log={log}
+          match={match ? { wins: match.wins, gameNumber: match.gameNumber } : null}
+          onAction={sendAction}
+          onExit={exitToHome}
+        />
       )}
       {error && <div className="error-toast">{error}</div>}
     </>

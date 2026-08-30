@@ -359,6 +359,23 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .mulligan-hand { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .choice-hand { max-height: 46vh; overflow-y: auto; }
 
+.roll-row { display: flex; gap: 24px; }
+.roll-die {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 28px;
+  text-align: center;
+  font-size: 30px;
+  background: var(--panel2);
+}
+.roll-die.winner { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+.sb-columns { display: flex; gap: 16px; width: 100%; }
+.sb-col { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 10px; min-height: 200px; }
+.sb-col h4 { margin: 0 0 8px; }
+.sb-card { display: flex; justify-content: space-between; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.sb-card:hover { background: var(--panel); }
+
 .stops-panel { min-width: 220px; }
 .stops-grid {
   display: grid;

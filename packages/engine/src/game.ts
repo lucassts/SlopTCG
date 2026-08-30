@@ -42,8 +42,13 @@ export interface ApplyResult {
 }
 
 export interface GameOptions {
-  /** Force who goes first (otherwise decided by the seeded RNG). */
+  /** Force who goes first, skipping the roll AND the choice (tests). */
   firstPlayer?: PlayerId;
+  /**
+   * Skip the roll and let this player choose who starts (match rules: the
+   * loser of the previous game decides).
+   */
+  starterChooser?: PlayerId;
 }
 
 export class Game {
@@ -61,33 +66,80 @@ export class Game {
     this.buf.push(ev);
   };
 
-  /** Deal opening hands and start turn 1. Call exactly once. */
+  /** Deal opening hands and begin the pre-game flow. Call exactly once. */
   start(): GameEvent[] {
     this.buf = [];
     this.triggerCursor = 0;
     const s = this.state;
-    const r = nextRandom(s.rngState);
-    s.rngState = r.state;
-    const first: PlayerId = this.options.firstPlayer ?? (r.value < 0.5 ? 'p1' : 'p2');
-    s.onThePlay = first;
-    s.activePlayer = first;
     this.emit({
       type: 'gameStarted',
       players: PLAYER_IDS.map((p) => ({ id: p, name: s.players[p].name })),
       seed: s.seed,
-      onThePlay: first,
+      onThePlay: s.onThePlay,
     });
     for (const p of PLAYER_IDS) {
       this.emit({ type: 'shuffled', player: p });
       for (let i = 0; i < STARTING_HAND; i++) draw(s, p, this.emit);
     }
-    // London mulligan: turn 1 only starts after both players keep.
+
+    if (this.options.firstPlayer) {
+      // Tests: skip roll + choice entirely.
+      s.onThePlay = this.options.firstPlayer;
+      s.activePlayer = this.options.firstPlayer;
+      this.beginMulligan();
+      return this.flush();
+    }
+
+    if (this.options.starterChooser) {
+      // Match games 2+: the previous loser decides, no roll.
+      s.starter = { rolls: { p1: 0, p2: 0 }, rerolls: 0, winner: this.options.starterChooser, chosen: false };
+      this.emit({ type: 'decisionRequired', player: this.options.starterChooser, decision: 'chooseStarter' });
+      return this.flush();
+    }
+
+    // Game 1: both players roll 1–100; ties reroll automatically.
+    let p1 = 0;
+    let p2 = 0;
+    let rerolls = -1;
+    do {
+      rerolls += 1;
+      let r = nextRandom(s.rngState);
+      s.rngState = r.state;
+      p1 = 1 + Math.floor(r.value * 100);
+      r = nextRandom(s.rngState);
+      s.rngState = r.state;
+      p2 = 1 + Math.floor(r.value * 100);
+    } while (p1 === p2);
+    const winner: PlayerId = p1 > p2 ? 'p1' : 'p2';
+    s.starter = { rolls: { p1, p2 }, rerolls, winner, chosen: false };
+    this.emit({ type: 'startingRoll', rolls: { p1, p2 }, rerolls, winner });
+    this.emit({ type: 'decisionRequired', player: winner, decision: 'chooseStarter' });
+    return this.flush();
+  }
+
+  private beginMulligan(): void {
+    const s = this.state;
     s.mulligan = {
       taken: { p1: 0, p2: 0 },
       phase: { p1: 'deciding', p2: 'deciding' },
     };
     for (const p of PLAYER_IDS) this.emit({ type: 'decisionRequired', player: p, decision: 'mulligan' });
-    return this.flush();
+  }
+
+  private doChooseStarter(playerId: PlayerId, first: PlayerId): boolean {
+    const s = this.state;
+    if (!s.starter || s.starter.chosen)
+      { this.fail(playerId, 'não há escolha de quem começa pendente'); return false; }
+    if (s.starter.winner !== playerId)
+      { this.fail(playerId, 'a escolha de quem começa não é sua'); return false; }
+    if (!PLAYER_IDS.includes(first))
+      { this.fail(playerId, 'jogador inválido'); return false; }
+    s.starter.chosen = true;
+    s.onThePlay = first;
+    s.activePlayer = first;
+    this.emit({ type: 'starterChosen', first, by: playerId });
+    this.beginMulligan();
+    return true;
   }
 
   private beginFirstTurn(): void {
@@ -163,6 +215,14 @@ export class Game {
     }
 
     if (
+      s.starter !== null &&
+      !s.starter.chosen &&
+      !['chooseStarter', 'concede', 'chat'].includes(action.type)
+    ) {
+      return this.fail(playerId, 'aguardando a escolha de quem começa');
+    }
+
+    if (
       s.mulligan !== null &&
       !['mulligan', 'keepHand', 'concede', 'chat'].includes(action.type)
     ) {
@@ -208,6 +268,10 @@ export class Game {
         return true;
       case 'passPriority':
         return this.doPassPriority(playerId);
+      case 'chooseStarter':
+        return this.doChooseStarter(playerId, action.first);
+      case 'undoTap':
+        return this.doUndoTap(playerId, action.objectId);
       case 'mulligan':
         return this.doMulligan(playerId);
       case 'keepHand':
@@ -271,6 +335,29 @@ export class Game {
     }
     s.passCount += 1;
     s.priority = opponentOf(playerId);
+    s.reversibleTaps = [];
+    return true;
+  }
+
+  /** Undo a tap-for-mana whose mana is still floating (MTGO-style). */
+  private doUndoTap(playerId: PlayerId, objectId: number): boolean {
+    const s = this.state;
+    const idx = s.reversibleTaps.findIndex((r) => r.objectId === objectId);
+    const obj = s.objects[objectId];
+    if (idx < 0 || !obj || obj.controller !== playerId || !obj.tapped)
+      { this.fail(playerId, 'essa virada não pode mais ser desfeita'); return false; }
+    const entry = s.reversibleTaps[idx];
+    const pool = s.players[playerId].manaPool;
+    const needed: Partial<Record<string, number>> = {};
+    for (const sym of entry.mana) needed[sym] = (needed[sym] ?? 0) + 1;
+    for (const [sym, n] of Object.entries(needed)) {
+      if ((pool[sym as keyof typeof pool] ?? 0) < (n ?? 0))
+        { this.fail(playerId, 'a mana já foi usada — não dá para desfazer'); return false; }
+    }
+    for (const sym of entry.mana) pool[sym] -= 1;
+    s.reversibleTaps.splice(idx, 1);
+    setTapped(s, obj, false, this.emit);
+    this.emit({ type: 'tapUndone', objectId: obj.id, cardName: obj.card.name, player: playerId });
     return true;
   }
 
@@ -455,6 +542,7 @@ export class Game {
 
   private payWithPlan(playerId: PlayerId, plan: import('./mana.js').PaymentPlan): void {
     const s = this.state;
+    s.reversibleTaps = []; // mana committed: taps are no longer undoable
     for (const tap of plan.taps) {
       const src = s.objects[tap.objectId];
       setTapped(s, src, true, this.emit);
@@ -530,6 +618,11 @@ export class Game {
         { state: s, controller: playerId, sourceId: obj.id, sourceName: obj.card.name, targets, emit: this.emit },
         ability.effect,
       );
+      // A tap for mana can be undone until the mana is spent or priority moves.
+      if (ability.cost.tap) {
+        const mana = ability.effect.flatMap((step) => (step.op === 'addMana' ? step.mana : []));
+        if (mana.length > 0) s.reversibleTaps.push({ objectId: obj.id, mana });
+      }
       return true;
     }
 
@@ -920,6 +1013,7 @@ export class Game {
     const s = this.state;
     s.step = step;
     s.passCount = 0;
+    s.reversibleTaps = [];
     for (const p of PLAYER_IDS) s.players[p].manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
     this.emit({ type: 'stepChanged', step });
 

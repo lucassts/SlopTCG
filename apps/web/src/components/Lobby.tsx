@@ -30,16 +30,20 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
     onSetDeck({ kind: 'demo', name });
   };
 
-  const finishImport = async (entries: { name: string; count: number }[]) => {
+  const finishImport = async (
+    entries: { name: string; count: number }[],
+    sideboard: { name: string; count: number }[],
+  ) => {
     const result = await resolveDecklist(entries);
     if (result.cards.length === 0) throw new Error('nenhuma carta encontrada no Scryfall');
-    onSetDeck({ kind: 'external', cards: result.cards });
+    onSetDeck({ kind: 'external', cards: result.cards, sideboard });
     setChoice('custom');
     const total = result.cards.reduce((n, c) => n + c.count, 0);
+    const sideTotal = sideboard.reduce((n, c) => n + c.count, 0);
     setImportInfo(
-      `${total} cartas importadas.` +
+      `${total} cartas importadas${sideTotal > 0 ? ` + ${sideTotal} de sideboard` : ''}.` +
         (result.notFound.length > 0 ? ` Não encontradas: ${result.notFound.join(', ')}.` : '') +
-        ' Cartas fora do set demo entram em modo manual.',
+        ' Cartas com texto reconhecido são automatizadas; as demais, modo manual.',
     );
   };
 
@@ -47,9 +51,9 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
     setImporting(true);
     setImportInfo(null);
     try {
-      const entries = parseDecklist(customText);
-      if (entries.length === 0) throw new Error('cole uma lista tipo "4 Lightning Bolt"');
-      await finishImport(entries);
+      const { main, side } = parseDecklist(customText);
+      if (main.length === 0) throw new Error('cole uma lista tipo "4 Lightning Bolt"');
+      await finishImport(main, side);
     } catch (err) {
       setImportInfo(`Erro: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -62,9 +66,14 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
     setImportInfo(null);
     try {
       const res = await fetch(`${serverHttpBase()}/api/deck?url=${encodeURIComponent(deckUrl.trim())}`);
-      const data = (await res.json()) as { name?: string; cards?: { name: string; count: number }[]; error?: string };
+      const data = (await res.json()) as {
+        name?: string;
+        cards?: { name: string; count: number }[];
+        sideboard?: { name: string; count: number }[];
+        error?: string;
+      };
       if (!res.ok || !data.cards) throw new Error(data.error ?? `servidor respondeu ${res.status}`);
-      await finishImport(data.cards);
+      await finishImport(data.cards, data.sideboard ?? []);
       setImportInfo((prev) => `Deck "${data.name}": ${prev ?? ''}`);
     } catch (err) {
       setImportInfo(`Erro: ${err instanceof Error ? err.message : String(err)}`);

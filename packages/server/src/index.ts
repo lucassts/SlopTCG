@@ -27,24 +27,44 @@ import {
   type GameEvent,
   type PlayerId,
 } from '@sloptcg/engine';
-import type { ClientMessage, DeckSpec, ExternalCard, LobbyPlayer, ServerMessage } from '@sloptcg/protocol';
+import type { ClientMessage, CountedCard, DeckSpec, LobbyPlayer, ServerMessage } from '@sloptcg/protocol';
 import { PROTOCOL_VERSION } from '@sloptcg/protocol';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const ROOM_TTL_MS = 1000 * 60 * 60 * 3;
 
+/** A player's card pool for the match: resolved defs + current main/side. */
+interface DeckPool {
+  defs: Map<string, CardDefinition>;
+  /** Total copies per name across main + side (fixed for the match). */
+  total: Map<string, number>;
+  main: CountedCard[];
+  side: CountedCard[];
+}
+
 interface Seat {
   playerId: PlayerId;
   name: string;
   token: string;
-  deck: DeckList | null;
+  pool: DeckPool | null;
   socket: WebSocket | null;
+}
+
+/** Best-of-3 match progress. */
+interface MatchState {
+  wins: Record<PlayerId, number>;
+  gameNumber: number;
+  phase: 'lobby' | 'playing' | 'sideboarding' | 'finished';
+  lastLoser?: PlayerId;
+  ready: Record<PlayerId, boolean>;
+  matchWinner?: PlayerId;
 }
 
 interface Room {
   code: string;
   seats: Partial<Record<PlayerId, Seat>>;
   game: Game | null;
+  match: MatchState;
   lastActivity: number;
 }
 
@@ -72,9 +92,87 @@ function lobbyState(room: Room): LobbyPlayer[] {
     .map((s) => ({
       playerId: s.playerId,
       name: s.name,
-      deckReady: s.deck !== null,
+      deckReady: s.pool !== null,
       connected: s.socket !== null && s.socket.readyState === WebSocket.OPEN,
     }));
+}
+
+function matchStateMsg(room: Room): Extract<ServerMessage, { type: 'matchState' }> {
+  const m = room.match;
+  return {
+    type: 'matchState',
+    wins: m.wins,
+    gameNumber: m.gameNumber,
+    phase: m.phase === 'lobby' ? 'playing' : m.phase,
+    matchWinner: m.matchWinner,
+  };
+}
+
+function broadcastMatch(room: Room): void {
+  for (const seat of Object.values(room.seats)) {
+    if (seat.socket) send(seat.socket, matchStateMsg(room));
+  }
+}
+
+function sendSideboardState(room: Room, seat: Seat): void {
+  if (!seat.socket || !seat.pool) return;
+  const opp = room.seats[seat.playerId === 'p1' ? 'p2' : 'p1'];
+  send(seat.socket, {
+    type: 'sideboardState',
+    main: seat.pool.main,
+    side: seat.pool.side,
+    ready: room.match.ready[seat.playerId],
+    opponentReady: opp ? room.match.ready[opp.playerId] : false,
+  });
+}
+
+/** After any batch of game events: advance the match on a game end. */
+function afterGameEvents(room: Room, events: GameEvent[]): void {
+  const end = events.find((e) => e.type === 'gameEnded');
+  if (!end || end.type !== 'gameEnded' || room.match.phase !== 'playing') return;
+  const m = room.match;
+  if (end.winner !== 'draw') {
+    m.wins[end.winner] += 1;
+    m.lastLoser = end.winner === 'p1' ? 'p2' : 'p1';
+  }
+  if (m.wins.p1 >= 2 || m.wins.p2 >= 2) {
+    m.phase = 'finished';
+    m.matchWinner = m.wins.p1 >= 2 ? 'p1' : 'p2';
+  } else {
+    m.phase = 'sideboarding';
+    m.ready = { p1: false, p2: false };
+  }
+  broadcastMatch(room);
+  if (m.phase === 'sideboarding') {
+    for (const seat of Object.values(room.seats)) sendSideboardState(room, seat);
+  }
+}
+
+/** Both players ready: rebuild decks from their pools and start the next game. */
+function startNextGame(room: Room): void {
+  const p1 = room.seats.p1;
+  const p2 = room.seats.p2;
+  if (!p1?.pool || !p2?.pool) return;
+  const expand = (pool: DeckPool): DeckList => ({
+    cards: pool.main.flatMap((entry) => {
+      const def = pool.defs.get(entry.name.toLowerCase());
+      return def ? Array.from({ length: entry.count }, () => def) : [];
+    }),
+  });
+  const m = room.match;
+  m.gameNumber += 1;
+  m.phase = 'playing';
+  const seed = randomBytes(4).readUInt32LE(0);
+  room.game = new Game(
+    [
+      { id: 'p1', name: p1.name, deck: expand(p1.pool) },
+      { id: 'p2', name: p2.name, deck: expand(p2.pool) },
+    ],
+    seed,
+    { starterChooser: m.lastLoser },
+  );
+  broadcastMatch(room);
+  broadcastGame(room, room.game.start());
 }
 
 function broadcastLobby(room: Room): void {
@@ -207,30 +305,57 @@ function splitTypeLine(typeLine: string): { types: CardType[]; subtypes: string[
   };
 }
 
-async function buildDeck(spec: DeckSpec): Promise<DeckList | string> {
-  if (spec.kind === 'demo') {
-    return spec.name === 'gruul' ? demoDeckGruul() : demoDeckAzorius();
-  }
-  if (!Array.isArray(spec.cards) || spec.cards.length === 0) return 'deck vazio';
-  const entries = spec.cards
+function countNames(cards: CardDefinition[]): CountedCard[] {
+  const counts = new Map<string, number>();
+  for (const c of cards) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+  return [...counts].map(([name, count]) => ({ name, count }));
+}
+
+function sanitizeEntries(raw: CountedCard[] | undefined): CountedCard[] {
+  return (raw ?? [])
     .map((c) => ({ name: String(c.name ?? '').slice(0, 200), count: Math.min(Math.max(1, Math.floor(c.count || 1)), 99) }))
     .filter((c) => c.name.length > 0);
-  const official = await resolveOfficialCards(entries.map((e) => e.name));
-  const cards: CardDefinition[] = [];
+}
+
+async function buildPool(spec: DeckSpec): Promise<DeckPool | string> {
+  if (spec.kind === 'demo') {
+    const mainCards = (spec.name === 'gruul' ? demoDeckGruul() : demoDeckAzorius()).cards;
+    const sideIds =
+      spec.name === 'gruul'
+        ? ['pyroclasm', 'fog', 'act-of-treason']
+        : ['day-of-judgment', 'preordain', 'opt'];
+    const sideCards = sideIds.flatMap((id) => [DEMO_CARDS[id], DEMO_CARDS[id]]);
+    const defs = new Map<string, CardDefinition>();
+    for (const c of [...mainCards, ...sideCards]) defs.set(c.name.toLowerCase(), c);
+    const main = countNames(mainCards);
+    const side = countNames(sideCards);
+    const total = new Map<string, number>();
+    for (const e of [...main, ...side]) total.set(e.name, (total.get(e.name) ?? 0) + e.count);
+    return { defs, total, main, side };
+  }
+
+  const main = sanitizeEntries(spec.cards as CountedCard[]);
+  const side = sanitizeEntries(spec.sideboard);
+  if (main.length === 0) return 'deck vazio';
+  const mainTotal = main.reduce((n, c) => n + c.count, 0);
+  const sideTotal = side.reduce((n, c) => n + c.count, 0);
+  if (mainTotal < 20) return 'deck precisa de pelo menos 20 cartas';
+  if (mainTotal > 300) return 'deck grande demais (máx. 300)';
+  if (sideTotal > 15) return 'sideboard: no máximo 15 cartas';
+
+  const names = [...new Set([...main, ...side].map((e) => e.name))];
+  const official = await resolveOfficialCards(names);
+  const defs = new Map<string, CardDefinition>();
   const notFound: string[] = [];
-  for (const entry of entries) {
-    const data = official.get(entry.name.toLowerCase());
-    if (!data) {
-      notFound.push(entry.name);
-      continue;
-    }
-    const def = officialToDefinition(data);
-    for (let i = 0; i < entry.count; i++) cards.push(def);
+  for (const name of names) {
+    const data = official.get(name.toLowerCase());
+    if (!data) notFound.push(name);
+    else defs.set(name.toLowerCase(), officialToDefinition(data));
   }
   if (notFound.length > 0) return `cartas não encontradas: ${notFound.slice(0, 5).join(', ')}`;
-  if (cards.length < 20) return 'deck precisa de pelo menos 20 cartas';
-  if (cards.length > 300) return 'deck grande demais (máx. 300)';
-  return { cards };
+  const total = new Map<string, number>();
+  for (const e of [...main, ...side]) total.set(e.name, (total.get(e.name) ?? 0) + e.count);
+  return { defs, total, main, side };
 }
 
 // ---------------------------------------------------------------- handlers
@@ -243,12 +368,18 @@ interface ConnState {
 function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): void {
   switch (msg.type) {
     case 'createRoom': {
-      const room: Room = { code: makeRoomCode(), seats: {}, game: null, lastActivity: Date.now() };
+      const room: Room = {
+        code: makeRoomCode(),
+        seats: {},
+        game: null,
+        match: { wins: { p1: 0, p2: 0 }, gameNumber: 0, phase: 'lobby', ready: { p1: false, p2: false } },
+        lastActivity: Date.now(),
+      };
       const seat: Seat = {
         playerId: 'p1',
         name: sanitizeName(msg.playerName),
         token: randomBytes(16).toString('hex'),
-        deck: null,
+        pool: null,
         socket,
       };
       room.seats.p1 = seat;
@@ -267,7 +398,7 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
         playerId: 'p2',
         name: sanitizeName(msg.playerName),
         token: randomBytes(16).toString('hex'),
-        deck: null,
+        pool: null,
         socket,
       };
       room.seats.p2 = seat;
@@ -288,7 +419,10 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
       conn.room = room;
       conn.playerId = seat.playerId;
       send(socket, { type: 'roomJoined', roomCode: room.code, token: seat.token, playerId: seat.playerId, protocolVersion: PROTOCOL_VERSION });
-      if (room.game) {
+      if (room.match.phase !== 'lobby') send(socket, matchStateMsg(room));
+      if (room.match.phase === 'sideboarding') {
+        sendSideboardState(room, seat);
+      } else if (room.game) {
         send(socket, { type: 'sync', view: viewFor(room.game.state, seat.playerId), events: [] });
       } else {
         broadcastLobby(room);
@@ -299,11 +433,11 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
       const { room, playerId } = conn;
       if (!room || !playerId) return send(socket, { type: 'serverError', message: 'você não está numa sala' });
       if (room.game) return send(socket, { type: 'serverError', message: 'a partida já começou' });
-      buildDeck(msg.deck)
-        .then((deck) => {
-          if (typeof deck === 'string') return send(socket, { type: 'serverError', message: deck });
+      buildPool(msg.deck)
+        .then((pool) => {
+          if (typeof pool === 'string') return send(socket, { type: 'serverError', message: pool });
           if (room.game) return send(socket, { type: 'serverError', message: 'a partida já começou' });
-          room.seats[playerId]!.deck = deck;
+          room.seats[playerId]!.pool = pool;
           room.lastActivity = Date.now();
           broadcastLobby(room);
         })
@@ -316,21 +450,10 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
       const { room, playerId } = conn;
       if (!room || playerId !== 'p1') return send(socket, { type: 'serverError', message: 'só o anfitrião inicia a partida' });
       if (room.game) return send(socket, { type: 'serverError', message: 'a partida já começou' });
-      const p1 = room.seats.p1;
-      const p2 = room.seats.p2;
-      if (!p1?.deck || !p2?.deck)
+      if (!room.seats.p1?.pool || !room.seats.p2?.pool)
         return send(socket, { type: 'serverError', message: 'os dois jogadores precisam escolher um deck' });
-      const seed = randomBytes(4).readUInt32LE(0);
-      room.game = new Game(
-        [
-          { id: 'p1', name: p1.name, deck: p1.deck },
-          { id: 'p2', name: p2.name, deck: p2.deck },
-        ],
-        seed,
-      );
-      const events = room.game.start();
       room.lastActivity = Date.now();
-      broadcastGame(room, events);
+      startNextGame(room); // jogo 1: quem começa sai do roll 1-100
       return;
     }
     case 'action': {
@@ -344,10 +467,50 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
         send(socket, { type: 'serverError', message: err?.type === 'error' ? err.message : 'ação inválida' });
         // Non-error events may still have been emitted before the failure.
         const rest = result.events.filter((e) => e.type !== 'error');
-        if (rest.length > 0) broadcastGame(room, rest);
+        if (rest.length > 0) {
+          broadcastGame(room, rest);
+          afterGameEvents(room, rest);
+        }
         return;
       }
       broadcastGame(room, result.events);
+      afterGameEvents(room, result.events);
+      return;
+    }
+    case 'sideboard': {
+      const { room, playerId } = conn;
+      if (!room || !playerId) return send(socket, { type: 'serverError', message: 'você não está numa sala' });
+      const seat = room.seats[playerId];
+      if (room.match.phase !== 'sideboarding' || !seat?.pool)
+        return send(socket, { type: 'serverError', message: 'não é hora de mexer no sideboard' });
+      const main = sanitizeEntries(msg.main);
+      const pool = seat.pool;
+      // Every card must come from the registered pool, never exceeding it.
+      for (const entry of main) {
+        if ((pool.total.get(entry.name) ?? 0) < entry.count)
+          return send(socket, { type: 'serverError', message: `${entry.name}: mais cópias do que o seu pool tem` });
+      }
+      const mainTotal = main.reduce((n, c) => n + c.count, 0);
+      if (mainTotal < 20) return send(socket, { type: 'serverError', message: 'deck precisa de pelo menos 20 cartas' });
+      const side: CountedCard[] = [];
+      for (const [name, total] of pool.total) {
+        const inMain = main.find((m) => m.name === name)?.count ?? 0;
+        if (total - inMain > 0) side.push({ name, count: total - inMain });
+      }
+      pool.main = main;
+      pool.side = side;
+      room.match.ready[playerId] = false;
+      sendSideboardState(room, seat);
+      return;
+    }
+    case 'readyNextGame': {
+      const { room, playerId } = conn;
+      if (!room || !playerId) return send(socket, { type: 'serverError', message: 'você não está numa sala' });
+      if (room.match.phase !== 'sideboarding')
+        return send(socket, { type: 'serverError', message: 'nenhum jogo aguardando' });
+      room.match.ready[playerId] = true;
+      for (const seat of Object.values(room.seats)) sendSideboardState(room, seat);
+      if (room.match.ready.p1 && room.match.ready.p2) startNextGame(room);
       return;
     }
   }
@@ -366,7 +529,9 @@ function sanitizeName(name: string): string {
  * Only deck ids extracted from known hosts are fetched — the client never
  * controls the outgoing URL.
  */
-async function fetchArchidektDeck(deckUrl: string): Promise<{ name: string; cards: { name: string; count: number }[] }> {
+async function fetchArchidektDeck(
+  deckUrl: string,
+): Promise<{ name: string; cards: CountedCard[]; sideboard: CountedCard[] }> {
   const m = deckUrl.match(/archidekt\.com\/(?:api\/)?decks\/(\d+)/);
   if (!m) throw new Error('URL não reconhecida — cole um link de deck do Archidekt');
   const res = await fetch(`https://archidekt.com/api/decks/${m[1]}/`, {
@@ -382,13 +547,25 @@ async function fetchArchidektDeck(deckUrl: string): Promise<{ name: string; card
     (deck.categories ?? []).filter((c) => !c.includedInDeck).map((c) => c.name),
   );
   const counts = new Map<string, number>();
+  const sideCounts = new Map<string, number>();
   for (const entry of deck.cards ?? []) {
     const name = entry.card?.oracleCard?.name;
     if (!name) continue;
-    if ((entry.categories ?? []).some((c) => excluded.has(c))) continue;
+    const cats = entry.categories ?? [];
+    // "Sideboard" vira o side do match; outras categorias fora do deck
+    // (Maybeboard etc.) continuam ignoradas.
+    if (cats.some((c) => c.toLowerCase() === 'sideboard')) {
+      sideCounts.set(name, (sideCounts.get(name) ?? 0) + (entry.quantity || 1));
+      continue;
+    }
+    if (cats.some((c) => excluded.has(c))) continue;
     counts.set(name, (counts.get(name) ?? 0) + (entry.quantity || 1));
   }
-  return { name: deck.name ?? 'Deck', cards: [...counts].map(([name, count]) => ({ name, count })) };
+  return {
+    name: deck.name ?? 'Deck',
+    cards: [...counts].map(([name, count]) => ({ name, count })),
+    sideboard: [...sideCounts].map(([name, count]) => ({ name, count })),
+  };
 }
 
 // ---------------------------------------------- static web app (self-host)

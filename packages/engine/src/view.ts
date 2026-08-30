@@ -20,6 +20,8 @@ export interface CardView {
   attachedTo: number | null;
   summoningSick: boolean;
   isToken: boolean;
+  /** This tap-for-mana can still be undone by its controller. */
+  undoableTap: boolean;
 }
 
 export type PendingDecisionView =
@@ -79,6 +81,8 @@ export interface GameView {
   pendingDecision: PendingDecisionView | null;
   /** Non-null while opening hands are being decided. */
   mulligan: { taken: Record<PlayerId, number>; phase: Record<PlayerId, 'deciding' | 'kept'> } | null;
+  /** Starting roll / who-plays-first choice, until decided. */
+  starter: { rolls: Record<PlayerId, number>; rerolls: number; winner: PlayerId; chosen: boolean } | null;
   stack: StackItemView[];
   players: Record<PlayerId, PlayerView>;
   status: 'playing' | 'finished';
@@ -118,6 +122,7 @@ function cardView(state: GameState, obj: GameObject): CardView {
     attacking: obj.attacking,
     blocking: obj.blocking ?? null,
     attachedTo: obj.attachedTo ?? null,
+    undoableTap: state.reversibleTaps.some((r) => r.objectId === obj.id),
     summoningSick: obj.summoningSick,
     isToken: obj.isToken,
   };
@@ -150,6 +155,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
     combatAwaiting: state.combatAwaiting,
     pendingDecision: pendingDecisionView(state, viewer),
     mulligan: state.mulligan,
+    starter: state.starter,
     stack: state.stack.map((item) => ({
       id: item.id,
       kind: item.kind,

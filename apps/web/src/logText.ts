@@ -24,7 +24,15 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
   const name = (p: string) => view?.players[p as 'p1' | 'p2']?.name ?? p;
   switch (ev.type) {
     case 'gameStarted':
-      return `Partida iniciada — ${ev.players.map((p) => p.name).join(' vs ')}. ${name(ev.onThePlay)} começa.`;
+      return `Partida iniciada — ${ev.players.map((p) => p.name).join(' vs ')}.`;
+    case 'startingRoll':
+      return `Sorteio: ${name('p1')} rolou ${ev.rolls.p1}, ${name('p2')} rolou ${ev.rolls.p2}${
+        ev.rerolls > 0 ? ` (${ev.rerolls} empate(s) rerolado(s))` : ''
+      } — ${name(ev.winner)} decide quem começa.`;
+    case 'starterChosen':
+      return `${name(ev.by)} decidiu: ${name(ev.first)} começa.`;
+    case 'tapUndone':
+      return `${name(ev.player)} desfez a virada de ${ev.cardName}.`;
     case 'turnBegan':
       return `— Turno ${ev.turn}: ${name(ev.activePlayer)} —`;
     case 'stepChanged':

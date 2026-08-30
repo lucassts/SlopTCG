@@ -33,17 +33,35 @@ export interface DecklistResult {
   notFound: string[];
 }
 
-/** Parse "4 Lightning Bolt" style decklists (also "4x", ignores blanks/comments). */
-export function parseDecklist(text: string): { name: string; count: number }[] {
-  const out: { name: string; count: number }[] = [];
+/**
+ * Parse "4 Lightning Bolt" style decklists (also "4x"; blanks/comments
+ * ignored). A "Sideboard" line — or the MTGO "SB:" prefix — starts the
+ * sideboard section.
+ */
+export function parseDecklist(text: string): {
+  main: { name: string; count: number }[];
+  side: { name: string; count: number }[];
+} {
+  const main: { name: string; count: number }[] = [];
+  const side: { name: string; count: number }[] = [];
+  let inSide = false;
   for (const rawLine of text.split('\n')) {
-    const line = rawLine.trim();
+    let line = rawLine.trim();
     if (!line || line.startsWith('//') || line.startsWith('#')) continue;
+    if (/^sideboard:?$/i.test(line)) {
+      inSide = true;
+      continue;
+    }
+    let target = inSide ? side : main;
+    if (/^sb:\s*/i.test(line)) {
+      target = side;
+      line = line.replace(/^sb:\s*/i, '');
+    }
     const m = line.match(/^(\d+)x?\s+(.+)$/i);
-    if (m) out.push({ count: parseInt(m[1], 10), name: m[2].trim() });
-    else out.push({ count: 1, name: line });
+    if (m) target.push({ count: parseInt(m[1], 10), name: m[2].trim() });
+    else target.push({ count: 1, name: line });
   }
-  return out;
+  return { main, side };
 }
 
 /** Resolve a decklist against Scryfall's collection endpoint (batches of 75). */

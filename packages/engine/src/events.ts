@@ -47,6 +47,9 @@ export type GameEvent =
   | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' | 'libraryTop' }
   | { type: 'mulliganTaken'; player: PlayerId; taken: number }
   | { type: 'handKept'; player: PlayerId; bottomed: number }
+  | { type: 'startingRoll'; rolls: Record<PlayerId, number>; rerolls: number; winner: PlayerId }
+  | { type: 'starterChosen'; first: PlayerId; by: PlayerId }
+  | { type: 'tapUndone'; objectId: number; cardName: string; player: PlayerId }
   | { type: 'attackersDeclared'; player: PlayerId; attackers: { objectId: number; cardName: string }[] }
   | { type: 'blockersDeclared'; player: PlayerId; blocks: { blocker: number; blockerName: string; attacker: number; attackerName: string }[] }
   | { type: 'discarded'; player: PlayerId; objectId: number; cardName: string }

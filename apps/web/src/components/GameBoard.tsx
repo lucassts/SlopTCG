@@ -26,7 +26,11 @@ interface StopsConfig {
   oppTurn: Step[];
 }
 
-const DEFAULT_STOPS: StopsConfig = { myTurn: ['main1', 'main2'], oppTurn: ['end'] };
+/**
+ * MTGO-style default: stop at EVERY step that grants priority, in both
+ * turns. Auto-passing is opt-in — desmarque etapas no painel ⏱.
+ */
+const DEFAULT_STOPS: StopsConfig = { myTurn: [...STOPPABLE], oppTurn: [...STOPPABLE] };
 
 function loadStops(): StopsConfig {
   try {
@@ -64,11 +68,12 @@ export interface GameBoardProps {
   view: GameView;
   syncSeq: number;
   log: string[];
+  match: { wins: Record<PlayerId, number>; gameNumber: number } | null;
   onAction: (action: PlayerAction) => void;
   onExit: () => void;
 }
 
-export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardProps) {
+export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameBoardProps) {
   const you = view.you;
   const oppId: PlayerId = you === 'p1' ? 'p2' : 'p1';
   const me = view.players[you];
@@ -83,12 +88,14 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
   const [choiceSel, setChoiceSel] = useState<Set<number>>(new Set());
   const [modalPick, setModalPick] = useState<CardView | null>(null);
   const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
-  const [gravePick, setGravePick] = useState<PlayerId | null>(null);
+  const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [showStops, setShowStops] = useState(false);
   const [stops, setStops] = useState<StopsConfig>(loadStops);
   const [chatText, setChatText] = useState('');
+  const [concedeArmed, setConcedeArmed] = useState(false);
+  const concedeArmedRef = useRef(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   const myPriority = view.priority === you && view.status === 'playing';
@@ -317,6 +324,11 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       return;
     }
     if (owner === you) {
+      // Undo de mana: clique na permanente virada enquanto a mana flutua.
+      if (cv.tapped && cv.undoableTap) {
+        onAction({ type: 'undoTap', objectId: cv.objectId });
+        return;
+      }
       const abilities = cv.card.abilities ?? [];
       // Planeswalker: pick one of the loyalty abilities from an overlay.
       if (cv.card.types.includes('Planeswalker') && abilities.some((a) => a.kind === 'loyalty')) {
@@ -431,16 +443,24 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
         </div>
         <strong>{opp.name}</strong>
         {view.activePlayer === oppId && <span className="zone-pill">turno dele</span>}
-        <span className="zone-pill">✋ {opp.handSize}</span>
+        <span className="zone-pill" title="Cartas na mão">✋ {opp.handSize}</span>
+        <span className="zone-pill" title="Cartas na biblioteca">📚 {opp.librarySize}</span>
         <span
           className="zone-pill"
           style={{ cursor: 'pointer' }}
           title="Ver cemitério"
-          onClick={(e) => { e.stopPropagation(); setGravePick(oppId); }}
+          onClick={(e) => { e.stopPropagation(); setZonePick({ player: oppId, zone: 'graveyard' }); }}
         >
           🪦 {opp.graveyard.length}
         </span>
-        <span className="zone-pill">📚 {opp.librarySize}</span>
+        <span
+          className="zone-pill"
+          style={{ cursor: 'pointer' }}
+          title="Ver exílio"
+          onClick={(e) => { e.stopPropagation(); setZonePick({ player: oppId, zone: 'exile' }); }}
+        >
+          🌀 {opp.exile.length}
+        </span>
         <ManaChips pool={opp.manaPool} />
       </div>
 
@@ -539,15 +559,23 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
         <div className={`life ${targeting ? 'targetable' : ''}`} onClick={() => clickPlayer(you)}>
           {me.life}
         </div>
+        <span className="zone-pill" title="Cartas na biblioteca">📚 {me.librarySize}</span>
         <span
           className="zone-pill"
           style={{ cursor: 'pointer' }}
           title="Ver cemitério"
-          onClick={(e) => { e.stopPropagation(); setGravePick(you); }}
+          onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'graveyard' }); }}
         >
           🪦 {me.graveyard.length}
         </span>
-        <span className="zone-pill">📚 {me.librarySize}</span>
+        <span
+          className="zone-pill"
+          style={{ cursor: 'pointer' }}
+          title="Ver exílio"
+          onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'exile' }); }}
+        >
+          🌀 {me.exile.length}
+        </span>
         <ManaChips pool={me.manaPool} />
         <div className="hand-row">
           {(me.hand ?? []).map((c) => (
@@ -570,9 +598,30 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
       {/* -------- painel lateral -------- */}
       <div className="side-panel">
         <div className="phase-strip" style={{ justifyContent: 'space-between' }}>
-          <span className="panel-title">Turno {view.turn} · {stepName(view.step)}</span>
-          <button className="danger" onClick={() => { if (confirm('Conceder a partida?')) onAction({ type: 'concede' }); }}>
-            Conceder
+          <span className="panel-title">
+            {match ? `Jogo ${match.gameNumber} (${match.wins[you]}–${match.wins[oppId]}) · ` : ''}
+            Turno {view.turn} · {stepName(view.step)}
+          </span>
+          <button
+            className="danger"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Ref evita o clique-duplo ler estado velho (stale closure).
+              if (concedeArmedRef.current) {
+                concedeArmedRef.current = false;
+                setConcedeArmed(false);
+                onAction({ type: 'concede' });
+              } else {
+                concedeArmedRef.current = true;
+                setConcedeArmed(true);
+                setTimeout(() => {
+                  concedeArmedRef.current = false;
+                  setConcedeArmed(false);
+                }, 3000);
+              }
+            }}
+          >
+            {concedeArmed ? 'Confirmar?' : 'Conceder'}
           </button>
         </div>
         {view.stack.length > 0 && (
@@ -804,20 +853,22 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
         </div>
       )}
 
-      {/* -------- cemitério (com flashback) -------- */}
-      {gravePick && (
-        <div className="mulligan-overlay" onClick={() => setGravePick(null)}>
+      {/* -------- cemitério/exílio (estilo MTGO; flashback no próprio) -------- */}
+      {zonePick && (
+        <div className="mulligan-overlay" onClick={() => setZonePick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
-            <h2>Cemitério de {view.players[gravePick].name}</h2>
+            <h2>
+              {zonePick.zone === 'graveyard' ? 'Cemitério' : 'Exílio'} de {view.players[zonePick.player].name}
+            </h2>
             <div className="mulligan-hand choice-hand">
-              {view.players[gravePick].graveyard.length === 0 && <div className="muted">vazio</div>}
-              {view.players[gravePick].graveyard.map((c) => (
+              {view.players[zonePick.player][zonePick.zone].length === 0 && <div className="muted">vazio</div>}
+              {view.players[zonePick.player][zonePick.zone].map((c) => (
                 <div key={c.objectId} style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
                   <CardTile card={c} size="hand" onContextMenu={(e) => openMenu(e, c)} />
-                  {gravePick === you && c.card.flashback && (
+                  {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.flashback && (
                     <button
                       onClick={() => {
-                        setGravePick(null);
+                        setZonePick(null);
                         beginCast(c, undefined);
                       }}
                     >
@@ -827,7 +878,47 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
                 </div>
               ))}
             </div>
-            <button onClick={() => setGravePick(null)}>Fechar</button>
+            <button onClick={() => setZonePick(null)}>Fechar</button>
+          </div>
+        </div>
+      )}
+
+      {/* -------- roll inicial / escolha de quem começa -------- */}
+      {view.starter && !view.starter.chosen && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>Quem começa?</h2>
+            {view.starter.rolls[you] > 0 ? (
+              <>
+                <div className="roll-row">
+                  <div className={`roll-die ${view.starter.winner === you ? 'winner' : ''}`}>
+                    <div className="muted">Você</div>
+                    <strong>{view.starter.rolls[you]}</strong>
+                  </div>
+                  <div className={`roll-die ${view.starter.winner === oppId ? 'winner' : ''}`}>
+                    <div className="muted">{opp.name}</div>
+                    <strong>{view.starter.rolls[oppId]}</strong>
+                  </div>
+                </div>
+                {view.starter.rerolls > 0 && (
+                  <div className="muted">({view.starter.rerolls} empate(s) rerolado(s) automaticamente)</div>
+                )}
+              </>
+            ) : (
+              <div className="muted">Quem perdeu o jogo anterior decide quem começa.</div>
+            )}
+            {view.starter.winner === you ? (
+              <div className="row">
+                <button className="primary" onClick={() => onAction({ type: 'chooseStarter', first: you })}>
+                  Eu começo
+                </button>
+                <button onClick={() => onAction({ type: 'chooseStarter', first: oppId })}>
+                  {opp.name} começa
+                </button>
+              </div>
+            ) : (
+              <div className="muted">Aguardando {opp.name} decidir…</div>
+            )}
           </div>
         </div>
       )}
@@ -838,10 +929,20 @@ export function GameBoard({ view, syncSeq, log, onAction, onExit }: GameBoardPro
             {view.winner === 'draw'
               ? 'Empate!'
               : view.winner === you
-                ? '🏆 Você venceu!'
-                : `${opp.name} venceu.`}
+                ? '🏆 Você venceu este jogo!'
+                : `${opp.name} venceu este jogo.`}
           </div>
-          <button className="primary" onClick={onExit}>Voltar ao início</button>
+          {match && (
+            <div style={{ fontSize: 18 }}>
+              Placar: você {match.wins[you]} × {match.wins[oppId]} {opp.name}
+            </div>
+          )}
+          {(!match || match.wins[you] >= 2 || match.wins[oppId] >= 2) && (
+            <button className="primary" onClick={onExit}>Voltar ao início</button>
+          )}
+          {match && match.wins[you] < 2 && match.wins[oppId] < 2 && (
+            <div className="muted">Preparando o sideboard…</div>
+          )}
         </div>
       )}
     </div>

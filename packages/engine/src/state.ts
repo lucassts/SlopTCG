@@ -9,6 +9,7 @@ import { shuffle } from './rng.js';
 import {
   emptyManaPool,
   type ManaPool,
+  type ManaSymbol,
   type PlayerId,
   type Step,
   type TargetChoice,
@@ -156,6 +157,18 @@ export interface GameState {
   combatDamagePrevented: boolean;
   /** Control changes to undo at cleanup (Act of Treason). */
   controlReverts: { objectId: number; to: PlayerId }[];
+  /**
+   * Who plays first: decided by a 1–100 roll (game 1) or handed to a chosen
+   * player (match rules: the previous game's loser). Non-null until chosen.
+   */
+  starter: {
+    rolls: Record<PlayerId, number>;
+    rerolls: number;
+    winner: PlayerId;
+    chosen: boolean;
+  } | null;
+  /** Mana taps that can still be undone (nothing consumed the mana yet). */
+  reversibleTaps: { objectId: number; mana: ManaSymbol[] }[];
   /** Non-null while opening hands are being decided (before turn 1). */
   mulligan: MulliganState | null;
   status: 'playing' | 'finished';
@@ -187,6 +200,8 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
     spellsCastThisTurn: 0,
     combatDamagePrevented: false,
     controlReverts: [],
+    starter: null,
+    reversibleTaps: [],
     mulligan: null,
     status: 'playing',
   };

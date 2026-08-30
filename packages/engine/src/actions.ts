@@ -11,6 +11,10 @@ import type { PlayerId, TargetChoice, ZoneName } from './types.js';
 
 export type PlayerAction =
   | { type: 'passPriority' }
+  /** Winner of the starting roll (or previous game's loser) picks who plays first. */
+  | { type: 'chooseStarter'; first: PlayerId }
+  /** Undo a mana tap whose mana wasn't spent yet. */
+  | { type: 'undoTap'; objectId: number }
   /** London mulligan: shuffle the hand back and draw 7 again. */
   | { type: 'mulligan' }
   /** Keep the hand, putting exactly `bottom` (= mulligans taken) on the bottom. */
