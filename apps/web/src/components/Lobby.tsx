@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import type { DeckSpec, LobbyPlayer } from '@sloptcg/protocol';
+import type { CountedCard, DeckSpec, LobbyPlayer } from '@sloptcg/protocol';
 import { serverHttpBase } from '../net';
 import { parseDecklist, resolveDecklist } from '../scryfall';
+import { DeckColumn, DeckModeToggle, type DeckViewMode } from './DeckView';
 
 export interface LobbyProps {
   roomCode: string;
@@ -20,14 +21,26 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
   const [importing, setImporting] = useState(false);
   const [importInfo, setImportInfo] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [preview, setPreview] = useState<{ main: CountedCard[]; side: CountedCard[] } | null>(null);
+  const [previewMode, setPreviewMode] = useState<DeckViewMode>('list');
 
   const me = players.find((p) => p.playerId === you);
   const bothReady = players.length === 2 && players.every((p) => p.deckReady);
 
-  const pickDemo = (name: 'gruul' | 'azorius') => {
+  const pickDemo = async (name: 'gruul' | 'azorius') => {
     setChoice(name);
     setImportInfo(null);
     onSetDeck({ kind: 'demo', name });
+    setPreview(null);
+    try {
+      const res = await fetch(`${serverHttpBase()}/api/demodeck?name=${name}`);
+      if (res.ok) {
+        const data = (await res.json()) as { cards: CountedCard[]; sideboard: CountedCard[] };
+        setPreview({ main: data.cards, side: data.sideboard });
+      }
+    } catch {
+      // sem preview: a lista fica indisponível, o deck continua válido
+    }
   };
 
   const finishImport = async (
@@ -38,6 +51,7 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
     if (result.cards.length === 0) throw new Error('nenhuma carta encontrada no Scryfall');
     onSetDeck({ kind: 'external', cards: result.cards, sideboard });
     setChoice('custom');
+    setPreview({ main: result.cards.map((c) => ({ name: c.name, count: c.count })), side: sideboard });
     const total = result.cards.reduce((n, c) => n + c.count, 0);
     const sideTotal = sideboard.reduce((n, c) => n + c.count, 0);
     setImportInfo(
@@ -147,6 +161,22 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
             {importInfo && <div className="muted">{importInfo}</div>}
           </div>
         </details>
+
+        {preview && (
+          <details className="deck-preview">
+            <summary className="muted" style={{ cursor: 'pointer' }}>
+              Ver deck ({preview.main.reduce((n, c) => n + c.count, 0)}
+              {preview.side.length > 0 ? ` + ${preview.side.reduce((n, c) => n + c.count, 0)} sb` : ''})
+            </summary>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              <DeckModeToggle mode={previewMode} onChange={setPreviewMode} />
+              <div className="sb-columns">
+                <DeckColumn title="Deck" cards={preview.main} mode={previewMode} />
+                {preview.side.length > 0 && <DeckColumn title="Sideboard" cards={preview.side} mode={previewMode} />}
+              </div>
+            </div>
+          </details>
+        )}
 
         {you === 'p1' ? (
           <button className="primary" disabled={!bothReady} onClick={onStart}>

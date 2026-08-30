@@ -376,6 +376,101 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .sb-card { display: flex; justify-content: space-between; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; }
 .sb-card:hover { background: var(--panel); }
 
+/* --------------------------------------------------- pilha (pop-up visual) */
+.stack-popup {
+  position: fixed;
+  left: calc((100% - 300px) / 2);
+  top: 14%;
+  transform: translateX(-50%);
+  z-index: 150;
+  background: rgba(17, 20, 28, 0.96);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  padding: 10px 14px;
+  box-shadow: 0 12px 44px rgba(0, 0, 0, 0.65);
+  max-width: min(760px, calc(100vw - 340px));
+}
+.stack-cards { display: flex; gap: 12px; overflow-x: auto; padding: 8px 2px 4px; }
+.stack-card {
+  flex-shrink: 0;
+  width: 120px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stack-card .card-face { width: 120px; height: 167px; }
+.stack-card.mine .card-face { box-shadow: 0 0 0 2px var(--ok); border-radius: 8px; }
+.stack-card.theirs .card-face { box-shadow: 0 0 0 2px var(--blue); border-radius: 8px; }
+.stack-card:hover .card-face { transform: scale(1.35); z-index: 40; position: relative; }
+.stack-desc { font-size: 11px; color: var(--muted); line-height: 1.2; max-height: 42px; overflow: hidden; }
+
+.card-face { position: relative; border-radius: 8px; user-select: none; transition: transform 0.12s; }
+.card-face img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; display: block; }
+.card-count-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: var(--accent);
+  color: #1a1408;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  z-index: 2;
+}
+
+/* ----------------------------------------------------- pop-ups de zona */
+.zone-toasts {
+  position: fixed;
+  left: 14px;
+  bottom: 220px;
+  z-index: 240;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zone-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 230px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px 8px 8px;
+  cursor: pointer;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+  animation: toast-in 0.18s ease-out;
+}
+.zone-toast:hover { border-color: var(--accent); }
+.zone-toast .card-face { width: 58px; height: 81px; flex-shrink: 0; }
+.zone-toast-label { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.zone-toast-label span { color: var(--muted); }
+@keyframes toast-in { from { opacity: 0; transform: translateX(-12px); } }
+
+/* -------------------------------------------------------- auto-yield */
+.yield-group { display: flex; gap: 2px; }
+.yield-group button { font-size: 11.5px; padding: 5px 7px; }
+.yield-group button.yield-on {
+  background: var(--accent);
+  color: #1a1408;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+/* ------------------------------------------------- deck em lista/grade */
+.deck-mode-toggle { display: flex; gap: 4px; }
+.deck-mode-toggle button { font-size: 12px; padding: 4px 10px; }
+.deck-mode-toggle button.active { border-color: var(--accent); background: var(--panel); font-weight: 600; }
+.deck-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.deck-grid .card-face { width: 92px; height: 128px; cursor: pointer; }
+.deck-grid .card-face:hover { transform: scale(1.55); z-index: 40; }
+.sb-card.static { cursor: default; }
+.sb-card.static:hover { background: transparent; }
+.sb-col:has(.deck-grid) { min-width: 0; }
+.home-card:has(.deck-preview[open]) { width: min(980px, 96vw); }
+
 .stops-panel { min-width: 220px; }
 .stops-grid {
   display: grid;

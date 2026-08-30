@@ -631,6 +631,19 @@ function serveStatic(pathname: string, res: http.ServerResponse): void {
 const httpServer = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   res.setHeader('Access-Control-Allow-Origin', '*');
+  if (req.method === 'GET' && url.pathname === '/api/demodeck') {
+    const name = url.searchParams.get('name') === 'azorius' ? 'azorius' : 'gruul';
+    void buildPool({ kind: 'demo', name }).then((pool) => {
+      if (typeof pool === 'string') {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: pool }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ cards: pool.main, sideboard: pool.side }));
+    });
+    return;
+  }
   if (req.method === 'GET' && url.pathname === '/api/deck') {
     const deckUrl = url.searchParams.get('url') ?? '';
     fetchArchidektDeck(deckUrl)

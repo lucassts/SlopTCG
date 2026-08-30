@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CardView, GameView, PlayerAction, PlayerId } from '@sloptcg/protocol';
 import type { Step, TargetChoice } from '@sloptcg/engine';
-import { CardTile } from './CardTile';
+import { CardFace, CardTile } from './CardTile';
 import { stepName } from '../logText';
 
 const STEPS = [
@@ -41,6 +41,29 @@ function loadStops(): StopsConfig {
   } catch {
     return DEFAULT_STOPS;
   }
+}
+
+/** One-shot auto-yield (MTGO F-keys): pass priority until the target moment. */
+interface YieldState {
+  kind: 'nextStep' | 'mainPhase' | 'endStep' | 'myTurn';
+  step: Step;
+  turn: number;
+}
+
+const YIELD_LABEL: Record<YieldState['kind'], string> = {
+  nextStep: 'próxima etapa',
+  mainPhase: 'próxima fase principal',
+  endStep: 'próxima etapa final',
+  myTurn: 'meu próximo turno',
+};
+
+/** Transient card pop-up when a card lands in a relevant zone. */
+interface ZoneToast {
+  key: string;
+  card: CardView;
+  player: PlayerId;
+  zone: 'graveyard' | 'exile';
+  label: string;
 }
 
 interface Targeting {
@@ -95,7 +118,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const [stops, setStops] = useState<StopsConfig>(loadStops);
   const [chatText, setChatText] = useState('');
   const [concedeArmed, setConcedeArmed] = useState(false);
+  const [holdPriority, setHoldPriority] = useState(false);
+  const [yieldUntil, setYieldUntil] = useState<YieldState | null>(null);
+  const [zoneToasts, setZoneToasts] = useState<ZoneToast[]>([]);
   const concedeArmedRef = useRef(false);
+  const prevViewRef = useRef<GameView | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const myPriority = view.priority === you && view.status === 'playing';
@@ -148,12 +175,88 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   };
 
   // ---------------------------------------------------------- auto-yield
+  // O jogo devolve o controle (cancela o yield) quando exige uma decisão.
+  const yieldInterrupted = (v: GameView): boolean => {
+    if (v.status !== 'playing' || v.mulligan) return true;
+    const pd = v.pendingDecision;
+    if (pd && 'player' in pd && pd.player === you) return true;
+    if (v.combatAwaiting === 'attackers' && v.activePlayer === you) return true;
+    if (v.combatAwaiting === 'blockers' && v.activePlayer === oppId) return true;
+    return false;
+  };
+
+  const yieldReached = (v: GameView, y: YieldState): boolean => {
+    const moved = v.step !== y.step || v.turn !== y.turn;
+    switch (y.kind) {
+      case 'nextStep': return moved;
+      case 'mainPhase': return moved && (v.step === 'main1' || v.step === 'main2');
+      case 'endStep': return moved && v.step === 'end';
+      case 'myTurn': return v.activePlayer === you && v.turn !== y.turn;
+    }
+  };
+
+  // Mantém o estado do yield honesto para a UI (botão aceso / prompt).
   useEffect(() => {
-    if (!shouldAutoPass(view, stops)) return;
-    const t = setTimeout(() => onAction({ type: 'passPriority' }), 400);
+    if (yieldUntil && (yieldInterrupted(view) || yieldReached(view, yieldUntil))) setYieldUntil(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncSeq]);
+
+  useEffect(() => {
+    if (holdPriority) return; // hold priority: nunca passa sozinho
+    const yielding = yieldUntil !== null && !yieldInterrupted(view) && !yieldReached(view, yieldUntil);
+    if (!shouldAutoPass(view, stops, yielding)) return;
+    const t = setTimeout(() => onAction({ type: 'passPriority' }), yielding ? 180 : 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncSeq, stops]);
+  }, [syncSeq, stops, yieldUntil, holdPriority]);
+
+  const startYield = (kind: YieldState['kind']) => {
+    if (yieldUntil?.kind === kind) {
+      setYieldUntil(null); // clicar de novo cancela
+      return;
+    }
+    setHoldPriority(false);
+    setYieldUntil({ kind, step: view.step, turn: view.turn });
+  };
+
+  // ------------------------------------------- pop-ups de zona (toasts)
+  useEffect(() => {
+    const prev = prevViewRef.current;
+    prevViewRef.current = view;
+    if (!prev || view.status !== 'playing') return;
+    const fresh: ZoneToast[] = [];
+    for (const pid of ['p1', 'p2'] as PlayerId[]) {
+      for (const zone of ['graveyard', 'exile'] as const) {
+        const before = new Set(prev.players[pid][zone].map((c) => c.objectId));
+        for (const c of view.players[pid][zone]) {
+          if (!before.has(c.objectId)) {
+            fresh.push({
+              key: `${zone}-${c.objectId}-${view.turn}-${view.step}`,
+              card: c,
+              player: pid,
+              zone,
+              label: zone === 'graveyard' ? '→ cemitério' : '→ exílio',
+            });
+          }
+        }
+      }
+      // Carta conjurada do cemitério (flashback): mostra de onde ela veio.
+      const gravBefore = new Set(prev.players[pid].graveyard.map((c) => c.objectId));
+      const stackBefore = new Set(prev.stack.map((s) => s.id));
+      for (const item of view.stack) {
+        if (!stackBefore.has(item.id) && gravBefore.has(item.sourceId)) {
+          const cv = prev.players[pid].graveyard.find((c) => c.objectId === item.sourceId);
+          if (cv) fresh.push({ key: `gcast-${item.id}`, card: cv, player: pid, zone: 'graveyard', label: '⚡ conjurada do cemitério' });
+        }
+      }
+    }
+    if (fresh.length === 0) return;
+    setZoneToasts((t) => [...t, ...fresh].slice(-4));
+    const keys = new Set(fresh.map((f) => f.key));
+    // Sem cleanup: o timer precisa sobreviver aos próximos syncs.
+    setTimeout(() => setZoneToasts((t) => t.filter((z) => !keys.has(z.key))), 6000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncSeq]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -423,6 +526,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
     if (awaitingMyBlocks) return 'Clique num bloqueador seu, depois no atacante; confirme';
     if (view.combatAwaiting) return 'Aguardando o oponente…';
+    if (yieldUntil) return `⏭ Passando automaticamente até ${YIELD_LABEL[yieldUntil.kind]} — clique de novo para cancelar`;
+    if (holdPriority && myPriority) return '📌 Segurando a prioridade — jogue mais mágicas ou passe manualmente';
     if (myPriority && view.stack.length > 0) return 'Responder à pilha ou resolver';
     if (myPriority && (view.step === 'main1' || view.step === 'main2') && view.activePlayer === you)
       return 'Sua fase principal — jogue cartas ou passe';
@@ -515,6 +620,45 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
             <button onClick={() => onAction({ type: 'passPriority' })}>
               {view.stack.length > 0 ? 'Resolver' : 'Passar'}
             </button>
+          )}
+          {view.status === 'playing' && !view.mulligan && (
+            <div className="yield-group" title="Auto-yield: passa a prioridade sozinho até o momento escolhido">
+              <button
+                className={yieldUntil?.kind === 'nextStep' ? 'yield-on' : ''}
+                title="Passar até a próxima etapa"
+                onClick={(e) => { e.stopPropagation(); startYield('nextStep'); }}
+              >
+                ⏭ Etapa
+              </button>
+              <button
+                className={yieldUntil?.kind === 'mainPhase' ? 'yield-on' : ''}
+                title="Passar até a próxima fase principal"
+                onClick={(e) => { e.stopPropagation(); startYield('mainPhase'); }}
+              >
+                ⏭ Main
+              </button>
+              <button
+                className={yieldUntil?.kind === 'endStep' ? 'yield-on' : ''}
+                title="Passar até a próxima etapa final"
+                onClick={(e) => { e.stopPropagation(); startYield('endStep'); }}
+              >
+                ⏭ Final
+              </button>
+              <button
+                className={yieldUntil?.kind === 'myTurn' ? 'yield-on' : ''}
+                title="Passar até o meu próximo turno"
+                onClick={(e) => { e.stopPropagation(); startYield('myTurn'); }}
+              >
+                ⏭ Meu turno
+              </button>
+              <button
+                className={holdPriority ? 'yield-on' : ''}
+                title="Segurar a prioridade: nada é passado automaticamente — empilhe várias mágicas antes de resolver"
+                onClick={(e) => { e.stopPropagation(); setYieldUntil(null); setHoldPriority(!holdPriority); }}
+              >
+                📌
+              </button>
+            </div>
           )}
           <button
             title="Paradas automáticas"
@@ -624,22 +768,6 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
             {concedeArmed ? 'Confirmar?' : 'Conceder'}
           </button>
         </div>
-        {view.stack.length > 0 && (
-          <div className="stack-panel">
-            <div className="panel-title">Pilha (resolve de baixo para cima)</div>
-            {[...view.stack].reverse().map((item, i) => (
-              <div
-                key={item.id}
-                className={`stack-item ${item.controller === you ? 'mine' : ''}`}
-                onClick={() => clickStackItem(view.stack.length - 1 - i)}
-                style={targeting ? { cursor: 'crosshair' } : undefined}
-              >
-                {item.description}
-                {i === 0 ? ' ← próxima' : ''}
-              </div>
-            ))}
-          </div>
-        )}
         {showManual && (
           <div className="stack-panel">
             <div className="panel-title">Modo manual — tudo fica no log</div>
@@ -682,6 +810,50 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           />
         </div>
       </div>
+
+      {/* -------- pilha (pop-up com as cartas, estilo MTGO) -------- */}
+      {view.stack.length > 0 && (
+        <div className="stack-popup" onClick={(e) => e.stopPropagation()}>
+          <div className="panel-title">Pilha — a da esquerda resolve primeiro</div>
+          <div className="stack-cards">
+            {[...view.stack].reverse().map((item, i) => (
+              <div
+                key={item.id}
+                className={`stack-card ${item.controller === you ? 'mine' : 'theirs'}`}
+                onClick={() => clickStackItem(view.stack.length - 1 - i)}
+                style={targeting ? { cursor: 'crosshair' } : undefined}
+                title={item.description}
+              >
+                <CardFace def={item.card} name={item.cardName} badge={i === 0 ? 'próxima' : undefined} title={item.description} />
+                <div className="stack-desc">
+                  {item.kind === 'copy' ? '⧉ cópia — ' : item.kind === 'ability' ? '⚙ ' : ''}
+                  {item.description}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* -------- pop-ups de zona (carta foi para cemitério/exílio) -------- */}
+      {zoneToasts.length > 0 && (
+        <div className="zone-toasts">
+          {zoneToasts.map((t) => (
+            <div
+              key={t.key}
+              className="zone-toast"
+              title="Clique para abrir a zona"
+              onClick={(e) => { e.stopPropagation(); setZonePick({ player: t.player, zone: t.zone }); }}
+            >
+              <CardFace def={t.card.card} />
+              <div className="zone-toast-label">
+                <strong>{t.card.card.name}</strong>
+                <span>{t.label} de {view.players[t.player].name}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* -------- paradas automáticas -------- */}
       {showStops && (
@@ -986,16 +1158,17 @@ function ManaChips({ pool }: { pool: Record<string, number> }) {
   );
 }
 
-function shouldAutoPass(view: GameView, stops: StopsConfig): boolean {
+function shouldAutoPass(view: GameView, stops: StopsConfig, yielding: boolean): boolean {
   if (view.status !== 'playing') return false;
   if (view.mulligan) return false;
   if (view.priority !== view.you) return false;
   if (view.pendingDecision) return false;
   if (view.combatAwaiting) return false;
   if (view.stack.length > 0) {
-    // Auto-passa apenas sobre a própria mágica (estilo Arena).
-    return view.stack[view.stack.length - 1].controller === view.you;
+    // Yield ativo passa sobre tudo; senão só sobre a própria mágica (Arena).
+    return yielding || view.stack[view.stack.length - 1].controller === view.you;
   }
+  if (yielding) return true;
   const myTurn = view.activePlayer === view.you;
   const stopList = myTurn ? stops.myTurn : stops.oppTurn;
   return !stopList.includes(view.step);

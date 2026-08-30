@@ -76,6 +76,49 @@ export function CardTile({ card, size = 'field', selected, targetable, dimmed, a
   );
 }
 
+/**
+ * A card face rendered from its definition (or bare name) — used where a
+ * full CardView doesn't exist: stack pop-up, zone toasts, deck grids.
+ */
+export function CardFace({
+  def,
+  name,
+  badge,
+  onClick,
+  title,
+}: {
+  def?: CardView['card'] | null;
+  name?: string;
+  badge?: string;
+  onClick?: (e: React.MouseEvent) => void;
+  title?: string;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const cardName = def?.name ?? name ?? '?';
+  const url = def?.scryfallId ? imageUrlById(def.scryfallId) : imageUrlByName(cardName);
+
+  return (
+    <div className="card-face" onClick={onClick} title={title ?? cardName}>
+      {!imgFailed ? (
+        <img src={url} alt={cardName} loading="lazy" draggable={false} onError={() => setImgFailed(true)} />
+      ) : (
+        <div className="card-fallback" style={{ borderColor: frameColor(def?.colors ?? []) }}>
+          <div className="cf-name">{cardName}</div>
+          {def?.manaCost && <div className="cf-cost">{def.manaCost}</div>}
+          {def && (
+            <div className="cf-type">
+              {def.types.join(' ')}
+              {def.subtypes.length > 0 ? ` — ${def.subtypes.join(' ')}` : ''}
+            </div>
+          )}
+          {def?.text && <div className="cf-text">{def.text}</div>}
+        </div>
+      )}
+      {badge && <div className="card-count-badge">{badge}</div>}
+    </div>
+  );
+}
+
 function tooltip(card: CardView): string {
   const d = card.card;
   const parts = [d.name];
