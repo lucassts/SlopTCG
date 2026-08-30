@@ -19,10 +19,15 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Sem isto o SW novo espera TODAS as abas fecharem e o jogador fica
-        // preso na versão anterior do app (visto em produção na v0.3.0).
         skipWaiting: true,
         clientsClaim: true,
+        cleanupOutdatedCaches: true,
+        // NÃO pré-cachear o app: num jogo self-hosted, sem servidor não há
+        // partida — e o precache prendia jogadores em versões antigas do
+        // cliente (visto em produção na v0.3.0/v0.4.0). O SW existe só para
+        // o cache de imagens do Scryfall abaixo.
+        globPatterns: [],
+        navigateFallback: null,
         // Imagens de carta do Scryfall: cache agressivo (são imutáveis por URL).
         runtimeCaching: [
           {
