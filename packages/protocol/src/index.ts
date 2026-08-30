@@ -39,14 +39,14 @@ export interface CountedCard {
   count: number;
 }
 
-export type DeckSpec =
-  | { kind: 'demo'; name: 'gruul' | 'azorius' }
-  | { kind: 'external'; cards: ExternalCard[]; sideboard?: CountedCard[] };
+export type DeckSpec = { kind: 'external'; cards: ExternalCard[]; sideboard?: CountedCard[] };
 
 export interface LobbyPlayer {
   playerId: PlayerId;
   name: string;
   deckReady: boolean;
+  /** Player confirmed the deck and wants the match to start. */
+  ready: boolean;
   connected: boolean;
 }
 
@@ -55,6 +55,7 @@ export type ClientMessage =
   | { type: 'joinRoom'; roomCode: string; playerName: string }
   | { type: 'rejoin'; roomCode: string; token: string }
   | { type: 'setDeck'; deck: DeckSpec }
+  | { type: 'lobbyReady'; ready: boolean }
   | { type: 'startGame' }
   | { type: 'action'; action: PlayerAction }
   /** Between match games: submit the reconfigured mainboard (side = rest). */

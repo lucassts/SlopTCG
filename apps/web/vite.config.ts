@@ -19,6 +19,10 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Sem isto o SW novo espera TODAS as abas fecharem e o jogador fica
+        // preso na versão anterior do app (visto em produção na v0.3.0).
+        skipWaiting: true,
+        clientsClaim: true,
         // Imagens de carta do Scryfall: cache agressivo (são imutáveis por URL).
         runtimeCaching: [
           {

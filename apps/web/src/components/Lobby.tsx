@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { CountedCard, DeckSpec, LobbyPlayer } from '@sloptcg/protocol';
 import { serverHttpBase } from '../net';
 import { parseDecklist, resolveDecklist } from '../scryfall';
+import { HoverPreview } from './CardTile';
 import { DeckColumn, DeckModeToggle, type DeckViewMode } from './DeckView';
 
 export interface LobbyProps {
@@ -9,13 +10,11 @@ export interface LobbyProps {
   you: 'p1' | 'p2';
   players: LobbyPlayer[];
   onSetDeck: (deck: DeckSpec) => void;
+  onReady: (ready: boolean) => void;
   onStart: () => void;
 }
 
-type DeckChoice = 'gruul' | 'azorius' | 'custom';
-
-export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps) {
-  const [choice, setChoice] = useState<DeckChoice | null>(null);
+export function Lobby({ roomCode, you, players, onSetDeck, onReady, onStart }: LobbyProps) {
   const [customText, setCustomText] = useState('');
   const [deckUrl, setDeckUrl] = useState('');
   const [importing, setImporting] = useState(false);
@@ -23,25 +22,12 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
   const [copied, setCopied] = useState(false);
   const [preview, setPreview] = useState<{ main: CountedCard[]; side: CountedCard[] } | null>(null);
   const [previewMode, setPreviewMode] = useState<DeckViewMode>('list');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const me = players.find((p) => p.playerId === you);
+  const opp = players.find((p) => p.playerId !== you);
   const bothReady = players.length === 2 && players.every((p) => p.deckReady);
-
-  const pickDemo = async (name: 'gruul' | 'azorius') => {
-    setChoice(name);
-    setImportInfo(null);
-    onSetDeck({ kind: 'demo', name });
-    setPreview(null);
-    try {
-      const res = await fetch(`${serverHttpBase()}/api/demodeck?name=${name}`);
-      if (res.ok) {
-        const data = (await res.json()) as { cards: CountedCard[]; sideboard: CountedCard[] };
-        setPreview({ main: data.cards, side: data.sideboard });
-      }
-    } catch {
-      // sem preview: a lista fica indisponível, o deck continua válido
-    }
-  };
+  const oppReady = opp?.ready ?? false;
 
   const finishImport = async (
     entries: { name: string; count: number }[],
@@ -50,7 +36,6 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
     const result = await resolveDecklist(entries);
     if (result.cards.length === 0) throw new Error('nenhuma carta encontrada no Scryfall');
     onSetDeck({ kind: 'external', cards: result.cards, sideboard });
-    setChoice('custom');
     setPreview({ main: result.cards.map((c) => ({ name: c.name, count: c.count })), side: sideboard });
     const total = result.cards.reduce((n, c) => n + c.count, 0);
     const sideTotal = sideboard.reduce((n, c) => n + c.count, 0);
@@ -61,18 +46,30 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
     );
   };
 
-  const importCustom = async () => {
+  const importText = async (text: string) => {
     setImporting(true);
     setImportInfo(null);
     try {
-      const { main, side } = parseDecklist(customText);
-      if (main.length === 0) throw new Error('cole uma lista tipo "4 Lightning Bolt"');
+      const { main, side } = parseDecklist(text);
+      if (main.length === 0) throw new Error('nenhuma carta reconhecida — use linhas como "4 Lightning Bolt"');
       await finishImport(main, side);
     } catch (err) {
       setImportInfo(`Erro: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setImporting(false);
     }
+  };
+
+  const importFile = (file: File) => {
+    setImporting(true);
+    setImportInfo(null);
+    const reader = new FileReader();
+    reader.onload = () => void importText(String(reader.result ?? ''));
+    reader.onerror = () => {
+      setImportInfo('Erro: não consegui ler o arquivo');
+      setImporting(false);
+    };
+    reader.readAsText(file);
   };
 
   const importFromUrl = async () => {
@@ -98,6 +95,7 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
 
   return (
     <div className="screen-center">
+      <HoverPreview />
       <div className="brand">Sala</div>
       <div
         className="room-code"
@@ -119,48 +117,51 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
               <span>
                 {p.name} {p.playerId === you ? '(você)' : ''} {p.connected ? '' : '⚠ desconectado'}
               </span>
-              <span>{p.deckReady ? '✅ deck pronto' : '… escolhendo deck'}</span>
+              <span>
+                {p.ready ? '🟢 pronto' : p.deckReady ? '🃏 deck escolhido' : '… escolhendo deck'}
+              </span>
             </div>
           ))}
           {players.length < 2 && <div className="lobby-player muted">aguardando oponente…</div>}
         </div>
 
-        <div className="panel-title">Escolha seu deck</div>
-        <div className="deck-options">
-          <div className={`deck-option ${choice === 'gruul' ? 'chosen' : ''}`} onClick={() => pickDemo('gruul')}>
-            <h4>🔴🟢 Gruul Smash</h4>
-            <div className="muted">Agressivo. Criaturas grandes, Bolts, Giant Growth. 100% automatizado.</div>
-          </div>
-          <div className={`deck-option ${choice === 'azorius' ? 'chosen' : ''}`} onClick={() => pickDemo('azorius')}>
-            <h4>⚪🔵 Azorius Wings</h4>
-            <div className="muted">Voadores, fichas, counters e card advantage. 100% automatizado.</div>
-          </div>
+        <div className="panel-title">Importe seu deck</div>
+        <div className="row">
+          <input
+            placeholder="URL do Archidekt (ex.: archidekt.com/decks/123456)"
+            value={deckUrl}
+            onChange={(e) => setDeckUrl(e.target.value)}
+          />
+          <button disabled={importing || !deckUrl.trim()} onClick={() => void importFromUrl()} style={{ flex: '0 0 auto' }}>
+            {importing ? '…' : 'Importar URL'}
+          </button>
         </div>
-        <details>
-          <summary className="muted" style={{ cursor: 'pointer' }}>Importar deck próprio</summary>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-            <div className="row">
-              <input
-                placeholder="URL do Archidekt (ex.: archidekt.com/decks/123456)"
-                value={deckUrl}
-                onChange={(e) => setDeckUrl(e.target.value)}
-              />
-              <button disabled={importing || !deckUrl.trim()} onClick={importFromUrl} style={{ flex: '0 0 auto' }}>
-                {importing ? '…' : 'Importar URL'}
-              </button>
-            </div>
-            <textarea
-              rows={6}
-              placeholder={'…ou cole a lista (Moxfield: Export → copy):\n4 Lightning Bolt\n4 Grizzly Bears\n12 Mountain'}
-              value={customText}
-              onChange={(e) => setCustomText(e.target.value)}
-            />
-            <button disabled={importing || !customText.trim()} onClick={importCustom}>
-              {importing ? 'importando…' : 'Importar lista'}
-            </button>
-            {importInfo && <div className="muted">{importInfo}</div>}
-          </div>
-        </details>
+        <textarea
+          rows={6}
+          placeholder={'…cole a lista (Moxfield, MTGO ou Arena):\n4 Lightning Bolt\n4 Grizzly Bears\n12 Mountain\nSideboard\n2 Pyroclasm'}
+          value={customText}
+          onChange={(e) => setCustomText(e.target.value)}
+        />
+        <div className="row">
+          <button disabled={importing || !customText.trim()} onClick={() => void importText(customText)}>
+            {importing ? 'importando…' : 'Importar lista'}
+          </button>
+          <button disabled={importing} onClick={() => fileRef.current?.click()}>
+            📄 Enviar arquivo .txt
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".txt,.dec,.dek,text/plain"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) importFile(f);
+              e.target.value = '';
+            }}
+          />
+        </div>
+        {importInfo && <div className="muted">{importInfo}</div>}
 
         {preview && (
           <details className="deck-preview">
@@ -179,13 +180,37 @@ export function Lobby({ roomCode, you, players, onSetDeck, onStart }: LobbyProps
         )}
 
         {you === 'p1' ? (
-          <button className="primary" disabled={!bothReady} onClick={onStart}>
-            {bothReady ? 'Começar partida' : 'aguardando decks…'}
-          </button>
+          <>
+            <button className="primary" disabled={!bothReady || !oppReady} onClick={onStart}>
+              {!bothReady
+                ? 'aguardando os decks…'
+                : !oppReady
+                  ? `aguardando ${opp?.name ?? 'o oponente'} ficar pronto…`
+                  : 'Começar partida'}
+            </button>
+            {bothReady && !oppReady && (
+              <div className="muted" style={{ textAlign: 'center' }}>
+                O oponente escolheu um deck mas ainda não confirmou que está pronto.
+              </div>
+            )}
+          </>
         ) : (
-          <div className="muted" style={{ textAlign: 'center' }}>
-            {me?.deckReady ? 'aguardando o anfitrião começar…' : 'escolha um deck acima'}
-          </div>
+          <>
+            <button
+              className={me?.ready ? '' : 'primary'}
+              disabled={!me?.deckReady}
+              onClick={() => onReady(!(me?.ready ?? false))}
+            >
+              {me?.ready ? 'Cancelar (trocar de deck)' : '✅ Estou pronto'}
+            </button>
+            <div className="muted" style={{ textAlign: 'center' }}>
+              {!me?.deckReady
+                ? 'importe um deck acima'
+                : me.ready
+                  ? 'pronto! aguardando o anfitrião começar…'
+                  : 'confirme quando terminar de escolher o deck'}
+            </div>
+          </>
         )}
       </div>
     </div>

@@ -193,11 +193,11 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 }
 .card-field { width: 82px; height: 114px; }
 .card-hand { width: 96px; height: 134px; }
-.card-hand:hover { transform: translateY(-10px) scale(1.6); z-index: 30; }
-.card-field:hover { transform: scale(1.55); z-index: 30; }
+.card-hand:hover { transform: translateY(-14px) scale(2); z-index: 30; }
+.card-field:hover { transform: scale(1.9); z-index: 30; }
 .card-tile img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; display: block; }
 .card-tile.tapped { transform: rotate(90deg) scale(0.92); margin: 0 14px; }
-.card-tile.tapped:hover { transform: rotate(90deg) scale(1.5); }
+.card-tile.tapped:hover { transform: rotate(90deg) scale(1.85); }
 .card-tile.selected { box-shadow: 0 0 0 3px var(--accent); }
 .card-tile.targetable { box-shadow: 0 0 0 3px var(--danger); animation: pulse 1s infinite; }
 .card-tile.attacking { box-shadow: 0 0 0 3px var(--danger); }
@@ -282,7 +282,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   white-space: nowrap;
 }
 .phase-step.current { background: var(--accent); color: #1a1408; font-weight: 700; }
-.phase-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.phase-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.yield-group { flex-wrap: wrap; }
 .prompt-banner {
   background: #2a2413;
   border: 1px solid var(--accent);
@@ -402,7 +403,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .stack-card .card-face { width: 120px; height: 167px; }
 .stack-card.mine .card-face { box-shadow: 0 0 0 2px var(--ok); border-radius: 8px; }
 .stack-card.theirs .card-face { box-shadow: 0 0 0 2px var(--blue); border-radius: 8px; }
-.stack-card:hover .card-face { transform: scale(1.35); z-index: 40; position: relative; }
+.stack-card:hover .card-face { transform: scale(1.6); z-index: 40; position: relative; }
 .stack-desc { font-size: 11px; color: var(--muted); line-height: 1.2; max-height: 42px; overflow: hidden; }
 
 .card-face { position: relative; border-radius: 8px; user-select: none; transition: transform 0.12s; }
@@ -465,7 +466,27 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .deck-mode-toggle button.active { border-color: var(--accent); background: var(--panel); font-weight: 600; }
 .deck-grid { display: flex; flex-wrap: wrap; gap: 8px; }
 .deck-grid .card-face { width: 92px; height: 128px; cursor: pointer; }
-.deck-grid .card-face:hover { transform: scale(1.55); z-index: 40; }
+.deck-grid .card-face:hover { transform: scale(1.8); z-index: 40; }
+.deck-grid-card { cursor: grab; }
+.deck-grid-card:active { cursor: grabbing; }
+.sb-card[draggable='true'] { cursor: grab; }
+.sb-col { transition: border-color 0.12s; }
+
+/* preview fixo da carta sob o mouse (estilo MTGO) */
+.hover-preview {
+  position: fixed;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: min(264px, 20vw);
+  z-index: 500;
+  pointer-events: none;
+}
+.hover-preview img {
+  width: 100%;
+  border-radius: 12px;
+  box-shadow: 0 14px 50px rgba(0, 0, 0, 0.7);
+}
 .sb-card.static { cursor: default; }
 .sb-card.static:hover { background: transparent; }
 .sb-col:has(.deck-grid) { min-width: 0; }

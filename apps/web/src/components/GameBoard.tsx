@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CardView, GameView, PlayerAction, PlayerId } from '@sloptcg/protocol';
 import type { Step, TargetChoice } from '@sloptcg/engine';
-import { CardFace, CardTile } from './CardTile';
+import { CardFace, CardTile, HoverPreview } from './CardTile';
 import { stepName } from '../logText';
 
 const STEPS = [
@@ -45,13 +45,14 @@ function loadStops(): StopsConfig {
 
 /** One-shot auto-yield (MTGO F-keys): pass priority until the target moment. */
 interface YieldState {
-  kind: 'nextStep' | 'mainPhase' | 'endStep' | 'myTurn';
+  kind: 'nextStep' | 'combat' | 'mainPhase' | 'endStep' | 'myTurn';
   step: Step;
   turn: number;
 }
 
 const YIELD_LABEL: Record<YieldState['kind'], string> = {
   nextStep: 'próxima etapa',
+  combat: 'próximo combate',
   mainPhase: 'próxima fase principal',
   endStep: 'próxima etapa final',
   myTurn: 'meu próximo turno',
@@ -189,6 +190,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     const moved = v.step !== y.step || v.turn !== y.turn;
     switch (y.kind) {
       case 'nextStep': return moved;
+      case 'combat': return moved && v.step === 'combatBegin';
       case 'mainPhase': return moved && (v.step === 'main1' || v.step === 'main2');
       case 'endStep': return moved && v.step === 'end';
       case 'myTurn': return v.activePlayer === you && v.turn !== y.turn;
@@ -629,6 +631,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                 onClick={(e) => { e.stopPropagation(); startYield('nextStep'); }}
               >
                 ⏭ Etapa
+              </button>
+              <button
+                className={yieldUntil?.kind === 'combat' ? 'yield-on' : ''}
+                title="Passar até o próximo combate"
+                onClick={(e) => { e.stopPropagation(); startYield('combat'); }}
+              >
+                ⏭ Combate
               </button>
               <button
                 className={yieldUntil?.kind === 'mainPhase' ? 'yield-on' : ''}
@@ -1094,6 +1103,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           </div>
         </div>
       )}
+
+      <HoverPreview />
 
       {view.status === 'finished' && (
         <div className="game-over-overlay">

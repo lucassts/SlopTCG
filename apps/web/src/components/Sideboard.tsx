@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CountedCard, MatchStateMsg, PlayerId } from '@sloptcg/protocol';
+import { HoverPreview } from './CardTile';
 import { DeckColumn, DeckModeToggle, type DeckViewMode } from './DeckView';
 
 export interface SideboardProps {
@@ -11,10 +12,11 @@ export interface SideboardProps {
 }
 
 function loadMode(): DeckViewMode {
+  // Visual por padrão (dá para arrastar as cartas); lista é opt-in.
   try {
-    return localStorage.getItem('sloptcg-deckmode') === 'grid' ? 'grid' : 'list';
+    return localStorage.getItem('sloptcg-deckmode') === 'list' ? 'list' : 'grid';
   } catch {
-    return 'list';
+    return 'grid';
   }
 }
 
@@ -74,6 +76,7 @@ export function Sideboard({ info, match, you, onSubmit, onReady }: SideboardProp
 
   return (
     <div className="screen-center">
+      <HoverPreview />
       <div className="brand">
         Sideboard
         <small>
@@ -81,10 +84,29 @@ export function Sideboard({ info, match, you, onSubmit, onReady }: SideboardProp
         </small>
       </div>
       <div className="home-card" style={{ width: mode === 'grid' ? 'min(1100px, 96vw)' : 'min(720px, 94vw)' }}>
-        <DeckModeToggle mode={mode} onChange={saveMode} />
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <DeckModeToggle mode={mode} onChange={saveMode} />
+          <span className="muted">arraste as cartas entre as colunas, ou clique para mover</span>
+        </div>
         <div className="sb-columns">
-          <DeckColumn title="Deck" cards={main} mode={mode} onCardClick={toSide} clickHint="mover para o sideboard" />
-          <DeckColumn title="Sideboard" cards={side} mode={mode} onCardClick={toMain} clickHint="mover para o deck" />
+          <DeckColumn
+            title="Deck"
+            cards={main}
+            mode={mode}
+            onCardClick={toSide}
+            clickHint="mover para o sideboard"
+            dragId="main"
+            onDropCard={(name) => toMain(name)}
+          />
+          <DeckColumn
+            title="Sideboard"
+            cards={side}
+            mode={mode}
+            onCardClick={toMain}
+            clickHint="mover para o deck"
+            dragId="side"
+            onDropCard={(name) => toSide(name)}
+          />
         </div>
         <button className="primary" disabled={info.ready && !dirty} onClick={confirm}>
           {info.ready && !dirty ? 'Aguardando o oponente…' : `Pronto para o jogo ${match.gameNumber + 1}`}

@@ -163,6 +163,7 @@ export function App() {
           you={session.playerId}
           players={lobbyPlayers}
           onSetDeck={(deck: DeckSpec) => netRef.current?.send({ type: 'setDeck', deck })}
+          onReady={(ready: boolean) => netRef.current?.send({ type: 'lobbyReady', ready })}
           onStart={() => netRef.current?.send({ type: 'startGame' })}
         />
       )}

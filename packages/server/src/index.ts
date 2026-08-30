@@ -16,8 +16,6 @@ import { fileURLToPath } from 'node:url';
 import {
   compileOracleCard,
   DEMO_CARDS,
-  demoDeckAzorius,
-  demoDeckGruul,
   Game,
   redactEvent,
   viewFor,
@@ -47,6 +45,8 @@ interface Seat {
   name: string;
   token: string;
   pool: DeckPool | null;
+  /** Confirmed the deck in the lobby ("estou pronto"). */
+  lobbyReady: boolean;
   socket: WebSocket | null;
 }
 
@@ -93,6 +93,7 @@ function lobbyState(room: Room): LobbyPlayer[] {
       playerId: s.playerId,
       name: s.name,
       deckReady: s.pool !== null,
+      ready: s.lobbyReady,
       connected: s.socket !== null && s.socket.readyState === WebSocket.OPEN,
     }));
 }
@@ -305,12 +306,6 @@ function splitTypeLine(typeLine: string): { types: CardType[]; subtypes: string[
   };
 }
 
-function countNames(cards: CardDefinition[]): CountedCard[] {
-  const counts = new Map<string, number>();
-  for (const c of cards) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
-  return [...counts].map(([name, count]) => ({ name, count }));
-}
-
 function sanitizeEntries(raw: CountedCard[] | undefined): CountedCard[] {
   return (raw ?? [])
     .map((c) => ({ name: String(c.name ?? '').slice(0, 200), count: Math.min(Math.max(1, Math.floor(c.count || 1)), 99) }))
@@ -318,22 +313,7 @@ function sanitizeEntries(raw: CountedCard[] | undefined): CountedCard[] {
 }
 
 async function buildPool(spec: DeckSpec): Promise<DeckPool | string> {
-  if (spec.kind === 'demo') {
-    const mainCards = (spec.name === 'gruul' ? demoDeckGruul() : demoDeckAzorius()).cards;
-    const sideIds =
-      spec.name === 'gruul'
-        ? ['pyroclasm', 'fog', 'act-of-treason']
-        : ['day-of-judgment', 'preordain', 'opt'];
-    const sideCards = sideIds.flatMap((id) => [DEMO_CARDS[id], DEMO_CARDS[id]]);
-    const defs = new Map<string, CardDefinition>();
-    for (const c of [...mainCards, ...sideCards]) defs.set(c.name.toLowerCase(), c);
-    const main = countNames(mainCards);
-    const side = countNames(sideCards);
-    const total = new Map<string, number>();
-    for (const e of [...main, ...side]) total.set(e.name, (total.get(e.name) ?? 0) + e.count);
-    return { defs, total, main, side };
-  }
-
+  if (spec.kind !== 'external') return 'formato de deck desconhecido';
   const main = sanitizeEntries(spec.cards as CountedCard[]);
   const side = sanitizeEntries(spec.sideboard);
   if (main.length === 0) return 'deck vazio';
@@ -380,6 +360,7 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
         name: sanitizeName(msg.playerName),
         token: randomBytes(16).toString('hex'),
         pool: null,
+        lobbyReady: false,
         socket,
       };
       room.seats.p1 = seat;
@@ -399,6 +380,7 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
         name: sanitizeName(msg.playerName),
         token: randomBytes(16).toString('hex'),
         pool: null,
+        lobbyReady: false,
         socket,
       };
       room.seats.p2 = seat;
@@ -438,6 +420,8 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
           if (typeof pool === 'string') return send(socket, { type: 'serverError', message: pool });
           if (room.game) return send(socket, { type: 'serverError', message: 'a partida já começou' });
           room.seats[playerId]!.pool = pool;
+          // Trocar de deck desfaz o "estou pronto" — o oponente precisa saber.
+          room.seats[playerId]!.lobbyReady = false;
           room.lastActivity = Date.now();
           broadcastLobby(room);
         })
@@ -446,12 +430,27 @@ function handleMessage(socket: WebSocket, conn: ConnState, msg: ClientMessage): 
         });
       return;
     }
+    case 'lobbyReady': {
+      const { room, playerId } = conn;
+      if (!room || !playerId) return send(socket, { type: 'serverError', message: 'você não está numa sala' });
+      if (room.game) return;
+      const seat = room.seats[playerId];
+      if (!seat) return;
+      if (msg.ready && !seat.pool)
+        return send(socket, { type: 'serverError', message: 'escolha um deck antes de ficar pronto' });
+      seat.lobbyReady = msg.ready;
+      room.lastActivity = Date.now();
+      broadcastLobby(room);
+      return;
+    }
     case 'startGame': {
       const { room, playerId } = conn;
       if (!room || playerId !== 'p1') return send(socket, { type: 'serverError', message: 'só o anfitrião inicia a partida' });
       if (room.game) return send(socket, { type: 'serverError', message: 'a partida já começou' });
       if (!room.seats.p1?.pool || !room.seats.p2?.pool)
         return send(socket, { type: 'serverError', message: 'os dois jogadores precisam escolher um deck' });
+      if (!room.seats.p2.lobbyReady)
+        return send(socket, { type: 'serverError', message: 'aguarde o oponente confirmar que está pronto' });
       room.lastActivity = Date.now();
       startNextGame(room); // jogo 1: quem começa sai do roll 1-100
       return;
@@ -631,19 +630,6 @@ function serveStatic(pathname: string, res: http.ServerResponse): void {
 const httpServer = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  if (req.method === 'GET' && url.pathname === '/api/demodeck') {
-    const name = url.searchParams.get('name') === 'azorius' ? 'azorius' : 'gruul';
-    void buildPool({ kind: 'demo', name }).then((pool) => {
-      if (typeof pool === 'string') {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: pool }));
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ cards: pool.main, sideboard: pool.side }));
-    });
-    return;
-  }
   if (req.method === 'GET' && url.pathname === '/api/deck') {
     const deckUrl = url.searchParams.get('url') ?? '';
     fetchArchidektDeck(deckUrl)

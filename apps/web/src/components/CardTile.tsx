@@ -1,6 +1,32 @@
 import type { CardView } from '@sloptcg/protocol';
 import { imageUrlById, imageUrlByName } from '../scryfall';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+
+// ------------------------------------------------------------ hover preview
+// Qualquer carta com o mouse em cima emite este evento; o <HoverPreview/>
+// montado na tela mostra a carta grande num canto fixo (estilo MTGO).
+
+const HOVER_EVENT = 'sloptcg-hover';
+
+function emitHover(url: string | null) {
+  window.dispatchEvent(new CustomEvent<string | null>(HOVER_EVENT, { detail: url }));
+}
+
+/** Fixed enlarged preview of whatever card is under the mouse. */
+export function HoverPreview() {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const onHover = (e: Event) => setUrl((e as CustomEvent<string | null>).detail);
+    window.addEventListener(HOVER_EVENT, onHover);
+    return () => window.removeEventListener(HOVER_EVENT, onHover);
+  }, []);
+  if (!url) return null;
+  return (
+    <div className="hover-preview">
+      <img src={url} alt="" draggable={false} />
+    </div>
+  );
+}
 
 const COLOR_FRAMES: Record<string, string> = {
   W: '#e8e2d0',
@@ -51,7 +77,14 @@ export function CardTile({ card, size = 'field', selected, targetable, dimmed, a
   ].filter(Boolean).join(' ');
 
   return (
-    <div className={classes} onClick={onClick} onContextMenu={onContextMenu} title={title ?? tooltip(card)}>
+    <div
+      className={classes}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      title={title ?? tooltip(card)}
+      onMouseEnter={() => url && !imgFailed && emitHover(url)}
+      onMouseLeave={() => emitHover(null)}
+    >
       {url && !imgFailed ? (
         <img src={url} alt={def.name} loading="lazy" draggable={false} onError={() => setImgFailed(true)} />
       ) : (
@@ -98,7 +131,13 @@ export function CardFace({
   const url = def?.scryfallId ? imageUrlById(def.scryfallId) : imageUrlByName(cardName);
 
   return (
-    <div className="card-face" onClick={onClick} title={title ?? cardName}>
+    <div
+      className="card-face"
+      onClick={onClick}
+      title={title ?? cardName}
+      onMouseEnter={() => !imgFailed && emitHover(url)}
+      onMouseLeave={() => emitHover(null)}
+    >
       {!imgFailed ? (
         <img src={url} alt={cardName} loading="lazy" draggable={false} onError={() => setImgFailed(true)} />
       ) : (

@@ -34,34 +34,88 @@ export interface DecklistResult {
 }
 
 /**
- * Parse "4 Lightning Bolt" style decklists (also "4x"; blanks/comments
- * ignored). A "Sideboard" line — or the MTGO "SB:" prefix — starts the
- * sideboard section.
+ * Parse decklists in the common export formats:
+ * - simple: "4 Lightning Bolt" / "4x Lightning Bolt" / bare names
+ * - Moxfield / Arena: "4 Lightning Bolt (2X2) 117" (set/collector stripped),
+ *   optional "Deck" / "Sideboard" section headers, foil markers "*F*"
+ * - MTGO text: "SB:" prefix, or main deck + blank line + sideboard block
+ * Comments (// or #) and blank lines are ignored for counting.
  */
 export function parseDecklist(text: string): {
   main: { name: string; count: number }[];
   side: { name: string; count: number }[];
 } {
-  const main: { name: string; count: number }[] = [];
-  const side: { name: string; count: number }[] = [];
+  interface Entry { name: string; count: number; side: boolean; block: number }
+  const entries: Entry[] = [];
   let inSide = false;
+  let sawHeader = false;
+  let block = 0;
+  let blankPending = false;
+
   for (const rawLine of text.split('\n')) {
     let line = rawLine.trim();
-    if (!line || line.startsWith('//') || line.startsWith('#')) continue;
-    if (/^sideboard:?$/i.test(line)) {
-      inSide = true;
+    if (!line) {
+      blankPending = entries.length > 0;
       continue;
     }
-    let target = inSide ? side : main;
+    if (line.startsWith('//') || line.startsWith('#')) continue;
+    if (/^(deck|main|maindeck|mainboard|companion|commander):?$/i.test(line)) {
+      sawHeader = true;
+      inSide = false;
+      blankPending = false;
+      continue;
+    }
+    if (/^sideboard:?$/i.test(line)) {
+      sawHeader = true;
+      inSide = true;
+      blankPending = false;
+      continue;
+    }
+    if (blankPending) {
+      block += 1;
+      blankPending = false;
+    }
+    let side = inSide;
     if (/^sb:\s*/i.test(line)) {
-      target = side;
+      side = true;
+      sawHeader = true;
       line = line.replace(/^sb:\s*/i, '');
     }
     const m = line.match(/^(\d+)x?\s+(.+)$/i);
-    if (m) target.push({ count: parseInt(m[1], 10), name: m[2].trim() });
-    else target.push({ count: 1, name: line });
+    let count = 1;
+    let name = line;
+    if (m) {
+      count = parseInt(m[1], 10);
+      name = m[2].trim();
+    }
+    // Moxfield/Arena: "(SET) 123" no fim; Moxfield: marcador de foil "*F*".
+    name = name
+      .replace(/\s+\*[A-Za-z]+\*\s*$/, '')
+      .replace(/\s+\([A-Z0-9]{2,6}\)(\s+[\w★†-]+)?\s*$/, '')
+      .trim();
+    if (name) entries.push({ name, count, side, block });
   }
-  return { main, side };
+
+  // MTGO text: sem cabeçalho, o bloco final após linha em branco é o
+  // sideboard — mas só quando tem cara de sideboard (≤15 cartas, deck ≥ 20).
+  if (!sawHeader && block > 0) {
+    const lastBlock = entries.filter((e) => e.block === block);
+    const rest = entries.filter((e) => e.block < block);
+    const lastCount = lastBlock.reduce((n, e) => n + e.count, 0);
+    const restCount = rest.reduce((n, e) => n + e.count, 0);
+    if (lastCount <= 15 && restCount >= 20) for (const e of lastBlock) e.side = true;
+  }
+
+  const fold = (list: Entry[]) => {
+    const out: { name: string; count: number }[] = [];
+    for (const e of list) {
+      const hit = out.find((o) => o.name.toLowerCase() === e.name.toLowerCase());
+      if (hit) hit.count += e.count;
+      else out.push({ name: e.name, count: e.count });
+    }
+    return out;
+  };
+  return { main: fold(entries.filter((e) => !e.side)), side: fold(entries.filter((e) => e.side)) };
 }
 
 /** Resolve a decklist against Scryfall's collection endpoint (batches of 75). */
