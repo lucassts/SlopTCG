@@ -110,7 +110,7 @@ function validateStructure(def) {
       for (const r of targetRefs(ab.effect)) if (r >= n) problems.push(`habilidade ${i} referencia target:${r} sem spec`);
       if (!ab.effect?.length && !(ab.kind === 'triggered' && ab.modes?.length)) problems.push(`habilidade ${i} sem efeito`);
     }
-    if (ab.kind === 'activated' && ab.isManaAbility && !ab.effect.some((e) => e.op === 'addMana' || e.op === 'addManaChoice'))
+    if (ab.kind === 'activated' && ab.isManaAbility && !ab.effect.some((e) => e.op === 'addMana' || e.op === 'addManaChoice' || e.op === 'addChosenColorMana'))
       problems.push(`habilidade de mana ${i} não adiciona mana`);
   }
   if (def.subtypes.includes('Aura') && !def.enchant) problems.push('aura sem enchant');
@@ -202,6 +202,8 @@ function settle(game, log, maxSteps = 60) {
       } else if (pd.type === 'effectChoice') {
         if (pd.mode === 'nameCard') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'Grizzly Bears' });
         else if (pd.mode === 'confirm') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'yes' });
+        else if (pd.mode === 'chooseColor') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'G' });
+        else if (pd.mode === 'chooseType') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'Bear' });
         else r = game.apply(pd.player, { type: 'effectChoice', picks: pd.options.slice(0, pd.min) });
       } else if (pd.type === 'chooseMode') {
         r = game.apply(pd.player, { type: 'chooseMode', mode: 0 });

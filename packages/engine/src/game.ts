@@ -24,6 +24,8 @@ import {
   createGameState,
   effectivePower,
   attachmentForbids,
+  createObject,
+  effectiveToughness,
   hasKeyword,
   isCreature,
   matchFilter,
@@ -381,8 +383,9 @@ export class Game {
       { this.fail(playerId, 'isso não é um terreno'); return false; }
     if (!this.sorceryTiming(playerId))
       { this.fail(playerId, 'terrenos só podem ser jogados na sua fase principal com a pilha vazia'); return false; }
-    if (s.players[playerId].landsPlayedThisTurn >= 1)
-      { this.fail(playerId, 'você já jogou um terreno neste turno'); return false; }
+    const extraLands = s.players[playerId].zones.battlefield.reduce((n, id) => n + (s.objects[id].card.extraLands ?? 0), 0);
+    if (s.players[playerId].landsPlayedThisTurn >= 1 + extraLands)
+      { this.fail(playerId, 'você já jogou seus terrenos neste turno'); return false; }
 
     removeFromCurrentZone(s, obj);
     obj.zone = 'battlefield';
@@ -395,10 +398,45 @@ export class Game {
     return true;
   }
 
+  /** Keyword "enters with…" rules (modular, fabricate, unleash/riot, bloodthirst, kicker, living weapon, echo, vanishing, devour, choose-as-enters). */
+  private applyEnterKeywords(obj: GameObject): void {
+    const s = this.state;
+    const card = obj.card;
+    const add = (counter: string, n: number) => {
+      if (n <= 0) return;
+      const total = (obj.counters[counter] ?? 0) + n;
+      obj.counters[counter] = total;
+      this.emit({ type: 'countersChanged', objectId: obj.id, cardName: card.name, counter, delta: n, total });
+    };
+    if (card.modular) add('+1/+1', card.modular);
+    if (card.fabricate) add('+1/+1', card.fabricate);
+    if (card.unleash || card.riot) add('+1/+1', 1);
+    if (card.bloodthirst && s.players[opponentOf(obj.controller)].damagedThisTurn) add('+1/+1', card.bloodthirst);
+    if (obj.kicked && card.kicker?.entersWithCounters) add(card.kicker.entersWithCounters.counter, card.kicker.entersWithCounters.count);
+    if (card.vanishing) add('time', card.vanishing);
+    if (card.fading) add('fade', card.fading);
+    if (card.echo) obj.echoPending = true;
+    if (card.livingWeapon) {
+      const germ = createObject(s, { id: 'token-germ', name: 'Phyrexian Germ', types: ['Creature'], subtypes: ['Phyrexian', 'Germ'], colors: ['B'], power: 0, toughness: 0, automation: 'full' }, obj.controller);
+      germ.isToken = true;
+      germ.zone = 'battlefield';
+      germ.summoningSick = true;
+      s.players[obj.controller].zones.battlefield.push(germ.id);
+      obj.attachedTo = germ.id;
+      this.emit({ type: 'tokenCreated', player: obj.controller, objectId: germ.id, name: 'Phyrexian Germ' });
+    }
+    // Escolhas e devorar ao entrar: viram habilidade na pilha (podem pausar).
+    const enterScript: import('./cards/types.js').EffectStep[] = [];
+    if (card.chooseOnEnter) enterScript.push({ op: 'chooseValue', kind: card.chooseOnEnter });
+    if (card.devour) enterScript.push({ op: 'devour', per: card.devour });
+    if (enterScript.length > 0) this.pushTrigger(obj, { text: 'ao entrar', effect: enterScript });
+  }
+
   /** entersTapped / checklands & fastlands / shocklands, as a permanent enters. */
   private applyEnterTapRules(obj: GameObject): void {
     const s = this.state;
     const card = obj.card;
+    this.applyEnterKeywords(obj);
     if (card.entersTapped) { setTapped(s, obj, true, this.emit); return; }
     if (card.entersTappedUnless) {
       const mine = s.players[obj.controller].zones.battlefield.map((id) => s.objects[id]).filter((o) => o.id !== obj.id);
@@ -490,6 +528,7 @@ export class Game {
         : card.spellTargets;
     const targetErr = this.validateTargets(playerId, specs, targets, card.colors);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
+    for (const t of targets) if (t.kind === 'object') this.emit({ type: 'targeted', objectId: t.id, by: playerId });
 
     // Additional cost: sacrifice (Fling-style; flashback may also demand one,
     // e.g. Cabal Therapy). Validated before any payment.
@@ -576,6 +615,7 @@ export class Game {
 
     removeFromCurrentZone(s, obj);
     obj.zone = 'stack';
+    obj.kicked = !!kicked;
     const description =
       (mode ? `${card.name} — ${mode.label}` : card.name) +
       (xValue !== undefined ? ` (X=${xValue})` : '') +
@@ -716,6 +756,7 @@ export class Game {
     }
     const targetErr = this.validateTargets(playerId, ability.targets, targets, obj.card.colors);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
+    for (const t of targets) if (t.kind === 'object') this.emit({ type: 'targeted', objectId: t.id, by: playerId });
 
     // Sacrifice-another cost (Viscera Seer): validated before paying anything.
     const abilitySacs = sacrifices ?? [];
@@ -936,8 +977,10 @@ export class Game {
       const attacker = s.objects[b.attacker];
       if (!blocker || blocker.zone !== 'battlefield' || blocker.controller !== playerId)
         { this.fail(playerId, 'bloqueador inválido'); return false; }
-      if (seen.has(blocker.id))
-        { this.fail(playerId, `${blocker.card.name} só pode bloquear um atacante`); return false; }
+      const already = resolved.filter((r) => r.blocker.id === blocker.id).length;
+      const extra = blocker.card.extraBlocks === 'any' ? Infinity : blocker.card.extraBlocks ?? 0;
+      if (seen.has(blocker.id) && already > extra)
+        { this.fail(playerId, `${blocker.card.name} só pode bloquear ${1 + extra} atacante(s)`); return false; }
       if (!attacker || !attacker.attacking)
         { this.fail(playerId, 'atacante inválido'); return false; }
       const why = canBlock(s, blocker, attacker);
@@ -945,11 +988,15 @@ export class Game {
       seen.add(blocker.id);
       resolved.push({ blocker, attacker });
     }
-    // Menace: attackers with menace must be blocked by 2+ or not at all.
-    for (const atk of Object.values(s.objects).filter((o) => o.attacking && hasKeyword(s, o, 'menace'))) {
+    // Menace / minBlockers / maxBlockers.
+    for (const atk of Object.values(s.objects).filter((o) => o.attacking)) {
       const count = resolved.filter((r) => r.attacker.id === atk.id).length;
-      if (count === 1)
-        { this.fail(playerId, `${atk.card.name} tem ameaçar: precisa de 2+ bloqueadores`); return false; }
+      if (count === 0) continue;
+      const min = Math.max(hasKeyword(s, atk, 'menace') ? 2 : 1, atk.card.minBlockers ?? 1);
+      if (count < min)
+        { this.fail(playerId, `${atk.card.name} só pode ser bloqueada por ${min} ou mais criaturas`); return false; }
+      if (atk.card.maxBlockers !== undefined && count > atk.card.maxBlockers)
+        { this.fail(playerId, `${atk.card.name} não pode ser bloqueada por mais de ${atk.card.maxBlockers} criatura(s)`); return false; }
     }
     for (const r of resolved) {
       r.blocker.blocking = r.attacker.id;
@@ -986,6 +1033,17 @@ export class Game {
     if (pending.mode === 'confirm') {
       if (text !== 'yes' && text !== 'no') { this.fail(playerId, 'responda sim ou não'); return false; }
       applyEffectChoice(s, pending, [], this.emit, text);
+      return true;
+    }
+    if (pending.mode === 'chooseColor') {
+      if (!text || !['W', 'U', 'B', 'R', 'G'].includes(text)) { this.fail(playerId, 'escolha uma cor'); return false; }
+      applyEffectChoice(s, pending, [], this.emit, text);
+      return true;
+    }
+    if (pending.mode === 'chooseType') {
+      const t = (text ?? '').trim();
+      if (!t || t.length > 40) { this.fail(playerId, 'digite um tipo de criatura'); return false; }
+      applyEffectChoice(s, pending, [], this.emit, t.charAt(0).toUpperCase() + t.slice(1));
       return true;
     }
     if (new Set(picks).size !== picks.length)
@@ -1199,6 +1257,7 @@ export class Game {
         return;
       }
       case 'upkeep': {
+        this.fireUpkeepKeywords();
         this.fireStepTriggers('upkeep');
         s.priority = s.activePlayer;
         return;
@@ -1269,6 +1328,9 @@ export class Game {
         delete obj.counters['__deathtouched'];
         delete obj.counters['__regen']; // regeneration shields expire
       }
+    }
+    for (const p of PLAYER_IDS) s.players[p].damagedThisTurn = false;
+    {
     }
     // "Until end of turn" control effects wear off (Act of Treason).
     for (const revert of s.controlReverts) {
@@ -1447,6 +1509,16 @@ export class Game {
       if (ev.type === 'attackersDeclared') {
         for (const a of ev.attackers) this.fireSelfTrigger(a.objectId, 'attacks');
         if (ev.attackers.length > 0) this.fireControllerTriggers(ev.player, 'youAttack');
+        // Mentor: +1/+1 counter on target attacking creature with lesser power.
+        for (const a of ev.attackers) {
+          const m = this.state.objects[a.objectId];
+          if (m?.card.mentor)
+            this.pushTrigger(m, {
+              text: 'mentor',
+              targets: [{ what: 'creature', controlledBy: 'you', combat: true, powerLessThanSource: m.id }],
+              effect: [{ op: 'putCounters', what: 'target:0', counter: '+1/+1', count: 1 }],
+            });
+        }
         // Exalted: a lone attacker gets +1/+1 per exalted permanent its controller controls.
         if (ev.attackers.length === 1) {
           const atk = this.state.objects[ev.attackers[0].objectId];
@@ -1459,22 +1531,59 @@ export class Game {
         }
       }
       if (ev.type === 'blockersDeclared') {
+        const s = this.state;
+        const pump = (o: GameObject, n: number) => {
+          o.untilEot.power += n;
+          o.untilEot.toughness += n;
+          this.emit({ type: 'pumped', objectId: o.id, cardName: o.card.name, power: n, toughness: n });
+        };
+        const blockedAttackers = new Set(ev.blocks.map((b) => b.attacker));
         for (const b of ev.blocks) {
           this.fireSelfTrigger(b.blocker, 'blocks');
           // Bushido: blocker and blocked attacker get +N/+N.
           for (const id of [b.blocker, b.attacker]) {
-            const o = this.state.objects[id];
-            if (o?.card.bushido) {
-              o.untilEot.power += o.card.bushido;
-              o.untilEot.toughness += o.card.bushido;
-              this.emit({ type: 'pumped', objectId: o.id, cardName: o.card.name, power: o.card.bushido, toughness: o.card.bushido });
-            }
+            const o = s.objects[id];
+            if (o?.card.bushido) pump(o, o.card.bushido);
           }
+          // Flanking: a blocker without flanking gets -1/-1.
+          const atk = s.objects[b.attacker];
+          const blk = s.objects[b.blocker];
+          if (atk?.card.flanking && blk && !blk.card.flanking) pump(blk, -1);
+        }
+        for (const id of blockedAttackers) {
+          this.fireSelfTrigger(id, 'becomesBlocked');
+          const atk = s.objects[id];
+          if (!atk) continue;
+          const n = ev.blocks.filter((b) => b.attacker === id).length;
+          if (atk.card.rampage && n > 1) pump(atk, atk.card.rampage * (n - 1));
+          if (atk.card.afflict) changeLife(s, opponentOf(atk.controller), -atk.card.afflict, `afligir de ${atk.card.name}`, this.emit);
         }
       }
-      if (ev.type === 'zoneChanged' && ev.from === 'battlefield') this.fireSelfTrigger(ev.objectId, 'leaves');
+      if (ev.type === 'targeted') {
+        const o = this.state.objects[ev.objectId];
+        for (const ability of o?.card.abilities ?? []) {
+          if (ability.kind !== 'triggered' || ability.trigger.on !== 'becomesTargeted' || o!.zone !== 'battlefield') continue;
+          if (ability.trigger.byOpponent && ev.by === o!.controller) continue;
+          this.pushTrigger(o!, ability);
+        }
+      }
+      if (ev.type === 'cardDrawn') this.fireControllerTriggers(ev.player, 'youDrawCard');
+      if (ev.type === 'zoneChanged' && ev.from === 'battlefield') {
+        this.fireSelfTrigger(ev.objectId, 'leaves');
+        this.onLeaveKeywords(ev.objectId, ev.to);
+      }
+      if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireEvolve(ev.objectId);
       if (ev.type === 'tappedChanged' && ev.tapped) this.fireSelfTrigger(ev.objectId, 'becomesTapped');
-      if (ev.type === 'combatDamageToPlayer') this.fireSelfTrigger(ev.attackerId, 'combatDamageToPlayer');
+      if (ev.type === 'combatDamageToPlayer') {
+        this.fireSelfTrigger(ev.attackerId, 'combatDamageToPlayer');
+        const atk = this.state.objects[ev.attackerId];
+        if (atk?.card.renown && !atk.renowned && atk.zone === 'battlefield') {
+          atk.renowned = true;
+          const total = (atk.counters['+1/+1'] ?? 0) + atk.card.renown;
+          atk.counters['+1/+1'] = total;
+          this.emit({ type: 'countersChanged', objectId: atk.id, cardName: atk.card.name, counter: '+1/+1', delta: atk.card.renown, total });
+        }
+      }
       if (ev.type === 'lifeChanged' && ev.delta > 0) this.fireLifeGainTriggers(ev.player);
     }
   }
@@ -1509,8 +1618,55 @@ export class Game {
     }
   }
 
+  /** Evolve: a creature entering under your control with greater P or T gives +1/+1. */
+  private fireEvolve(enteringId: number): void {
+    const s = this.state;
+    const entering = s.objects[enteringId];
+    if (!entering || !entering.card.types.includes('Creature')) return;
+    for (const id of [...s.players[entering.controller].zones.battlefield]) {
+      const o = s.objects[id];
+      if (!o?.card.evolve || o.id === enteringId) continue;
+      if (effectivePower(s, entering) > effectivePower(s, o) || effectiveToughness(s, entering) > effectiveToughness(s, o))
+        this.pushTrigger(o, { text: 'evoluir', effect: [{ op: 'putCounters', what: 'self', counter: '+1/+1', count: 1 }] });
+    }
+  }
+
+  /** Persist / undying / afterlife / modular / exile-until-leaves, when a permanent leaves. */
+  private onLeaveKeywords(objectId: number, to: string): void {
+    const s = this.state;
+    const obj = s.objects[objectId];
+    if (!obj) return;
+    // Cartas exiladas "até ~ sair" voltam para o campo.
+    if (obj.exiledUntilLeaves?.length) {
+      for (const id of obj.exiledUntilLeaves) {
+        const ex = s.objects[id];
+        if (ex && ex.zone === 'exile') {
+          ex.controller = ex.owner;
+          moveWithEvent(s, ex, 'battlefield', 'returned', this.emit);
+        }
+      }
+      obj.exiledUntilLeaves = undefined;
+    }
+    if (to !== 'graveyard' || obj.isToken) return;
+    const card = obj.card;
+    // Persist / undying / modular use the counters it had when it died.
+    const last = obj.lastCounters ?? {};
+    if (card.persist && !(last['-1/-1'] > 0))
+      this.pushTrigger(obj, { text: 'persistir', effect: [{ op: 'returnToBattlefield', what: 'self' }, { op: 'putCounters', what: 'self', counter: '-1/-1', count: 1 }] });
+    if (card.undying && !(last['+1/+1'] > 0))
+      this.pushTrigger(obj, { text: 'imortal', effect: [{ op: 'returnToBattlefield', what: 'self' }, { op: 'putCounters', what: 'self', counter: '+1/+1', count: 1 }] });
+    if (card.modular && last['+1/+1'] > 0)
+      this.pushTrigger(obj, {
+        text: 'modular',
+        targets: [{ what: 'creature', controlledBy: 'you', typeAnyOf: ['Artifact'] }],
+        effect: [{ op: 'putCounters', what: 'target:0', counter: '+1/+1', count: last['+1/+1'] }],
+      });
+    if (card.afterlife)
+      this.pushTrigger(obj, { text: 'vida após a morte', effect: [{ op: 'token', who: 'controller', count: card.afterlife, name: 'Spirit', power: 1, toughness: 1, colors: ['W', 'B'], subtypes: ['Spirit'], keywords: ['flying'] }] });
+  }
+
   /** Triggers on a player's permanents keyed on the player ("whenever you attack"). */
-  private fireControllerTriggers(player: PlayerId, on: 'youAttack'): void {
+  private fireControllerTriggers(player: PlayerId, on: 'youAttack' | 'youDrawCard'): void {
     const s = this.state;
     for (const id of [...s.players[player].zones.battlefield]) {
       const obj = s.objects[id];
@@ -1521,7 +1677,7 @@ export class Game {
     }
   }
 
-  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks' | 'blocks' | 'leaves' | 'becomesTapped' | 'combatDamageToPlayer'): void {
+  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks' | 'blocks' | 'leaves' | 'becomesTapped' | 'becomesBlocked' | 'combatDamageToPlayer'): void {
     const obj = this.state.objects[objectId];
     if (!obj) return;
     for (const ability of obj.card.abilities ?? []) {
@@ -1549,6 +1705,34 @@ export class Game {
       for (const ability of obj.card.abilities ?? []) {
         if (ability.kind !== 'triggered' || ability.trigger.on !== 'opponentCastsSpell') continue;
         this.pushTrigger(obj, ability);
+      }
+    }
+  }
+
+  /** Echo, cumulative upkeep, vanishing, fading — as stack abilities of the active player's permanents. */
+  private fireUpkeepKeywords(): void {
+    const s = this.state;
+    for (const id of [...s.players[s.activePlayer].zones.battlefield]) {
+      const obj = s.objects[id];
+      const card = obj.card;
+      if (card.echo && obj.echoPending) {
+        obj.echoPending = false;
+        this.pushTrigger(obj, { text: `eco ${card.echo}`, effect: [{ op: 'payOrElse', cost: card.echo, else: [{ op: 'sacrificeSelf' }] }] });
+      }
+      if (card.cumulativeUpkeep) {
+        const total = (obj.counters['age'] ?? 0) + 1;
+        obj.counters['age'] = total;
+        this.emit({ type: 'countersChanged', objectId: obj.id, cardName: card.name, counter: 'age', delta: 1, total });
+        this.pushTrigger(obj, { text: `manutenção cumulativa ${card.cumulativeUpkeep}`, effect: [{ op: 'payOrElse', cost: card.cumulativeUpkeep, perCounter: 'age', else: [{ op: 'sacrificeSelf' }] }] });
+      }
+      for (const [kw, counter] of [['vanishing', 'time'], ['fading', 'fade']] as const) {
+        if (!card[kw]) continue;
+        const left = (obj.counters[counter] ?? 0) - 1;
+        if (left >= 0) {
+          obj.counters[counter] = left;
+          this.emit({ type: 'countersChanged', objectId: obj.id, cardName: card.name, counter, delta: -1, total: left });
+        }
+        if (left <= 0) this.pushTrigger(obj, { text: `${kw}: sem marcadores`, effect: [{ op: 'sacrificeSelf' }] });
       }
     }
   }

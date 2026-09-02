@@ -61,6 +61,9 @@ export type GameEvent =
   | { type: 'poisonChanged'; player: PlayerId; delta: number; total: number }
   | { type: 'crewed'; objectId: number; cardName: string; player: PlayerId }
   | { type: 'modeChosen'; player: PlayerId; cardName: string; mode: string }
+  | { type: 'valueChosen'; player: PlayerId; cardName: string; value: string }
+  /** An object became the target of a spell or ability (trigger hook). */
+  | { type: 'targeted'; objectId: number; by: PlayerId }
   | { type: 'shuffled'; player: PlayerId }
   | { type: 'priorityChanged'; player: PlayerId | null }
   | { type: 'decisionRequired'; player: PlayerId; decision: string }

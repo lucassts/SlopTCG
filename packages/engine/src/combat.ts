@@ -43,6 +43,10 @@ export function canBlock(state: GameState, blocker: GameObject, attacker: GameOb
   if (blocker.tapped) return 'está virada';
   if (attacker.card.evasionPowerAtMost !== undefined && effectivePower(state, blocker) <= attacker.card.evasionPowerAtMost)
     return `o atacante não pode ser bloqueado por criaturas com poder ${attacker.card.evasionPowerAtMost} ou menos`;
+  if (attacker.card.evasionPowerAtLeast !== undefined && effectivePower(state, blocker) >= attacker.card.evasionPowerAtLeast)
+    return `o atacante não pode ser bloqueado por criaturas com poder ${attacker.card.evasionPowerAtLeast} ou mais`;
+  if (attacker.card.skulk && effectivePower(state, blocker) > effectivePower(state, attacker))
+    return 'esgueirar: não pode ser bloqueado por criaturas com poder maior';
   if (hasKeyword(state, blocker, 'cantBlock')) return 'não pode bloquear';
   if (attachmentForbids(state, blocker, 'cantBlock')) return 'não pode bloquear (encantamento)';
   if (hasKeyword(state, attacker, 'unblockable')) return 'o atacante não pode ser bloqueado';

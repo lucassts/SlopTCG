@@ -31,3 +31,14 @@ const cum = (n) => ranked.slice(0, n).reduce((a, [, c]) => a + c, 0);
 for (const n of [10, 50, 100, 500, 1000, 5000]) console.log(`top ${n} linhas cobrem ${cum(n)} ocorrências`);
 const singles = ranked.filter(([, c]) => c === 1).length;
 console.log(`linhas que aparecem em UMA única carta: ${singles} (${((singles / ranked.length) * 100).toFixed(0)}%)`);
+
+// Curva que importa: cartas que ficam 100% prontas se as top-N linhas forem resolvidas.
+const cardLines = new Map(); // carta → set de linhas
+for (const [k, s] of lineCards) for (const c of s) { if (!cardLines.has(c)) cardLines.set(c, new Set()); cardLines.get(c).add(k); }
+const rankIndex = new Map(ranked.map(([k], i) => [k, i]));
+const worst = [...cardLines.entries()].map(([c, ls]) => [c, Math.max(...[...ls].map((l) => rankIndex.get(l)))]);
+console.log('\n-- cartas 100% prontas se resolver as top-N linhas --');
+for (const n of [100, 250, 500, 1000, 2000, 3000, 5000, 10000, 21331]) console.log(`top ${String(n).padStart(5)}: ${worst.filter(([, w]) => w < n).length} cartas full a mais`);
+
+fs.writeFileSync(path.join(root, 'data', 'tail-top1000.txt'), ranked.slice(0, 1000).map(([k, c], i) => `${String(i + 1).padStart(4)} ${String(c).padStart(4)}  ${k}`).join('\n'));
+console.log('\ntop 1000 salvo em data/tail-top1000.txt');

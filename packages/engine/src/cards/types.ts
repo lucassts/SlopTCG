@@ -30,6 +30,8 @@ export interface FilterSpec {
   subtypeAnyOf?: string[];
   /** Restrict by supertype 'Basic' (library searches for basic lands). */
   basic?: boolean;
+  /** Subtype chosen for the source ("creatures of the chosen type"). */
+  chosenSubtype?: boolean;
   /** Negations (Duress: "noncreature, nonland card"). */
   nonland?: boolean;
   noncreature?: boolean;
@@ -69,6 +71,8 @@ export interface TargetSpec {
   /** "creature with power N or greater / N or less". */
   powerAtLeast?: number;
   powerAtMost?: number;
+  /** Mentor: power less than this object's (id filled at trigger time). */
+  powerLessThanSource?: number;
   /** "creature with flying" / "creature without flying". */
   withKeyword?: Keyword;
   withoutKeyword?: Keyword;
@@ -124,11 +128,30 @@ export type EffectStep =
   | { op: 'namedToken'; who: PlayerSel; kind: 'Treasure' | 'Food' | 'Clue'; count: number }
   /** (choice) "You may <effect>" — yes runs `effect`, no runs `else` (if any). */
   | { op: 'mayDo'; prompt?: string; effect: EffectScript; else?: EffectScript }
+  /**
+   * (choice) "Sacrifice ~ unless you pay {N}" / echo / cumulative upkeep:
+   * the controller may pay the cost (per age counter when `perCounter`);
+   * otherwise `else` runs.
+   */
+  | { op: 'payOrElse'; cost: string; perCounter?: string; else: EffectScript }
   /** Poison counters (infect/toxic). */
   | { op: 'poison'; who: WhoSel; count: number }
+  /** Sacrifice the source itself. */
+  | { op: 'sacrificeSelf' }
+  /** Banisher Priest: exile the target until the source leaves the battlefield. */
+  | { op: 'exileUntilLeaves'; what: SubjectRef }
+  /** Monstrosity / Adapt: put N +1/+1 counters once (flag `once`). */
+  | { op: 'putCountersOnce'; counter: string; count: number; flag: string }
+  /** (choice) The controller picks a color / creature type stored on the source ("as ~ enters, choose…"). */
+  | { op: 'chooseValue'; kind: 'color' | 'creatureType' }
+  /** Add mana of the color chosen for the source. */
+  | { op: 'addChosenColorMana'; count?: number }
+  /** (choice) Devour N: sacrifice any number of creatures, N counters each. */
+  | { op: 'devour'; per: number }
   | { op: 'pump'; what: SubjectRef; power: number; toughness: number; keywords?: Keyword[] }
   /** Permanent +1/+1 or -1/-1 (or named) counters. */
   | { op: 'putCounters'; what: SubjectRef; counter: string; count: DynAmount }
+  | { op: 'putCountersEach'; filter: FilterSpec; counter: string; count: number }
   /** Attach the source permanent (aura/equipment) to target:0. */
   | { op: 'attach' }
   /** Mass effects over every object matching the filter. */
@@ -201,6 +224,11 @@ export type TriggerSpec =
   /** Leaves the battlefield to any zone (dies is the graveyard subset). */
   | { on: 'leaves'; self: true }
   | { on: 'becomesTapped'; self: true }
+  | { on: 'becomesBlocked'; self: true }
+  /** Becomes the target of a spell or ability (any controller, or opponents' only). */
+  | { on: 'becomesTargeted'; self: true; byOpponent?: boolean }
+  /** The controller draws a card. */
+  | { on: 'youDrawCard' }
   /** This creature deals combat damage to a player. */
   | { on: 'combatDamageToPlayer'; self: true }
   /** An opponent casts a spell. */
@@ -265,12 +293,29 @@ export interface LoyaltyAbility {
 }
 
 /** Continuous effect from a permanent (anthems, lords). */
+/** "As long as …" conditions for static abilities. */
+export type StaticCondition =
+  | { kind: 'yourTurn' }
+  | { kind: 'attacking' }
+  | { kind: 'untapped' }
+  | { kind: 'tapped' }
+  /** Threshold: ≥ N cards in your graveyard. */
+  | { kind: 'graveyardAtLeast'; count: number }
+  /** Delirium: ≥ 4 card types among cards in your graveyard. */
+  | { kind: 'delirium' }
+  /** Metalcraft & friends: you control ≥ count permanents matching the filter. */
+  | { kind: 'controlsAtLeast'; count: number; filter: FilterSpec }
+  /** Has a counter of this kind. */
+  | { kind: 'hasCounter'; counter: string };
+
 export interface StaticAbility {
   kind: 'static';
   /** Which battlefield objects it applies to (relative to its controller). */
   filter: FilterSpec;
   /** Applies only to the source itself ("~ gets +1/+1 for each…"). */
   selfOnly?: boolean;
+  /** Only while the condition holds. */
+  condition?: StaticCondition;
   power?: number;
   toughness?: number;
   /** Dynamic bonus: +1 per battlefield object matching the filter. */
@@ -317,8 +362,34 @@ export interface CardDefinition {
   storm?: boolean;
   /** Additional cost paid at cast time (e.g. Fling's sacrifice). */
   additionalCost?: { sacrifice: FilterSpec; count?: number };
-  /** Kicker: optional extra mana cost; when paid, `effect` is appended. */
-  kicker?: { cost: string; effect: EffectScript };
+  /** Kicker: optional extra mana cost; when paid, `effect` is appended
+   *  (spells) or the permanent enters with `entersWithCounters` (creatures). */
+  kicker?: { cost: string; effect: EffectScript; entersWithCounters?: { counter: string; count: number } };
+  /** Blocking restrictions ("can't be blocked by more than one creature" / "except by three or more"). */
+  maxBlockers?: number;
+  minBlockers?: number;
+  /** "Can block an additional creature" / "any number of creatures". */
+  extraBlocks?: number | 'any';
+  /** Its controller may play this many extra lands per turn. */
+  extraLands?: number;
+  /** Controller has hexproof (can't be targeted by opponents' spells). */
+  playerHexproof?: boolean;
+  /** "Players can't gain life" / "Your opponents can't gain life". */
+  noLifeGain?: 'all' | 'opponents';
+  /** Controller may look at the top card of their library any time. */
+  revealTop?: boolean;
+  /** Bloodthirst N: enters with N +1/+1 counters if an opponent was dealt damage this turn. */
+  bloodthirst?: number;
+  /** "~ enters tapped unless you have two or more opponents": always tapped in 1v1. */
+  flanking?: boolean;
+  rampage?: number;
+  afflict?: number;
+  /** Skulk: can't be blocked by creatures with greater power. */
+  skulk?: boolean;
+  /** Renown N: first combat damage to a player → N +1/+1 counters. */
+  renown?: number;
+  /** Mentor: when attacking, put a +1/+1 counter on an attacking creature with lesser power. */
+  mentor?: boolean;
   /** Flashback: castable from the graveyard for this cost; exiles after.
    *  `cost` is mana; `sacrifice` an additional non-mana cost (Cabal Therapy). */
   flashback?: { cost?: string; sacrifice?: FilterSpec };
@@ -340,6 +411,33 @@ export interface CardDefinition {
   abilities?: AbilityDef[];
   /** Permanent that "enters the battlefield with N counters" (N may be X). */
   entersWithCounters?: { counter: string; count: DynAmount };
+  /** Modular N: enters with N +1/+1 counters; dies → move them to target artifact creature. */
+  modular?: number;
+  /** Persist / Undying: dies without the counter → returns with one. */
+  persist?: boolean;
+  undying?: boolean;
+  /** Evolve: a creature entering with greater P or T gives a +1/+1 counter. */
+  evolve?: boolean;
+  /** Afterlife N: dies → N 1/1 white-black Spirit tokens with flying. */
+  afterlife?: number;
+  /** Living weapon: enters with a 0/0 Germ attached. */
+  livingWeapon?: boolean;
+  /** Fabricate N: enters → N +1/+1 counters or a 1/1 Servo… simplified to counters. */
+  fabricate?: number;
+  /** Unleash / Riot: enters with a +1/+1 counter (unleashed can't block) or haste. Simplified: counter. */
+  unleash?: boolean;
+  riot?: boolean;
+  /** Echo: at the beginning of the upkeep after it came under your control, sacrifice unless you pay. */
+  echo?: string;
+  /** Cumulative upkeep: age counter each upkeep; pay cost × counters or sacrifice. */
+  cumulativeUpkeep?: string;
+  /** Vanishing / Fading N: time counters; upkeep removes one; sacrifice at 0 (fading: can't attack…). */
+  vanishing?: number;
+  fading?: number;
+  /** "As ~ enters, choose a color / creature type." */
+  chooseOnEnter?: 'color' | 'creatureType';
+  /** Devour N. */
+  devour?: number;
   /**
    * Aura: what it can enchant. Casting requires this target and the aura
    * enters the battlefield attached to it (fizzles if the target is gone).
@@ -360,8 +458,9 @@ export interface CardDefinition {
   ward?: number;
   /** Vehicles: tap creatures with total power ≥ N to become a creature until end of turn. */
   crew?: number;
-  /** "Can't be blocked by creatures with power N or less." */
+  /** "Can't be blocked by creatures with power N or less / N or greater." */
   evasionPowerAtMost?: number;
+  evasionPowerAtLeast?: number;
   /** Checklands / fastlands: enters tapped unless the condition holds. */
   entersTappedUnless?: {
     controlsAtLeast?: { count: number; filter: FilterSpec };

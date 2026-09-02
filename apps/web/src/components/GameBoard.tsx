@@ -855,6 +855,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         </div>
         {me.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {me.poison}</span>}
         <span className="zone-pill" title="Cartas na biblioteca">📚 {me.librarySize}</span>
+        {me.libraryTop && <span className="zone-pill" title="Topo da sua biblioteca (revelado para você)">🔝 {me.libraryTop.card.name}</span>}
         <span
           className="zone-pill"
           style={{ cursor: 'pointer' }}
@@ -1101,6 +1102,49 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         </div>
       )}
 
+      {/* -------- escolher cor ("as enters, choose a color") -------- */}
+      {myChoice && myChoice.mode === 'chooseColor' && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>Escolha uma cor</h2>
+            <div className="muted">{myChoice.prompt}</div>
+            <div className="row" style={{ justifyContent: 'center' }}>
+              {['W', 'U', 'B', 'R', 'G'].map((c) => (
+                <button key={c} className="color-pick-btn" style={{ background: MANA_COLORS[c] }} onClick={() => onAction({ type: 'effectChoice', picks: [], text: c })}>
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------- escolher tipo de criatura -------- */}
+      {myChoice && myChoice.mode === 'chooseType' && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>Escolha um tipo de criatura</h2>
+            <div className="muted">{myChoice.prompt}</div>
+            <input
+              autoFocus
+              placeholder="ex.: Goblin"
+              value={nameText}
+              onChange={(e) => setNameText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && nameText.trim()) {
+                  onAction({ type: 'effectChoice', picks: [], text: nameText.trim() });
+                  setNameText('');
+                }
+              }}
+              style={{ width: 'min(300px, 80vw)' }}
+            />
+            <button className="primary" disabled={!nameText.trim()} onClick={() => { onAction({ type: 'effectChoice', picks: [], text: nameText.trim() }); setNameText(''); }}>
+              Confirmar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* -------- nomear uma carta (Cabal Therapy) -------- */}
       {myChoice && myChoice.mode === 'nameCard' && (
         <div className="mulligan-overlay">
@@ -1203,7 +1247,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       )}
 
       {/* -------- escolha de efeito (descarte, sacrifício, vidência, busca) -------- */}
-      {myChoice && myChoice.mode !== 'nameCard' && myChoice.mode !== 'confirm' && myChoice.options && (
+      {myChoice && (myChoice.mode === 'cards' || myChoice.mode === 'scry') && myChoice.options && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
             <h2>{myChoice.mode === 'scry' ? 'Vidência' : 'Escolha'}</h2>

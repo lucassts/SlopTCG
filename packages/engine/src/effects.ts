@@ -121,13 +121,12 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' }>;
+
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
-  return (
-    step.op === 'discard' || step.op === 'sacrifice' || step.op === 'scry' || step.op === 'surveil' ||
-    step.op === 'search' || step.op === 'nameCardDiscard' || step.op === 'counterUnlessPay' || step.op === 'mayDo'
-  );
+  return CHOICE_OPS.has(step.op);
 }
 
 interface ChoiceSetup {
@@ -136,9 +135,29 @@ interface ChoiceSetup {
   min: number;
   max: number;
   prompt: string;
-  mode: 'cards' | 'scry' | 'nameCard' | 'confirm';
+  mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType';
   /** 'confirm' with nothing to decide (target gone / can't pay) resolves immediately. */
   autoAnswer?: 'yes' | 'no' | 'skip';
+}
+
+/** Pay a mana cost for a player right now (taps + pool + phyrexian life). Returns false if unaffordable. */
+function payNow(state: GameState, player: PlayerId, cost: string, emit: Emit): boolean {
+  const plan = planPayment(state, player, parseCost(cost));
+  if (!plan) return false;
+  for (const tap of plan.taps) {
+    setTapped(state, state.objects[tap.objectId], true, emit);
+    for (const sym of tap.produce) state.players[player].manaPool[sym] += 1;
+  }
+  for (const sym of plan.fromPool) state.players[player].manaPool[sym] = Math.max(0, state.players[player].manaPool[sym] - 1);
+  if (plan.lifePaid > 0) changeLife(state, player, -plan.lifePaid, 'mana phyrexiana', emit);
+  return true;
+}
+
+/** Cost text for payOrElse (cumulative upkeep multiplies by age counters). */
+function payOrElseCost(ctx: EffectContext, step: Extract<EffectStep, { op: 'payOrElse' }>): string {
+  if (!step.perCounter) return step.cost;
+  const n = ctx.state.objects[ctx.sourceId]?.counters[step.perCounter] ?? 0;
+  return step.cost.repeat(Math.max(1, n));
 }
 
 /** Resolve who a choice belongs to ('target:N' → the targeted player). */
@@ -244,6 +263,41 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         prompt: `${ctx.sourceName}: ${step.prompt ?? 'aplicar o efeito opcional?'}`,
         mode: 'confirm',
       };
+    case 'payOrElse': {
+      const cost = payOrElseCost(ctx, step);
+      return {
+        player: controller,
+        options: [],
+        min: 0,
+        max: 0,
+        prompt: `${ctx.sourceName}: pagar ${cost}?`,
+        mode: 'confirm',
+        autoAnswer: canPay(state, controller, parseCost(cost)) ? undefined : 'no',
+      };
+    }
+    case 'chooseValue':
+      return {
+        player: controller,
+        options: [],
+        min: 0,
+        max: 0,
+        prompt: step.kind === 'color' ? `${ctx.sourceName}: escolha uma cor` : `${ctx.sourceName}: escolha um tipo de criatura`,
+        mode: step.kind === 'color' ? 'chooseColor' : 'chooseType',
+      };
+    case 'devour': {
+      const options = state.players[controller].zones.battlefield
+        .map((id) => state.objects[id])
+        .filter((o) => o.id !== ctx.sourceId && o.card.types.includes('Creature'))
+        .map((o) => o.id);
+      return {
+        player: controller,
+        options,
+        min: 0,
+        max: options.length,
+        prompt: `${ctx.sourceName}: devorar — sacrifique quantas criaturas quiser (${step.per} marcador(es) cada)`,
+        mode: 'cards',
+      };
+    }
     case 'counterUnlessPay': {
       const [t] = resolveSubject(ctx, step.what);
       const item = t?.kind === 'object' ? state.stack.find((s) => s.kind === 'spell' && s.sourceId === t.id) : undefined;
@@ -263,11 +317,42 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
 }
 
 /** Execute a choice step once the picks are known. */
-export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: number[], text?: string): void {
+export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: number[], text?: string): boolean | void {
   const { state, emit } = ctx;
   switch (step.op) {
     case 'mayDo':
       return; // o script escolhido é emendado em applyEffectChoice
+    case 'payOrElse': {
+      // Retorna true se pagou; o ramo "else" é emendado em applyEffectChoice.
+      if (text !== 'yes') return false;
+      const paid = payNow(state, ctx.controller, payOrElseCost(ctx, step), emit);
+      if (paid) emit({ type: 'fizzled', description: `${state.players[ctx.controller].name} pagou ${payOrElseCost(ctx, step)} por ${ctx.sourceName}` });
+      return paid;
+    }
+    case 'chooseValue': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || !text) return;
+      if (step.kind === 'color') src.chosenColor = text as import('./types.js').Color;
+      else src.chosenType = text.trim();
+      emit({ type: 'valueChosen', player: ctx.controller, cardName: ctx.sourceName, value: text });
+      return;
+    }
+    case 'devour': {
+      const src = state.objects[ctx.sourceId];
+      let eaten = 0;
+      for (const id of picks) {
+        const obj = state.objects[id];
+        if (!obj || obj.zone !== 'battlefield') continue;
+        moveWithEvent(state, obj, 'graveyard', 'sacrificed', emit);
+        eaten++;
+      }
+      if (src && src.zone === 'battlefield' && eaten > 0) {
+        const total = (src.counters['+1/+1'] ?? 0) + eaten * step.per;
+        src.counters['+1/+1'] = total;
+        emit({ type: 'countersChanged', objectId: src.id, cardName: src.card.name, counter: '+1/+1', delta: eaten * step.per, total });
+      }
+      return;
+    }
     case 'counterUnlessPay': {
       const [t] = resolveSubject(ctx, step.what);
       if (t?.kind !== 'object') return;
@@ -399,8 +484,8 @@ function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep
       return 'done';
     }
   }
-  // nameCard/confirm always need the round-trip (the answer is text, not picks).
-  if (setup.mode !== 'nameCard' && setup.mode !== 'confirm') {
+  // Text answers always need the round-trip (the answer is text, not picks).
+  if (setup.mode !== 'nameCard' && setup.mode !== 'confirm' && setup.mode !== 'chooseColor' && setup.mode !== 'chooseType') {
     // Forced choice (all options must be picked) or nothing to pick → no round-trip.
     if (setup.mode === 'cards' && setup.options.length <= setup.min) {
       executeChoice(ctx, step, setup.options);
@@ -458,10 +543,13 @@ export function applyEffectChoice(
   };
   state.pendingDecision = null;
   const current = pending.resume.current as ChoiceStep;
-  executeChoice(ctx, current, picks, text);
-  // "You may …": o ramo escolhido roda antes do resto do script (pausas
-  // aninhadas continuam funcionando porque tudo vira um único script).
-  const branch = current.op === 'mayDo' ? (text === 'yes' ? current.effect : current.else ?? []) : [];
+  const outcome = executeChoice(ctx, current, picks, text);
+  // "You may …" / "pay or else": o ramo escolhido roda antes do resto do
+  // script (pausas aninhadas continuam funcionando: vira um único script).
+  const branch =
+    current.op === 'mayDo' ? (text === 'yes' ? current.effect : current.else ?? [])
+    : current.op === 'payOrElse' ? (outcome === true ? [] : current.else)
+    : [];
   const result = runEffectScript(ctx, [...branch, ...pending.resume.remaining]);
   if (result === 'paused') {
     const next = state.pendingDecision as PendingDecision | null;
@@ -555,6 +643,52 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
     case 'poison':
       for (const p of resolveWho(ctx, step.who)) addPoison(state, p, step.count, emit);
       return;
+
+    case 'putCountersEach':
+      for (const obj of selectBattlefield(ctx, step.filter)) {
+        const total = (obj.counters[step.counter] ?? 0) + step.count;
+        obj.counters[step.counter] = total;
+        emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: step.counter, delta: step.count, total });
+      }
+      return;
+
+    case 'sacrificeSelf': {
+      const src = state.objects[ctx.sourceId];
+      if (src && src.zone === 'battlefield') moveWithEvent(state, src, 'graveyard', 'sacrificed', emit);
+      return;
+    }
+
+    case 'exileUntilLeaves': {
+      const src = state.objects[ctx.sourceId];
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (!obj || obj.zone !== 'battlefield') continue;
+        if (!src || src.zone !== 'battlefield') { moveWithEvent(state, obj, 'exile', 'exiled', emit); continue; }
+        moveWithEvent(state, obj, 'exile', 'exiled', emit);
+        if (!obj.isToken) (src.exiledUntilLeaves ??= []).push(obj.id);
+      }
+      return;
+    }
+
+    case 'putCountersOnce': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || src.zone !== 'battlefield' || src.counters[`__${step.flag}`]) return;
+      src.counters[`__${step.flag}`] = 1;
+      const total = (src.counters[step.counter] ?? 0) + step.count;
+      src.counters[step.counter] = total;
+      emit({ type: 'countersChanged', objectId: src.id, cardName: src.card.name, counter: step.counter, delta: step.count, total });
+      return;
+    }
+
+    case 'addChosenColorMana': {
+      const src = state.objects[ctx.sourceId];
+      const sym = src?.chosenColor;
+      if (!sym) return;
+      const count = step.count ?? 1;
+      state.players[ctx.controller].manaPool[sym] += count;
+      emit({ type: 'manaAdded', player: ctx.controller, mana: Array(count).fill(sym), sourceName: ctx.sourceName });
+      return;
+    }
 
     case 'gainLife': {
       const amount = resolveAmount(ctx, step.amount);
@@ -883,8 +1017,13 @@ export function targetMatchesSpec(
   /** Colors of the targeting source, for protection checks. */
   srcColors?: import('./types.js').Color[],
 ): boolean {
-  if (spec.what === 'player') return choice.kind === 'player';
-  if (choice.kind === 'player') return spec.what === 'any';
+  if (choice.kind === 'player') {
+    if (spec.what !== 'player' && spec.what !== 'any') return false;
+    // "You have hexproof": opponents can't target you.
+    if (choice.player !== controller && state.players[choice.player].zones.battlefield.some((id) => state.objects[id].card.playerHexproof)) return false;
+    return true;
+  }
+  if (spec.what === 'player') return false;
   const obj = state.objects[choice.id];
   if (!obj) return false;
   if (spec.what === 'spell') {
@@ -916,6 +1055,10 @@ export function targetMatchesSpec(
   if (spec.withoutKeyword && hasKeyword(state, obj, spec.withoutKeyword)) return false;
   if (spec.powerAtLeast !== undefined && effectivePower(state, obj) < spec.powerAtLeast) return false;
   if (spec.powerAtMost !== undefined && effectivePower(state, obj) > spec.powerAtMost) return false;
+  if (spec.powerLessThanSource !== undefined) {
+    const src = state.objects[spec.powerLessThanSource];
+    if (!src || effectivePower(state, obj) >= effectivePower(state, src)) return false;
+  }
   if (spec.typeAnyOf && !spec.typeAnyOf.some((t) => obj.card.types.includes(t))) return false;
   switch (spec.what) {
     case 'any':

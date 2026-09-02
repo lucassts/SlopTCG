@@ -40,7 +40,7 @@ export type PendingDecisionView =
       type: 'effectChoice';
       player: PlayerId;
       prompt: string;
-      mode: 'cards' | 'scry' | 'nameCard' | 'confirm';
+      mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType';
       min: number;
       max: number;
       /** Card data of the options — only for the deciding player. */
@@ -70,6 +70,8 @@ export interface PlayerView {
   landsPlayedThisTurn: number;
   /** Full cards only for the viewer's own hand. */
   hand: CardView[] | null;
+  /** Top of the library when a controlled permanent lets this player look at it (viewer only). */
+  libraryTop?: CardView;
   battlefield: CardView[];
   graveyard: CardView[];
   exile: CardView[];
@@ -148,6 +150,10 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       handSize: p.zones.hand.length,
       landsPlayedThisTurn: p.landsPlayedThisTurn,
       hand: pid === viewer ? p.zones.hand.map((id) => cardView(state, state.objects[id])) : null,
+      libraryTop:
+        pid === viewer && p.zones.library.length > 0 && p.zones.battlefield.some((id) => state.objects[id].card.revealTop)
+          ? cardView(state, state.objects[p.zones.library[0]])
+          : undefined,
       battlefield: p.zones.battlefield.map((id) => cardView(state, state.objects[id])),
       graveyard: p.zones.graveyard.map((id) => cardView(state, state.objects[id])),
       exile: p.zones.exile.map((id) => cardView(state, state.objects[id])),

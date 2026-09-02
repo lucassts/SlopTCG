@@ -45,6 +45,19 @@ export interface GameObject {
   crewedUntilEot?: boolean;
   /** Control Magic: aura currently granting control of this object. */
   controlAura?: number;
+  /** Objects exiled "until ~ leaves the battlefield" (returned when it does). */
+  exiledUntilLeaves?: number[];
+  /** "As ~ enters, choose a color / creature type". */
+  chosenColor?: import('./types.js').Color;
+  chosenType?: string;
+  /** Was kicked when cast (permanents). */
+  kicked?: boolean;
+  /** Echo: came under control this turn (pay on next upkeep). */
+  echoPending?: boolean;
+  /** Renown already happened. */
+  renowned?: boolean;
+  /** Counters it had when it last left the battlefield (persist/undying/modular). */
+  lastCounters?: Record<string, number>;
   isToken: boolean;
 }
 
@@ -78,6 +91,8 @@ export interface PlayerState {
   life: number;
   /** Poison counters (10 = loss). */
   poison: number;
+  /** Bloodthirst: this player was dealt damage this turn. */
+  damagedThisTurn?: boolean;
   manaPool: ManaPool;
   landsPlayedThisTurn: number;
   zones: Record<Exclude<ZoneName, 'stack'>, number[]>;
@@ -134,8 +149,8 @@ export type PendingDecision =
       type: 'effectChoice';
       player: PlayerId;
       prompt: string;
-      /** 'cards' → pick objects; 'scry' → picks go to the bottom; 'nameCard' → free-text; 'confirm' → yes/no. */
-      mode: 'cards' | 'scry' | 'nameCard' | 'confirm';
+      /** 'cards' → pick objects; 'scry' → picks go to the bottom; text answers: 'nameCard', 'confirm' (yes/no), 'chooseColor' (WUBRG), 'chooseType' (creature type). */
+      mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType';
       options: number[];
       min: number;
       max: number;
@@ -295,6 +310,7 @@ export function moveObject(
   else if (to === 'library') target.unshift(obj.id);
   else target.push(obj.id);
   if (to !== 'battlefield') {
+    obj.lastCounters = { ...obj.counters };
     obj.tapped = false;
     obj.damage = 0;
     obj.counters = {};
@@ -334,7 +350,7 @@ export function attachmentsOf(state: GameState, obj: GameObject): GameObject[] {
  * (controller decides 'you'/'opponent'; sourceId decides 'other')?
  */
 export function matchFilter(
-  ctx: { controller: PlayerId; sourceId: number },
+  ctx: { controller: PlayerId; sourceId: number; state?: GameState },
   filter: FilterSpec,
   obj: GameObject,
 ): boolean {
@@ -346,7 +362,29 @@ export function matchFilter(
   if (filter.controlledBy === 'you' && obj.controller !== ctx.controller) return false;
   if (filter.controlledBy === 'opponent' && obj.controller === ctx.controller) return false;
   if (filter.other && obj.id === ctx.sourceId) return false;
+  if (filter.chosenSubtype) {
+    const chosen = ctx.state?.objects[ctx.sourceId]?.chosenType;
+    if (!chosen || !obj.card.subtypes.includes(chosen)) return false;
+  }
   return true;
+}
+
+/** Evaluate an "as long as" condition for a static ability of `source`. */
+export function staticConditionHolds(state: GameState, source: GameObject, cond: import('./cards/types.js').StaticCondition): boolean {
+  const gy = state.players[source.controller].zones.graveyard.map((id) => state.objects[id]);
+  switch (cond.kind) {
+    case 'yourTurn': return state.activePlayer === source.controller;
+    case 'attacking': return source.attacking;
+    case 'untapped': return !source.tapped;
+    case 'tapped': return source.tapped;
+    case 'graveyardAtLeast': return gy.length >= cond.count;
+    case 'delirium': return new Set(gy.flatMap((o) => o.card.types)).size >= 4;
+    case 'controlsAtLeast':
+      return state.players[source.controller].zones.battlefield
+        .map((id) => state.objects[id])
+        .filter((o) => matchFilter({ controller: source.controller, sourceId: source.id, state }, cond.filter, o)).length >= cond.count;
+    case 'hasCounter': return (source.counters[cond.counter] ?? 0) > 0;
+  }
 }
 
 /** Static abilities on the battlefield that currently apply to `obj`. */
@@ -356,10 +394,11 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
   for (const source of battlefield(state)) {
     for (const ability of source.card.abilities ?? []) {
       if (ability.kind !== 'static') continue;
-      if (ability.selfOnly ? source.id !== obj.id : !matchFilter({ controller: source.controller, sourceId: source.id }, ability.filter, obj)) continue;
+      if (ability.selfOnly ? source.id !== obj.id : !matchFilter({ controller: source.controller, sourceId: source.id, state }, ability.filter, obj)) continue;
+      if (ability.condition && !staticConditionHolds(state, source, ability.condition)) continue;
       total.power += ability.power ?? 0;
       total.toughness += ability.toughness ?? 0;
-      const ctx = { controller: source.controller, sourceId: source.id };
+      const ctx = { controller: source.controller, sourceId: source.id, state };
       if (ability.powerPer) total.power += battlefield(state).filter((o) => matchFilter(ctx, ability.powerPer!, o)).length;
       if (ability.toughnessPer) total.toughness += battlefield(state).filter((o) => matchFilter(ctx, ability.toughnessPer!, o)).length;
       if (ability.keywords) total.keywords.push(...ability.keywords);

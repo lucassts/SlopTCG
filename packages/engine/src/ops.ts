@@ -31,6 +31,15 @@ export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
 export function changeLife(state: GameState, playerId: PlayerId, delta: number, reason: string, emit: Emit): void {
   if (delta === 0) return;
   const player = state.players[playerId];
+  // "Players can't gain life" / "Your opponents can't gain life".
+  if (delta > 0) {
+    for (const pid of ['p1', 'p2'] as PlayerId[]) {
+      for (const id of state.players[pid].zones.battlefield) {
+        const g = state.objects[id].card.noLifeGain;
+        if (g === 'all' || (g === 'opponents' && pid !== playerId)) return;
+      }
+    }
+  }
   player.life += delta;
   emit({ type: 'lifeChanged', player: playerId, delta, total: player.life, reason });
 }
@@ -126,6 +135,7 @@ export function dealDamageToPlayer(
     targetName: state.players[playerId].name,
     amount,
   });
+  state.players[playerId].damagedThisTurn = true; // bloodthirst
   // Infect: poison instead of life. Toxic N: life AND N poison.
   if (opts?.infect) {
     addPoison(state, playerId, amount, emit);
