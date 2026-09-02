@@ -258,11 +258,15 @@ const num = (v: string | undefined) => {
   return Number.isNaN(n) ? undefined : n;
 };
 
-/** Build a definition from OFFICIAL data: demo registry > oracle compiler > manual. */
+/**
+ * Build a definition from OFFICIAL data. Order: oracle compiler when it
+ * fully understands the card (the official text is the source of truth) >
+ * hand-written registry > partial compile > manual. The registry used to
+ * win by name, and a hand-written mistake (Darksteel Myr as 0/3) silently
+ * overrode the real card.
+ */
 function officialToDefinition(official: ScryfallCard): CardDefinition {
   const registry = DEMO_BY_NAME.get(official.name.toLowerCase());
-  if (registry) return { ...registry, scryfallId: official.id, oracleId: official.oracle_id };
-
   const face = official.card_faces?.[0];
   const input = {
     name: official.name.split('//')[0].trim(),
@@ -277,6 +281,8 @@ function officialToDefinition(official: ScryfallCard): CardDefinition {
   };
   // Double-faced cards stay manual (only the front face is modelled).
   const compiled = official.card_faces ? null : compileOracleCard(input);
+  if (compiled && compiled.automation === 'full') return compiled;
+  if (registry) return { ...registry, scryfallId: official.id, oracleId: official.oracle_id };
   if (compiled) return compiled;
 
   const { types, subtypes } = splitTypeLine(input.typeLine);

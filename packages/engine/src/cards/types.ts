@@ -16,7 +16,7 @@ export type PlayerSel = 'controller' | 'opponent' | 'each';
  * - 'self'        → the source object itself
  * - a PlayerSel   → player(s)
  */
-export type SubjectRef = `target:${number}` | 'self' | PlayerSel;
+export type SubjectRef = `target:${number}` | 'self' | 'host' | PlayerSel;
 
 /**
  * Object filter, evaluated relative to the effect's controller/source.
@@ -33,6 +33,9 @@ export interface FilterSpec {
   noncreature?: boolean;
   /** Card color ("exile a blue card from your hand"). */
   color?: Color;
+  /** Printed keyword filter ("each creature without flying"). */
+  withKeyword?: Keyword;
+  withoutKeyword?: Keyword;
   controlledBy?: 'you' | 'opponent' | 'any';
   /** Exclude the effect's own source ("another creature…"). */
   other?: boolean;
@@ -47,11 +50,26 @@ export type DynAmount =
   | 'X'
   | { per: FilterSpec }
   /** Power of the creature sacrificed as an additional cost (Fling). */
-  | 'sacrificedPower';
+  | 'sacrificedPower'
+  /** Power of a referenced creature ("damage equal to its power" — bites). */
+  | { powerOf: SubjectRef };
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
   what: 'any' | 'creature' | 'player' | 'permanent' | 'spell' | 'land' | 'artifact' | 'enchantment';
+  /** For 'spell' targets: restrict by the spell's type (Negate, Essence Scatter…). */
+  spellType?: 'creature' | 'noncreature' | 'instantSorcery';
+  /** "artifact or enchantment": the object must have at least one of these types. */
+  typeAnyOf?: CardType[];
+  /** "tapped creature" / "attacking or blocking creature". */
+  tapped?: boolean;
+  combat?: boolean;
+  /** "creature with power N or greater / N or less". */
+  powerAtLeast?: number;
+  powerAtMost?: number;
+  /** "creature with flying" / "creature without flying". */
+  withKeyword?: Keyword;
+  withoutKeyword?: Keyword;
   /** Restrict to a controller, relative to the spell's controller. */
   controlledBy?: 'you' | 'opponent';
   /**
@@ -88,14 +106,20 @@ export type EffectStep =
   | { op: 'discardHand'; who: WhoSel }
   | { op: 'mill'; who: WhoSel; count: number }
   | { op: 'damage'; to: SubjectRef; amount: DynAmount }
-  | { op: 'gainLife'; who: PlayerSel; amount: DynAmount }
-  | { op: 'loseLife'; who: PlayerSel; amount: DynAmount }
+  | { op: 'gainLife'; who: WhoSel; amount: DynAmount }
+  | { op: 'loseLife'; who: WhoSel; amount: DynAmount }
   | { op: 'destroy'; what: SubjectRef }
   | { op: 'exile'; what: SubjectRef }
   | { op: 'returnToHand'; what: SubjectRef }
   | { op: 'tap'; what: SubjectRef }
   | { op: 'untap'; what: SubjectRef }
   | { op: 'counterSpell'; what: SubjectRef }
+  /** (choice) Mana Leak: the spell's controller may pay `cost`; otherwise it is countered. */
+  | { op: 'counterUnlessPay'; what: SubjectRef; cost: string }
+  /** Put the object on top of its owner's library. */
+  | { op: 'putOnLibraryTop'; what: SubjectRef }
+  /** Predefined artifact tokens with their own abilities. */
+  | { op: 'namedToken'; who: PlayerSel; kind: 'Treasure' | 'Food' | 'Clue'; count: number }
   | { op: 'pump'; what: SubjectRef; power: number; toughness: number; keywords?: Keyword[] }
   /** Permanent +1/+1 or -1/-1 (or named) counters. */
   | { op: 'putCounters'; what: SubjectRef; counter: string; count: DynAmount }
@@ -114,6 +138,8 @@ export type EffectStep =
   | { op: 'sacrifice'; who: WhoSel; filter?: FilterSpec; count: number }
   /** (choice) Look at the top N; chosen cards go to the bottom. */
   | { op: 'scry'; count: number }
+  /** (choice) Look at the top N; chosen cards go to the graveyard. */
+  | { op: 'surveil'; count: number }
   /** (choice) Search your library for up to `count` cards matching the filter. */
   | {
       op: 'search';
@@ -165,10 +191,12 @@ export type TriggerSpec =
   /** Any object matching the filter dies (battlefield → graveyard). */
   | { on: 'dies'; what: FilterSpec }
   | { on: 'attacks'; self: true }
+  /** This creature deals combat damage to a player. */
+  | { on: 'combatDamageToPlayer'; self: true }
   | { on: 'upkeep'; whose: 'controller' | 'each' }
   | { on: 'endStep'; whose: 'controller' | 'each' }
   /** The controller casts a spell (prowess-style). */
-  | { on: 'youCastSpell'; noncreatureOnly?: boolean }
+  | { on: 'youCastSpell'; noncreatureOnly?: boolean; instantSorceryOnly?: boolean }
   /** The controller gains life (Ajani's Pridemate). */
   | { on: 'youGainLife' };
 
@@ -293,7 +321,7 @@ export interface CardDefinition {
    * Aura: what it can enchant. Casting requires this target and the aura
    * enters the battlefield attached to it (fizzles if the target is gone).
    */
-  enchant?: { what: 'creature'; controlledBy?: 'you' | 'opponent' };
+  enchant?: { what: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent'; controlledBy?: 'you' | 'opponent' };
   /** Static effects granted to whatever this aura/equipment is attached to. */
   attachEffect?: {
     power?: number;
@@ -301,7 +329,14 @@ export interface CardDefinition {
     keywords?: Keyword[];
     cantAttack?: boolean;
     cantBlock?: boolean;
+    doesntUntap?: boolean;
   };
+  /** Ward N: opponents' spells/abilities targeting this permanent cost {N} more. */
+  ward?: number;
+  /** Instants/sorceries that exile themselves as they resolve ("Exile ~."). */
+  exileOnResolve?: boolean;
+  /** "You have no maximum hand size." while this permanent is on the battlefield. */
+  noMaxHandSize?: boolean;
   /**
    * 'full'    → the engine automates this card entirely.
    * 'partial' → castable/playable with the recognized parts automated; the
@@ -335,6 +370,8 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.nonland && card.types.includes('Land')) return false;
   if (filter.noncreature && card.types.includes('Creature')) return false;
   if (filter.color && !card.colors.includes(filter.color)) return false;
+  if (filter.withKeyword && !card.keywords?.includes(filter.withKeyword)) return false;
+  if (filter.withoutKeyword && card.keywords?.includes(filter.withoutKeyword)) return false;
   return true;
 }
 

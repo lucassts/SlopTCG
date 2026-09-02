@@ -76,7 +76,35 @@ export type Keyword =
   | 'firstStrike'
   | 'doubleStrike'
   | 'indestructible'
-  | 'hexproof';
+  | 'hexproof'
+  /** Can't be the target of any spell or ability (even its controller's). */
+  | 'shroud'
+  /** May be cast any time you could cast an instant. */
+  | 'flash'
+  | 'cantBlock'
+  | 'unblockable'
+  /** Attacks each combat if able. */
+  | 'mustAttack'
+  /** Doesn't untap during its controller's untap step. */
+  | 'doesntUntap'
+  /** Evasion: blockable only by artifact and/or black creatures. */
+  | 'fear'
+  /** Evasion: blockable only by artifact creatures or ones sharing a color. */
+  | 'intimidate'
+  /** Evasion: can block / be blocked only by creatures with shadow. */
+  | 'shadow'
+  | 'plainswalk'
+  | 'islandwalk'
+  | 'swampwalk'
+  | 'mountainwalk'
+  | 'forestwalk'
+  /** Evasion like shadow: only horsemanship blocks/is blocked by horsemanship. */
+  | 'horsemanship'
+  /** Can block only creatures with flying. */
+  | 'blockOnlyFlying'
+  /** No rules impact in a two-player game; recognized so the card compiles. */
+  | 'changeling'
+  | 'partner';
 
 /** A chosen target, stored on stack items and validated on resolution. */
 export type TargetChoice =

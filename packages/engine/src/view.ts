@@ -37,7 +37,7 @@ export type PendingDecisionView =
       type: 'effectChoice';
       player: PlayerId;
       prompt: string;
-      mode: 'cards' | 'scry' | 'nameCard';
+      mode: 'cards' | 'scry' | 'nameCard' | 'confirm';
       min: number;
       max: number;
       /** Card data of the options — only for the deciding player. */

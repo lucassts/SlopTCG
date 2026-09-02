@@ -1033,6 +1033,24 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         </div>
       )}
 
+      {/* -------- sim/não (Mana Leak: pagar ou deixar anular) -------- */}
+      {myChoice && myChoice.mode === 'confirm' && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>Decisão</h2>
+            <div className="muted">{myChoice.prompt}</div>
+            <div className="row">
+              <button className="primary" onClick={() => onAction({ type: 'effectChoice', picks: [], text: 'yes' })}>
+                Sim
+              </button>
+              <button onClick={() => onAction({ type: 'effectChoice', picks: [], text: 'no' })}>
+                Não
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* -------- nomear uma carta (Cabal Therapy) -------- */}
       {myChoice && myChoice.mode === 'nameCard' && (
         <div className="mulligan-overlay">
@@ -1135,7 +1153,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       )}
 
       {/* -------- escolha de efeito (descarte, sacrifício, vidência, busca) -------- */}
-      {myChoice && myChoice.mode !== 'nameCard' && myChoice.options && (
+      {myChoice && myChoice.mode !== 'nameCard' && myChoice.mode !== 'confirm' && myChoice.options && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
             <h2>{myChoice.mode === 'scry' ? 'Vidência' : 'Escolha'}</h2>

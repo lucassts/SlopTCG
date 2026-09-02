@@ -29,16 +29,51 @@ export function canAttack(state: GameState, obj: GameObject): string | null {
   return null;
 }
 
+const LANDWALK: [import('./types.js').Keyword, string][] = [
+  ['plainswalk', 'Plains'],
+  ['islandwalk', 'Island'],
+  ['swampwalk', 'Swamp'],
+  ['mountainwalk', 'Mountain'],
+  ['forestwalk', 'Forest'],
+];
+
 export function canBlock(state: GameState, blocker: GameObject, attacker: GameObject): string | null {
   if (!blocker.card.types.includes('Creature')) return 'não é uma criatura';
   if (blocker.tapped) return 'está virada';
+  if (hasKeyword(state, blocker, 'cantBlock')) return 'não pode bloquear';
   if (attachmentForbids(state, blocker, 'cantBlock')) return 'não pode bloquear (encantamento)';
+  if (hasKeyword(state, attacker, 'unblockable')) return 'o atacante não pode ser bloqueado';
   if (
     hasKeyword(state, attacker, 'flying') &&
     !hasKeyword(state, blocker, 'flying') &&
     !hasKeyword(state, blocker, 'reach')
   )
     return 'não alcança criaturas com voar';
+  // Evasões clássicas.
+  const isArtifact = blocker.card.types.includes('Artifact');
+  if (hasKeyword(state, attacker, 'fear') && !isArtifact && !blocker.card.colors.includes('B'))
+    return 'medo: só criaturas artefato ou pretas bloqueiam';
+  if (
+    hasKeyword(state, attacker, 'intimidate') &&
+    !isArtifact &&
+    !blocker.card.colors.some((c) => attacker.card.colors.includes(c))
+  )
+    return 'intimidar: só artefatos ou criaturas da mesma cor bloqueiam';
+  if (hasKeyword(state, attacker, 'shadow') !== hasKeyword(state, blocker, 'shadow'))
+    return 'sombra: só criaturas com sombra bloqueiam (e são bloqueadas por) criaturas com sombra';
+  if (hasKeyword(state, attacker, 'horsemanship') !== hasKeyword(state, blocker, 'horsemanship'))
+    return 'horsemanship: só criaturas com horsemanship bloqueiam (e são bloqueadas por) criaturas com horsemanship';
+  if (hasKeyword(state, blocker, 'blockOnlyFlying') && !hasKeyword(state, attacker, 'flying'))
+    return 'só pode bloquear criaturas com voar';
+  for (const [kw, land] of LANDWALK) {
+    if (
+      hasKeyword(state, attacker, kw) &&
+      state.players[blocker.controller].zones.battlefield.some((id) =>
+        state.objects[id].card.subtypes.includes(land),
+      )
+    )
+      return `${land.toLowerCase()}walk: não pode ser bloqueado enquanto o defensor controla ${land}`;
+  }
   // Protection: the attacker can't be blocked by creatures of those colors.
   if (attacker.card.protectionFrom?.some((c) => blocker.card.colors.includes(c)))
     return `o atacante tem proteção contra as cores do bloqueador`;
@@ -90,6 +125,7 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
         dealDamageToObject(state, pw, power, atk.card.name, emit, { sourceColors: atk.card.colors });
       } else {
         dealDamageToPlayer(state, defender, power, atk.card.name, emit);
+        emit({ type: 'combatDamageToPlayer', attackerId: atk.id, player: defender, amount: power });
       }
       if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
     };

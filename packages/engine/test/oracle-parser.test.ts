@@ -165,7 +165,7 @@ describe('oracle parser · aceita', () => {
 });
 
 describe('oracle parser · recusa (conservador)', () => {
-  it('permanente com linha não reconhecida → parcial (jogável, com nota)', () => {
+  it('Guttersnipe: gatilho de instantânea/feitiço com dano a cada oponente → full', () => {
     const def = compileOracleCard({
       name: 'Guttersnipe',
       manaCost: '{2}{R}',
@@ -174,6 +174,20 @@ describe('oracle parser · recusa (conservador)', () => {
       power: 2,
       toughness: 2,
       colors: ['R'],
+    });
+    expect(def!.automation).toBe('full');
+    expect(def!.abilities?.[0]).toMatchObject({ kind: 'triggered', trigger: { on: 'youCastSpell', instantSorceryOnly: true } });
+  });
+
+  it('permanente com linha não reconhecida → parcial (jogável, com nota)', () => {
+    const def = compileOracleCard({
+      name: 'Odd Golem',
+      manaCost: '{3}',
+      typeLine: 'Artifact Creature — Golem',
+      oracleText: 'Odd Golem gets +1/+0 for each Ninja you control on odd-numbered turns.',
+      power: 2,
+      toughness: 2,
+      colors: [],
     });
     expect(def!.automation).toBe('partial');
     expect(def!.automationNotes).toHaveLength(1);

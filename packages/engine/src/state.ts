@@ -114,8 +114,8 @@ export type PendingDecision =
       type: 'effectChoice';
       player: PlayerId;
       prompt: string;
-      /** 'cards' → pick objects; 'scry' → picks go to the bottom; 'nameCard' → free-text card name. */
-      mode: 'cards' | 'scry' | 'nameCard';
+      /** 'cards' → pick objects; 'scry' → picks go to the bottom; 'nameCard' → free-text; 'confirm' → yes/no. */
+      mode: 'cards' | 'scry' | 'nameCard' | 'confirm';
       options: number[];
       min: number;
       max: number;
@@ -363,7 +363,7 @@ export function hasKeyword(state: GameState, obj: GameObject, kw: import('./type
 }
 
 /** True if an attachment forbids this creature from attacking/blocking. */
-export function attachmentForbids(state: GameState, obj: GameObject, what: 'cantAttack' | 'cantBlock'): boolean {
+export function attachmentForbids(state: GameState, obj: GameObject, what: 'cantAttack' | 'cantBlock' | 'doesntUntap'): boolean {
   return attachmentsOf(state, obj).some((a) => a.card.attachEffect?.[what]);
 }
 

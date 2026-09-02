@@ -51,6 +51,8 @@ export type GameEvent =
   | { type: 'starterChosen'; first: PlayerId; by: PlayerId }
   | { type: 'tapUndone'; objectId: number; cardName: string; player: PlayerId }
   | { type: 'attackersDeclared'; player: PlayerId; attackers: { objectId: number; cardName: string }[] }
+  /** Fired after an attacker deals combat damage to a player (trigger hook). */
+  | { type: 'combatDamageToPlayer'; attackerId: number; player: PlayerId; amount: number }
   | { type: 'blockersDeclared'; player: PlayerId; blocks: { blocker: number; blockerName: string; attacker: number; attackerName: string }[] }
   | { type: 'discarded'; player: PlayerId; objectId: number; cardName: string }
   /** A hand is revealed to everyone (Cabal Therapy naming). */

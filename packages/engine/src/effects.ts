@@ -41,6 +41,7 @@ import {
 } from './state.js';
 import { opponentOf, type PlayerId, type TargetChoice } from './types.js';
 import { shuffle } from './rng.js';
+import { canPay, parseCost, planPayment } from './mana.js';
 
 export interface EffectContext {
   state: GameState;
@@ -64,6 +65,10 @@ function resolvePlayers(sel: PlayerSel, controller: PlayerId): PlayerId[] {
 
 function resolveSubject(ctx: EffectContext, ref: SubjectRef): TargetChoice[] {
   if (ref === 'self') return [{ kind: 'object', id: ctx.sourceId }];
+  if (ref === 'host') {
+    const host = ctx.state.objects[ctx.sourceId]?.attachedTo;
+    return host !== undefined ? [{ kind: 'object', id: host }] : [];
+  }
   if (ref === 'controller' || ref === 'opponent' || ref === 'each')
     return resolvePlayers(ref, ctx.controller).map((p) => ({ kind: 'player', player: p }));
   const idx = parseInt(ref.slice('target:'.length), 10);
@@ -88,6 +93,11 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if (typeof amount === 'number') return amount;
   if (amount === 'X') return ctx.xValue ?? 0;
   if (amount === 'sacrificedPower') return ctx.sacrificedPower ?? 0;
+  if ('powerOf' in amount) {
+    const [t] = resolveSubject(ctx, amount.powerOf);
+    const obj = t ? objectAlive(ctx.state, t) : null;
+    return obj ? Math.max(0, effectivePower(ctx.state, obj)) : 0;
+  }
   return battlefield(ctx.state).filter((o) =>
     matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId }, amount.per, o),
   ).length;
@@ -110,12 +120,12 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'search' | 'nameCardDiscard' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' }>;
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return (
-    step.op === 'discard' || step.op === 'sacrifice' || step.op === 'scry' ||
-    step.op === 'search' || step.op === 'nameCardDiscard'
+    step.op === 'discard' || step.op === 'sacrifice' || step.op === 'scry' || step.op === 'surveil' ||
+    step.op === 'search' || step.op === 'nameCardDiscard' || step.op === 'counterUnlessPay'
   );
 }
 
@@ -125,7 +135,9 @@ interface ChoiceSetup {
   min: number;
   max: number;
   prompt: string;
-  mode: 'cards' | 'scry' | 'nameCard';
+  mode: 'cards' | 'scry' | 'nameCard' | 'confirm';
+  /** 'confirm' with nothing to decide (target gone / can't pay) resolves immediately. */
+  autoAnswer?: 'yes' | 'no' | 'skip';
 }
 
 /** Resolve who a choice belongs to ('target:N' → the targeted player). */
@@ -188,6 +200,17 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         mode: 'scry',
       };
     }
+    case 'surveil': {
+      const top = state.players[controller].zones.library.slice(0, step.count);
+      return {
+        player: controller,
+        options: top,
+        min: 0,
+        max: top.length,
+        prompt: `Vigiar ${top.length}: selecione as cartas que vão para o CEMITÉRIO (as demais ficam no topo)`,
+        mode: 'scry',
+      };
+    }
     case 'search': {
       const options = state.players[controller].zones.library
         .map((id) => state.objects[id])
@@ -211,6 +234,21 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         prompt: `${ctx.sourceName}: escolha o nome de uma carta que não seja terreno`,
         mode: 'nameCard',
       };
+    case 'counterUnlessPay': {
+      const [t] = resolveSubject(ctx, step.what);
+      const item = t?.kind === 'object' ? state.stack.find((s) => s.kind === 'spell' && s.sourceId === t.id) : undefined;
+      if (!item) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'skip' };
+      const canPayIt = canPay(state, item.controller, parseCost(step.cost));
+      return {
+        player: item.controller,
+        options: [],
+        min: 0,
+        max: 0,
+        prompt: `${ctx.sourceName}: pagar ${step.cost} para ${item.cardName} não ser anulada?`,
+        mode: 'confirm',
+        autoAnswer: canPayIt ? undefined : 'no',
+      };
+    }
   }
 }
 
@@ -218,6 +256,39 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
 export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: number[], text?: string): void {
   const { state, emit } = ctx;
   switch (step.op) {
+    case 'counterUnlessPay': {
+      const [t] = resolveSubject(ctx, step.what);
+      if (t?.kind !== 'object') return;
+      const item = state.stack.find((s) => s.kind === 'spell' && s.sourceId === t.id);
+      if (!item) return;
+      const obj = state.objects[t.id];
+      if (text === 'yes') {
+        const plan = planPayment(state, item.controller, parseCost(step.cost));
+        if (plan) {
+          for (const tap of plan.taps) {
+            setTapped(state, state.objects[tap.objectId], true, emit);
+            for (const sym of tap.produce) state.players[item.controller].manaPool[sym] += 1;
+          }
+          for (const sym of plan.fromPool)
+            state.players[item.controller].manaPool[sym] = Math.max(0, state.players[item.controller].manaPool[sym] - 1);
+          if (plan.lifePaid > 0) changeLife(state, item.controller, -plan.lifePaid, 'mana phyrexiana', emit);
+          emit({ type: 'fizzled', description: `${state.players[item.controller].name} pagou ${step.cost}: ${item.cardName} não foi anulada` });
+          return;
+        }
+      }
+      if (obj?.card.uncounterable) {
+        emit({ type: 'fizzled', description: `${item.cardName} não pode ser anulada` });
+        return;
+      }
+      state.stack = state.stack.filter((s) => s !== item);
+      if (obj) {
+        const dest = item.flashback ? 'exile' : 'graveyard';
+        obj.zone = dest;
+        state.players[obj.owner].zones[dest].push(obj.id);
+      }
+      emit({ type: 'spellCountered', objectId: t.id, cardName: item.cardName });
+      return;
+    }
     case 'nameCardDiscard': {
       const name = (text ?? '').trim();
       if (!name) return;
@@ -265,6 +336,15 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       emit({ type: 'scried', player: ctx.controller, looked: Math.min(step.count, library.length), bottomed: picks.length });
       return;
     }
+    case 'surveil': {
+      for (const id of picks) {
+        const obj = state.objects[id];
+        if (!obj || obj.zone !== 'library') continue;
+        moveWithEvent(state, obj, 'graveyard', 'milled', emit);
+      }
+      emit({ type: 'scried', player: ctx.controller, looked: step.count, bottomed: 0 });
+      return;
+    }
     case 'search': {
       const found: string[] = [];
       const toTop: number[] = [];
@@ -300,8 +380,15 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
  */
 function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep[]): 'done' | 'paused' {
   const setup = setupChoice(ctx, step);
-  // nameCard always needs the round-trip (the answer is text, not picks).
-  if (setup.mode !== 'nameCard') {
+  if (setup.mode === 'confirm') {
+    if (setup.autoAnswer === 'skip') return 'done';
+    if (setup.autoAnswer) {
+      executeChoice(ctx, step, [], setup.autoAnswer);
+      return 'done';
+    }
+  }
+  // nameCard/confirm always need the round-trip (the answer is text, not picks).
+  if (setup.mode !== 'nameCard' && setup.mode !== 'confirm') {
     // Forced choice (all options must be picked) or nothing to pick → no round-trip.
     if (setup.mode === 'cards' && setup.options.length <= setup.min) {
       executeChoice(ctx, step, setup.options);
@@ -450,13 +537,13 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
 
     case 'gainLife': {
       const amount = resolveAmount(ctx, step.amount);
-      for (const p of resolvePlayers(step.who, ctx.controller)) changeLife(state, p, amount, ctx.sourceName, emit);
+      for (const p of resolveWho(ctx, step.who)) changeLife(state, p, amount, ctx.sourceName, emit);
       return;
     }
 
     case 'loseLife': {
       const amount = resolveAmount(ctx, step.amount);
-      for (const p of resolvePlayers(step.who, ctx.controller)) changeLife(state, p, -amount, ctx.sourceName, emit);
+      for (const p of resolveWho(ctx, step.who)) changeLife(state, p, -amount, ctx.sourceName, emit);
       return;
     }
 
@@ -658,6 +745,26 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       state.combatDamagePrevented = true;
       return;
 
+    case 'putOnLibraryTop':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (obj && (obj.zone === 'battlefield' || obj.zone === 'graveyard'))
+          moveWithEvent(state, obj, 'library', 'returned', emit, 'top');
+      }
+      return;
+
+    case 'namedToken':
+      for (const p of resolvePlayers(step.who, ctx.controller)) {
+        for (let i = 0; i < step.count; i++) {
+          const obj = createObject(state, NAMED_TOKENS[step.kind], p);
+          obj.isToken = true;
+          obj.zone = 'battlefield';
+          state.players[p].zones.battlefield.push(obj.id);
+          emit({ type: 'tokenCreated', player: p, objectId: obj.id, name: step.kind });
+        }
+      }
+      return;
+
     case 'shuffle':
       for (const p of resolvePlayers(step.who, ctx.controller)) {
         const r = shuffle(state.players[p].zones.library, state.rngState);
@@ -710,6 +817,28 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
   }
 }
 
+/** Artifact tokens with their own abilities (Treasure, Food, Clue). */
+const NAMED_TOKENS: Record<'Treasure' | 'Food' | 'Clue', import('./cards/types.js').CardDefinition> = {
+  Treasure: {
+    id: 'token-treasure', name: 'Treasure', types: ['Artifact'], subtypes: ['Treasure'], colors: [],
+    text: '{T}, Sacrifice this artifact: Add one mana of any color.',
+    abilities: [{ kind: 'activated', cost: { tap: true, sacrificeSelf: true }, effect: [{ op: 'addManaChoice', who: 'controller' }], text: 'Sacrificar: uma mana de qualquer cor', isManaAbility: true }],
+    automation: 'full',
+  },
+  Food: {
+    id: 'token-food', name: 'Food', types: ['Artifact'], subtypes: ['Food'], colors: [],
+    text: '{2}, {T}, Sacrifice this artifact: You gain 3 life.',
+    abilities: [{ kind: 'activated', cost: { mana: '{2}', tap: true, sacrificeSelf: true }, effect: [{ op: 'gainLife', who: 'controller', amount: 3 }], text: '{2}, sacrificar: ganhe 3 de vida' }],
+    automation: 'full',
+  },
+  Clue: {
+    id: 'token-clue', name: 'Clue', types: ['Artifact'], subtypes: ['Clue'], colors: [],
+    text: '{2}, Sacrifice this artifact: Draw a card.',
+    abilities: [{ kind: 'activated', cost: { mana: '{2}', sacrificeSelf: true }, effect: [{ op: 'draw', who: 'controller', count: 1 }], text: '{2}, sacrificar: compre uma carta' }],
+    automation: 'full',
+  },
+};
+
 function applyPump(
   ctx: EffectContext,
   obj: GameObject,
@@ -736,7 +865,14 @@ export function targetMatchesSpec(
   if (choice.kind === 'player') return spec.what === 'any';
   const obj = state.objects[choice.id];
   if (!obj) return false;
-  if (spec.what === 'spell') return obj.zone === 'stack';
+  if (spec.what === 'spell') {
+    if (obj.zone !== 'stack') return false;
+    const isCreature = obj.card.types.includes('Creature');
+    if (spec.spellType === 'creature') return isCreature;
+    if (spec.spellType === 'noncreature') return !isCreature;
+    if (spec.spellType === 'instantSorcery') return obj.card.types.includes('Instant') || obj.card.types.includes('Sorcery');
+    return true;
+  }
 
   const requiredZone = spec.zone ?? 'battlefield';
   if (obj.zone !== requiredZone) return false;
@@ -745,11 +881,20 @@ export function targetMatchesSpec(
   } else {
     if (spec.controlledBy === 'you' && obj.controller !== controller) return false;
     if (spec.controlledBy === 'opponent' && obj.controller === controller) return false;
-    // Hexproof: opponents' spells/abilities can't target it.
+    // Hexproof: opponents' spells/abilities can't target it. Shroud: nobody's.
     if (obj.controller !== controller && hasKeyword(state, obj, 'hexproof')) return false;
+    if (hasKeyword(state, obj, 'shroud')) return false;
     // Protection from [color]: can't be targeted by sources of that color.
     if (obj.card.protectionFrom && srcColors?.some((c) => obj.card.protectionFrom!.includes(c))) return false;
   }
+  // Qualificadores ("tapped creature", "attacking or blocking", "with flying", "power 4 or greater"…).
+  if (spec.tapped && !obj.tapped) return false;
+  if (spec.combat && !obj.attacking && obj.blocking === undefined) return false;
+  if (spec.withKeyword && !hasKeyword(state, obj, spec.withKeyword)) return false;
+  if (spec.withoutKeyword && hasKeyword(state, obj, spec.withoutKeyword)) return false;
+  if (spec.powerAtLeast !== undefined && effectivePower(state, obj) < spec.powerAtLeast) return false;
+  if (spec.powerAtMost !== undefined && effectivePower(state, obj) > spec.powerAtMost) return false;
+  if (spec.typeAnyOf && !spec.typeAnyOf.some((t) => obj.card.types.includes(t))) return false;
   switch (spec.what) {
     case 'any':
       return true;

@@ -5,7 +5,7 @@
 import type { Emit } from './ops.js';
 import { destroyObject, lose, moveWithEvent } from './ops.js';
 import { battlefield, effectiveToughness, hasKeyword, type GameState } from './state.js';
-import { PLAYER_IDS } from './types.js';
+import { PLAYER_IDS, type CardType } from './types.js';
 
 export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
   let anyChange = false;
@@ -53,7 +53,11 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
       // equipment just becomes unattached (704.5n / 704.5p).
       if (obj.attachedTo !== undefined) {
         const host = state.objects[obj.attachedTo];
-        const hostGone = !host || host.zone !== 'battlefield' || !host.card.types.includes('Creature');
+        // Auras: the host must still match "Enchant X"; equipment needs a creature.
+        const wants = obj.card.enchant?.what ?? 'creature';
+        const wantedType = (wants.charAt(0).toUpperCase() + wants.slice(1)) as CardType;
+        const hostGone =
+          !host || host.zone !== 'battlefield' || (wants !== 'permanent' && !host.card.types.includes(wantedType));
         if (hostGone) {
           if (obj.card.enchant) {
             moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);

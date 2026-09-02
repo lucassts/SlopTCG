@@ -23,6 +23,7 @@ import { checkStateBasedActions } from './sba.js';
 import {
   createGameState,
   effectivePower,
+  attachmentForbids,
   hasKeyword,
   matchFilter,
   MAX_HAND_SIZE,
@@ -434,7 +435,7 @@ export class Game {
       { this.fail(playerId, 'terrenos são jogados, não conjurados'); return false; }
     if (card.automation === 'manual')
       { this.fail(playerId, `${card.name} ainda não é automatizada — use o modo manual`); return false; }
-    const isInstant = card.types.includes('Instant');
+    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash');
     if (!isInstant && !this.sorceryTiming(playerId))
       { this.fail(playerId, 'só pode ser conjurada na sua fase principal com a pilha vazia'); return false; }
 
@@ -515,6 +516,8 @@ export class Game {
         cost.generic += kick.generic;
         cost.colorless += kick.colorless;
         cost.colored.push(...kick.colored);
+        cost.hybrid.push(...kick.hybrid);
+        cost.phyrexian.push(...kick.phyrexian);
         cost.xCount += kick.xCount;
       }
       if (cost.xCount > 0) {
@@ -523,6 +526,7 @@ export class Game {
         xValue = x;
         cost.generic += x * cost.xCount;
       }
+      cost.generic += this.wardTax(playerId, targets);
       const plan = planPayment(s, playerId, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
@@ -583,16 +587,30 @@ export class Game {
     return true;
   }
 
+  /** Ward: targeting an opponent's warded permanent costs {N} more (paid up front). */
+  private wardTax(playerId: PlayerId, targets: TargetChoice[]): number {
+    let tax = 0;
+    for (const t of targets) {
+      if (t.kind !== 'object') continue;
+      const obj = this.state.objects[t.id];
+      if (obj && obj.zone === 'battlefield' && obj.controller !== playerId && obj.card.ward) tax += obj.card.ward;
+    }
+    return tax;
+  }
+
   private payWithPlan(playerId: PlayerId, plan: import('./mana.js').PaymentPlan): void {
     const s = this.state;
     s.reversibleTaps = []; // mana committed: taps are no longer undoable
     for (const tap of plan.taps) {
       const src = s.objects[tap.objectId];
       setTapped(s, src, true, this.emit);
+      // A fonte produz tudo de uma vez (Sol Ring); a sobra fica flutuando.
+      for (const sym of tap.produce) s.players[playerId].manaPool[sym] += 1;
     }
     for (const sym of plan.fromPool) {
       s.players[playerId].manaPool[sym] = Math.max(0, s.players[playerId].manaPool[sym] - 1);
     }
+    if (plan.lifePaid > 0) changeLife(s, playerId, -plan.lifePaid, 'mana phyrexiana', this.emit);
   }
 
   private doActivateAbility(
@@ -666,8 +684,11 @@ export class Game {
     if (ability.cost.payLife && s.players[playerId].life < ability.cost.payLife)
       { this.fail(playerId, `você precisa de ${ability.cost.payLife} pontos de vida para pagar`); return false; }
 
-    if (ability.cost.mana) {
-      const plan = planPayment(s, playerId, parseCost(ability.cost.mana));
+    const abilityTax = this.wardTax(playerId, targets);
+    if (ability.cost.mana || abilityTax > 0) {
+      const cost = parseCost(ability.cost.mana);
+      cost.generic += abilityTax;
+      const plan = planPayment(s, playerId, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
     }
@@ -812,6 +833,12 @@ export class Game {
       if (why) { this.fail(playerId, `${obj.card.name} não pode atacar: ${why}`); return false; }
       attackers.push(obj);
     }
+    // "Attacks each combat if able": must be among the attackers when it can.
+    for (const id of s.players[playerId].zones.battlefield) {
+      const obj = s.objects[id];
+      if (hasKeyword(s, obj, 'mustAttack') && canAttack(s, obj) === null && !attackerIds.includes(id))
+        { this.fail(playerId, `${obj.card.name} precisa atacar este combate`); return false; }
+    }
     // Optional: attack a defender's planeswalker instead of the player.
     if (defendTarget !== undefined) {
       const pw = s.objects[defendTarget];
@@ -900,6 +927,11 @@ export class Game {
       if (!name || name.length > 120)
         { this.fail(playerId, 'digite o nome de uma carta'); return false; }
       applyEffectChoice(s, pending, [], this.emit, name);
+      return true;
+    }
+    if (pending.mode === 'confirm') {
+      if (text !== 'yes' && text !== 'no') { this.fail(playerId, 'responda sim ou não'); return false; }
+      applyEffectChoice(s, pending, [], this.emit, text);
       return true;
     }
     if (new Set(picks).size !== picks.length)
@@ -1098,6 +1130,7 @@ export class Game {
         for (const id of player.zones.battlefield) {
           const obj = s.objects[id];
           obj.summoningSick = false;
+          if (hasKeyword(s, obj, 'doesntUntap') || attachmentForbids(s, obj, 'doesntUntap')) continue;
           if (obj.tapped) setTapped(s, obj, false, this.emit);
         }
         s.priority = null; // no one gets priority during untap
@@ -1155,7 +1188,8 @@ export class Game {
       }
       case 'cleanup': {
         const player = s.players[s.activePlayer];
-        const over = player.zones.hand.length - MAX_HAND_SIZE;
+        const unlimited = player.zones.battlefield.some((id) => s.objects[id].card.noMaxHandSize);
+        const over = unlimited ? 0 : player.zones.hand.length - MAX_HAND_SIZE;
         s.priority = null;
         if (over > 0) {
           s.pendingDecision = { type: 'discardToHandSize', player: s.activePlayer, count: over };
@@ -1312,15 +1346,15 @@ export class Game {
         // and moves to the graveyard when applyEffectChoice finishes it.
         if (s.pendingDecision?.type === 'effectChoice') {
           s.pendingDecision.resume.finishSpellId = obj.id;
-          s.pendingDecision.resume.finishSpellExile = item.flashback;
+          s.pendingDecision.resume.finishSpellExile = item.flashback || !!obj.card.exileOnResolve;
         }
         this.emit({ type: 'stackResolved', description: `${item.description} está resolvendo` });
         return;
       }
       this.emit({ type: 'stackResolved', description: `${item.description} resolveu` });
-      // Finishes in the graveyard — or exile, for flashback casts.
+      // Finishes in the graveyard — or exile, for flashback / "Exile ~" spells.
       if (obj.zone === 'stack')
-        moveWithEvent(s, obj, item.flashback ? 'exile' : 'graveyard', 'resolved', this.emit);
+        moveWithEvent(s, obj, item.flashback || obj.card.exileOnResolve ? 'exile' : 'graveyard', 'resolved', this.emit);
       return;
     }
 
@@ -1357,6 +1391,7 @@ export class Game {
         this.fireZoneTriggers(ev.objectId, 'dies');
       if (ev.type === 'attackersDeclared')
         for (const a of ev.attackers) this.fireSelfTrigger(a.objectId, 'attacks');
+      if (ev.type === 'combatDamageToPlayer') this.fireSelfTrigger(ev.attackerId, 'combatDamageToPlayer');
       if (ev.type === 'lifeChanged' && ev.delta > 0) this.fireLifeGainTriggers(ev.player);
     }
   }
@@ -1391,7 +1426,7 @@ export class Game {
     }
   }
 
-  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks'): void {
+  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks' | 'combatDamageToPlayer'): void {
     const obj = this.state.objects[objectId];
     if (!obj) return;
     for (const ability of obj.card.abilities ?? []) {
@@ -1409,6 +1444,7 @@ export class Game {
       for (const ability of obj.card.abilities ?? []) {
         if (ability.kind !== 'triggered' || ability.trigger.on !== 'youCastSpell') continue;
         if (ability.trigger.noncreatureOnly && card.types.includes('Creature')) continue;
+        if (ability.trigger.instantSorceryOnly && !card.types.includes('Instant') && !card.types.includes('Sorcery')) continue;
         this.pushTrigger(obj, ability);
       }
     }
