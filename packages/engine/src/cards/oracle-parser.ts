@@ -771,7 +771,8 @@ interface ParseState {
   softNotes: string[];
 }
 
-const ROMAN: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5 };
+const ROMAN: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
+const ROMAN_RE = '(?:VIII|VII|VI|IV|IX|X|V|III|II|I)';
 
 /** Overload: rewrite a single-target spell effect as "each" (null if any step can't be converted). */
 function overloadOf(targets: TargetSpec[] | undefined, effect: EffectStep[]): EffectStep[] | null {
@@ -925,7 +926,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if (/^(~ can be your commander\.|Choose a Background|Doctor's companion|Partner(?:—.+)?|Friends forever|Draft ~ face up\.|Draft this card face up\.|A deck can have any number of cards named ~\.|Remove this card from your deck before playing if you're not playing for ante\.|Companion — .+|Start your engines!|Ascend|Increment|Storied|Assist|Play with the top card of your library revealed\.)$/i.test(line)) return true;
 
   // ---- Leva 3: Sagas, Classes, Level up, Station, energia, keywords de campo
-  if ((m = line.match(/^((?:I|II|III|IV|V)(?:, (?:I|II|III|IV|V))*) — (.+)$/))) {
+  if ((m = line.match(new RegExp(`^(${ROMAN_RE}(?:, ${ROMAN_RE})*) — (.+)$`)))) {
     const chapters = m[1].split(', ').map((r) => ROMAN[r]);
     st.sagaChapters = Math.max(st.sagaChapters ?? 0, ...chapters);
     const parsed = parseEffectText(m[2].replace(/\.?$/, '.'));
