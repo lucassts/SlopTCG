@@ -25,6 +25,7 @@ import {
   effectivePower,
   attachmentForbids,
   hasKeyword,
+  isCreature,
   matchFilter,
   MAX_HAND_SIZE,
   removeFromCurrentZone,
@@ -289,7 +290,11 @@ export class Game {
       case 'chooseTargets':
         return this.doChooseTargets(playerId, action.targets);
       case 'activateAbility':
-        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices, action.manaColor);
+        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices, action.manaColor, action.discards);
+      case 'crew':
+        return this.doCrew(playerId, action.objectId, action.creatures);
+      case 'chooseMode':
+        return this.doChooseMode(playerId, action.mode);
       case 'cycle':
         return this.doCycle(playerId, action.objectId);
       case 'declareAttackers':
@@ -386,8 +391,38 @@ export class Game {
     s.players[playerId].landsPlayedThisTurn += 1;
     s.passCount = 0;
     this.emit({ type: 'landPlayed', player: playerId, objectId: obj.id, cardName: obj.card.name });
-    if (obj.card.entersTapped) setTapped(s, obj, true, this.emit);
+    this.applyEnterTapRules(obj);
     return true;
+  }
+
+  /** entersTapped / checklands & fastlands / shocklands, as a permanent enters. */
+  private applyEnterTapRules(obj: GameObject): void {
+    const s = this.state;
+    const card = obj.card;
+    if (card.entersTapped) { setTapped(s, obj, true, this.emit); return; }
+    if (card.entersTappedUnless) {
+      const mine = s.players[obj.controller].zones.battlefield.map((id) => s.objects[id]).filter((o) => o.id !== obj.id);
+      const u = card.entersTappedUnless;
+      let ok = true;
+      if (u.controlsAtLeast) {
+        const n = mine.filter((o) => matchFilter({ controller: obj.controller, sourceId: obj.id }, u.controlsAtLeast!.filter, o)).length;
+        ok = n >= u.controlsAtLeast.count;
+      }
+      if (ok && u.controlsAtMost) {
+        const n = mine.filter((o) => matchFilter({ controller: obj.controller, sourceId: obj.id }, u.controlsAtMost!.filter, o)).length;
+        ok = n <= u.controlsAtMost.count;
+      }
+      if (ok && u.controlsSubtypeAnyOf) ok = mine.some((o) => u.controlsSubtypeAnyOf!.some((t) => o.card.subtypes.includes(t)));
+      if (!ok) setTapped(s, obj, true, this.emit);
+      return;
+    }
+    if (card.shockLife) {
+      // "You may pay N life. If you don't, it enters tapped." — pergunta ao controlador.
+      runEffectScript(
+        { state: s, controller: obj.controller, sourceId: obj.id, sourceName: card.name, targets: [], emit: this.emit },
+        [{ op: 'mayDo', prompt: `pagar ${card.shockLife} de vida para ${card.name} entrar desvirado?`, effect: [{ op: 'loseLife', who: 'controller', amount: card.shockLife }], else: [{ op: 'tap', what: 'self' }] }],
+      );
+    }
   }
 
   private validateTargets(
@@ -620,6 +655,7 @@ export class Game {
     targets: TargetChoice[],
     sacrifices?: number[],
     manaColor?: 'W' | 'U' | 'B' | 'R' | 'G',
+    discards?: number[],
   ): boolean {
     const s = this.state;
     const obj = s.objects[objectId];
@@ -662,8 +698,21 @@ export class Game {
 
     if (ability.cost.tap) {
       if (obj.tapped) { this.fail(playerId, `${obj.card.name} já está virada`); return false; }
-      if (obj.card.types.includes('Creature') && obj.summoningSick && !hasKeyword(s, obj, 'haste'))
+      if (isCreature(obj) && obj.summoningSick && !hasKeyword(s, obj, 'haste'))
         { this.fail(playerId, `${obj.card.name} tem enjoo de invocação`); return false; }
+    }
+    // "Discard a card:" cost — the cards come with the action.
+    const discardIds = discards ?? [];
+    if (ability.cost.discard) {
+      if (discardIds.length !== ability.cost.discard || new Set(discardIds).size !== discardIds.length)
+        { this.fail(playerId, `descarte ${ability.cost.discard} carta(s) como custo`); return false; }
+      for (const id of discardIds) {
+        const c = s.objects[id];
+        if (!c || c.zone !== 'hand' || c.owner !== playerId)
+          { this.fail(playerId, 'carta inválida para descartar'); return false; }
+      }
+    } else if (discardIds.length > 0) {
+      { this.fail(playerId, 'essa habilidade não tem custo de descarte'); return false; }
     }
     const targetErr = this.validateTargets(playerId, ability.targets, targets, obj.card.colors);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
@@ -695,6 +744,11 @@ export class Game {
     if (ability.cost.tap) setTapped(s, obj, true, this.emit);
     if (ability.cost.payLife)
       changeLife(s, playerId, -ability.cost.payLife, `custo de ${obj.card.name}`, this.emit);
+    for (const id of discardIds) {
+      const c = s.objects[id];
+      moveWithEvent(s, c, 'graveyard', 'discarded', this.emit);
+      this.emit({ type: 'discarded', player: playerId, objectId: id, cardName: c.card.name });
+    }
     for (const id of abilitySacs) moveWithEvent(s, s.objects[id], 'graveyard', 'sacrificed', this.emit);
     if (ability.cost.sacrificeSelf) moveWithEvent(s, obj, 'graveyard', 'sacrificed', this.emit);
 
@@ -1211,6 +1265,7 @@ export class Game {
       if (obj.zone === 'battlefield') {
         obj.damage = 0;
         obj.untilEot = { power: 0, toughness: 0, keywords: [] };
+        obj.crewedUntilEot = undefined;
         delete obj.counters['__deathtouched'];
         delete obj.counters['__regen']; // regeneration shields expire
       }
@@ -1272,7 +1327,7 @@ export class Game {
       }
       if (isPermanentCard(obj.card)) {
         moveWithEvent(s, obj, 'battlefield', 'resolved', this.emit);
-        if (obj.card.entersTapped) setTapped(s, obj, true, this.emit);
+        this.applyEnterTapRules(obj);
         // Aura: enters attached to its target (fizzle above covers a dead one).
         const enchantTarget = obj.card.enchant ? item.targets[0] : undefined;
         if (enchantTarget && enchantTarget.kind === 'object') {
@@ -1389,8 +1444,36 @@ export class Game {
       if (ev.type === 'landPlayed') this.fireZoneTriggers(ev.objectId, 'etb'); // landfall
       if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.to === 'graveyard')
         this.fireZoneTriggers(ev.objectId, 'dies');
-      if (ev.type === 'attackersDeclared')
+      if (ev.type === 'attackersDeclared') {
         for (const a of ev.attackers) this.fireSelfTrigger(a.objectId, 'attacks');
+        if (ev.attackers.length > 0) this.fireControllerTriggers(ev.player, 'youAttack');
+        // Exalted: a lone attacker gets +1/+1 per exalted permanent its controller controls.
+        if (ev.attackers.length === 1) {
+          const atk = this.state.objects[ev.attackers[0].objectId];
+          const n = this.state.players[ev.player].zones.battlefield.filter((id) => this.state.objects[id].card.exalted).length;
+          if (atk && n > 0) {
+            atk.untilEot.power += n;
+            atk.untilEot.toughness += n;
+            this.emit({ type: 'pumped', objectId: atk.id, cardName: atk.card.name, power: n, toughness: n });
+          }
+        }
+      }
+      if (ev.type === 'blockersDeclared') {
+        for (const b of ev.blocks) {
+          this.fireSelfTrigger(b.blocker, 'blocks');
+          // Bushido: blocker and blocked attacker get +N/+N.
+          for (const id of [b.blocker, b.attacker]) {
+            const o = this.state.objects[id];
+            if (o?.card.bushido) {
+              o.untilEot.power += o.card.bushido;
+              o.untilEot.toughness += o.card.bushido;
+              this.emit({ type: 'pumped', objectId: o.id, cardName: o.card.name, power: o.card.bushido, toughness: o.card.bushido });
+            }
+          }
+        }
+      }
+      if (ev.type === 'zoneChanged' && ev.from === 'battlefield') this.fireSelfTrigger(ev.objectId, 'leaves');
+      if (ev.type === 'tappedChanged' && ev.tapped) this.fireSelfTrigger(ev.objectId, 'becomesTapped');
       if (ev.type === 'combatDamageToPlayer') this.fireSelfTrigger(ev.attackerId, 'combatDamageToPlayer');
       if (ev.type === 'lifeChanged' && ev.delta > 0) this.fireLifeGainTriggers(ev.player);
     }
@@ -1426,7 +1509,19 @@ export class Game {
     }
   }
 
-  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks' | 'combatDamageToPlayer'): void {
+  /** Triggers on a player's permanents keyed on the player ("whenever you attack"). */
+  private fireControllerTriggers(player: PlayerId, on: 'youAttack'): void {
+    const s = this.state;
+    for (const id of [...s.players[player].zones.battlefield]) {
+      const obj = s.objects[id];
+      for (const ability of obj.card.abilities ?? []) {
+        if (ability.kind !== 'triggered' || ability.trigger.on !== on) continue;
+        this.pushTrigger(obj, ability);
+      }
+    }
+  }
+
+  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks' | 'blocks' | 'leaves' | 'becomesTapped' | 'combatDamageToPlayer'): void {
     const obj = this.state.objects[objectId];
     if (!obj) return;
     for (const ability of obj.card.abilities ?? []) {
@@ -1448,6 +1543,14 @@ export class Game {
         this.pushTrigger(obj, ability);
       }
     }
+    // "Whenever an opponent casts a spell" on the other player's permanents.
+    for (const id of s.players[opponentOf(caster)].zones.battlefield) {
+      const obj = s.objects[id];
+      for (const ability of obj.card.abilities ?? []) {
+        if (ability.kind !== 'triggered' || ability.trigger.on !== 'opponentCastsSpell') continue;
+        this.pushTrigger(obj, ability);
+      }
+    }
   }
 
   private fireStepTriggers(on: 'upkeep' | 'endStep'): void {
@@ -1465,7 +1568,10 @@ export class Game {
     }
   }
 
-  private pushTrigger(obj: GameObject, ability: { text: string; effect: StackItem['effect']; targets?: import('./cards/types.js').TargetSpec[] }): void {
+  private pushTrigger(
+    obj: GameObject,
+    ability: { text: string; effect: StackItem['effect']; targets?: import('./cards/types.js').TargetSpec[]; modes?: import('./cards/types.js').SpellMode[] },
+  ): void {
     const s = this.state;
     this.emit({
       type: 'abilityTriggered',
@@ -1474,6 +1580,23 @@ export class Game {
       sourceName: obj.card.name,
       text: ability.text,
     });
+    // "Choose one —": the controller picks the mode first (doChooseMode re-enters here).
+    if (ability.modes && ability.modes.length > 0) {
+      if (s.pendingDecision) {
+        // Outra decisão em curso: enfileira como gatilho sem alvo que pede o modo depois.
+        s.triggerQueue.push({ sourceId: obj.id, controller: obj.controller, cardName: obj.card.name, text: ability.text, specs: [], effect: [], modes: ability.modes });
+        return;
+      }
+      s.pendingDecision = {
+        type: 'chooseMode',
+        player: obj.controller,
+        sourceId: obj.id,
+        cardName: obj.card.name,
+        options: ability.modes.map((m) => ({ label: m.label, effect: m.effect, targets: m.targets })),
+      };
+      this.emit({ type: 'decisionRequired', player: obj.controller, decision: `mode:${obj.card.name}` });
+      return;
+    }
     // Targeted trigger: queue it — the controller picks targets before it
     // goes on the stack (processed by advanceLoop).
     if (ability.targets && ability.targets.length > 0) {
@@ -1506,6 +1629,11 @@ export class Game {
     const s = this.state;
     const trig = s.triggerQueue.shift();
     if (!trig) return;
+    if (trig.modes) {
+      const obj = s.objects[trig.sourceId];
+      if (obj) this.pushTrigger(obj, { text: trig.text, effect: [], modes: trig.modes });
+      return;
+    }
     const srcColors = s.objects[trig.sourceId]?.card.colors;
     const anyLegal = trig.specs.every((spec) => this.hasLegalTarget(trig.controller, spec, srcColors));
     if (!anyLegal) {
@@ -1533,6 +1661,50 @@ export class Game {
     return Object.values(this.state.objects).some((o) =>
       targetMatchesSpec(this.state, controller, spec, { kind: 'object', id: o.id }, srcColors),
     );
+  }
+
+  /** Crew N: tap untapped creatures with total power ≥ N; the vehicle becomes a creature until end of turn. */
+  private doCrew(playerId: PlayerId, objectId: number, creatureIds: number[]): boolean {
+    const s = this.state;
+    const err = this.requirePriority(playerId);
+    if (err) { this.fail(playerId, err); return false; }
+    const vehicle = s.objects[objectId];
+    if (!vehicle || vehicle.zone !== 'battlefield' || vehicle.controller !== playerId || vehicle.card.crew === undefined)
+      { this.fail(playerId, 'isso não é um veículo seu'); return false; }
+    if (vehicle.crewedUntilEot) { this.fail(playerId, `${vehicle.card.name} já está tripulado`); return false; }
+    if (new Set(creatureIds).size !== creatureIds.length || creatureIds.length === 0)
+      { this.fail(playerId, 'escolha as criaturas que vão tripular'); return false; }
+    let power = 0;
+    const crew: GameObject[] = [];
+    for (const id of creatureIds) {
+      const c = s.objects[id];
+      if (!c || c.zone !== 'battlefield' || c.controller !== playerId || !isCreature(c) || c.tapped || c.id === vehicle.id)
+        { this.fail(playerId, 'tripulante inválido (precisa ser criatura sua desvirada)'); return false; }
+      power += Math.max(0, effectivePower(s, c));
+      crew.push(c);
+    }
+    if (power < vehicle.card.crew)
+      { this.fail(playerId, `${vehicle.card.name}: tripular ${vehicle.card.crew} — poder total ${power} não basta`); return false; }
+    for (const c of crew) setTapped(s, c, true, this.emit);
+    vehicle.crewedUntilEot = true;
+    this.emit({ type: 'crewed', objectId: vehicle.id, cardName: vehicle.card.name, player: playerId });
+    return true;
+  }
+
+  /** Answer a "choose one —" on a triggered ability; then it proceeds like any trigger. */
+  private doChooseMode(playerId: PlayerId, mode: number): boolean {
+    const s = this.state;
+    const pending = s.pendingDecision;
+    if (!pending || pending.type !== 'chooseMode' || pending.player !== playerId)
+      { this.fail(playerId, 'nenhuma escolha de modo pendente para você'); return false; }
+    const opt = pending.options[mode];
+    if (!opt) { this.fail(playerId, 'modo inválido'); return false; }
+    s.pendingDecision = null;
+    this.emit({ type: 'modeChosen', player: playerId, cardName: pending.cardName, mode: opt.label });
+    const obj = s.objects[pending.sourceId];
+    if (!obj) return true;
+    this.pushTrigger(obj, { text: opt.label, effect: opt.effect, targets: opt.targets });
+    return true;
   }
 
   private doChooseTargets(playerId: PlayerId, targets: TargetChoice[]): boolean {

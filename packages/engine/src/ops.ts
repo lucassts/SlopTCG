@@ -35,19 +35,33 @@ export function changeLife(state: GameState, playerId: PlayerId, delta: number, 
   emit({ type: 'lifeChanged', player: playerId, delta, total: player.life, reason });
 }
 
+export function addPoison(state: GameState, playerId: PlayerId, count: number, emit: Emit): void {
+  if (count <= 0) return;
+  const p = state.players[playerId];
+  p.poison += count;
+  emit({ type: 'poisonChanged', player: playerId, delta: count, total: p.poison });
+}
+
 export function dealDamageToObject(
   state: GameState,
   target: GameObject,
   amount: number,
   sourceName: string,
   emit: Emit,
-  opts?: { deathtouch?: boolean; sourceColors?: import('./types.js').Color[] },
+  opts?: { deathtouch?: boolean; sourceColors?: import('./types.js').Color[]; infect?: boolean; wither?: boolean },
 ): void {
   if (amount <= 0) return;
   // Protection from [color]: all damage from sources of that color is prevented.
   const prot = target.card.protectionFrom;
   if (prot && opts?.sourceColors?.some((c) => prot.includes(c))) {
     emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
+    return;
+  }
+  // Infect / wither: damage to creatures becomes -1/-1 counters.
+  if ((opts?.infect || opts?.wither) && (target.card.types.includes('Creature') || target.crewedUntilEot)) {
+    const total = (target.counters['-1/-1'] ?? 0) + amount;
+    target.counters['-1/-1'] = total;
+    emit({ type: 'countersChanged', objectId: target.id, cardName: target.card.name, counter: '-1/-1', delta: amount, total });
     return;
   }
   // Planeswalkers take damage as loyalty loss.
@@ -96,7 +110,14 @@ export function destroyObject(state: GameState, obj: GameObject, emit: Emit): bo
   return true;
 }
 
-export function dealDamageToPlayer(state: GameState, playerId: PlayerId, amount: number, sourceName: string, emit: Emit): void {
+export function dealDamageToPlayer(
+  state: GameState,
+  playerId: PlayerId,
+  amount: number,
+  sourceName: string,
+  emit: Emit,
+  opts?: { infect?: boolean; toxic?: number },
+): void {
   if (amount <= 0) return;
   emit({
     type: 'damageDealt',
@@ -105,7 +126,13 @@ export function dealDamageToPlayer(state: GameState, playerId: PlayerId, amount:
     targetName: state.players[playerId].name,
     amount,
   });
+  // Infect: poison instead of life. Toxic N: life AND N poison.
+  if (opts?.infect) {
+    addPoison(state, playerId, amount, emit);
+    return;
+  }
   changeLife(state, playerId, -amount, `dano de ${sourceName}`, emit);
+  if (opts?.toxic) addPoison(state, playerId, opts.toxic, emit);
 }
 
 export function moveWithEvent(

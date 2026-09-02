@@ -49,13 +49,21 @@ function toDefinition(official) {
     oracleText: official.oracle_text ?? face?.oracle_text,
     power: num(official.power ?? face?.power),
     toughness: num(official.toughness ?? face?.toughness),
+    loyalty: num(official.loyalty ?? face?.loyalty),
     colors: official.colors ?? face?.colors ?? [],
     oracleId: official.oracle_id,
     scryfallId: official.id,
   };
-  if (official.card_faces) return { def: null, source: 'multiface' };
+  const FRONT_FACE_LAYOUTS = new Set(['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle']);
+  const multiface = !!official.card_faces;
+  if (multiface && !FRONT_FACE_LAYOUTS.has(official.layout ?? '')) return { def: null, source: 'multiface' };
   const diag = { failedLines: [] };
   const compiled = compileOracleCard(input, diag);
+  if (compiled && multiface) {
+    compiled.automation = 'partial';
+    compiled.automationNotes = [...(compiled.automationNotes ?? []), 'Outra face não modelada'];
+    return { def: compiled, source: 'partial' };
+  }
   if (compiled && compiled.automation === 'full') return { def: compiled, source: 'full' };
   if (registry) return { def: { ...registry, scryfallId: official.id }, source: 'registry' };
   if (compiled) return { def: compiled, source: compiled.automation };
@@ -100,7 +108,7 @@ function validateStructure(def) {
     if (ab.kind === 'activated' || ab.kind === 'triggered' || ab.kind === 'loyalty') {
       const n = ab.targets?.length ?? 0;
       for (const r of targetRefs(ab.effect)) if (r >= n) problems.push(`habilidade ${i} referencia target:${r} sem spec`);
-      if (!ab.effect?.length) problems.push(`habilidade ${i} sem efeito`);
+      if (!ab.effect?.length && !(ab.kind === 'triggered' && ab.modes?.length)) problems.push(`habilidade ${i} sem efeito`);
     }
     if (ab.kind === 'activated' && ab.isManaAbility && !ab.effect.some((e) => e.op === 'addMana' || e.op === 'addManaChoice'))
       problems.push(`habilidade de mana ${i} não adiciona mana`);
@@ -195,6 +203,8 @@ function settle(game, log, maxSteps = 60) {
         if (pd.mode === 'nameCard') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'Grizzly Bears' });
         else if (pd.mode === 'confirm') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'yes' });
         else r = game.apply(pd.player, { type: 'effectChoice', picks: pd.options.slice(0, pd.min) });
+      } else if (pd.type === 'chooseMode') {
+        r = game.apply(pd.player, { type: 'chooseMode', mode: 0 });
       } else if (pd.type === 'chooseTargets') {
         const opp = pd.player === 'p1' ? 'p2' : 'p1';
         const targets = pd.specs.map((spec) => pickTarget(game, pd.player, opp, spec));
@@ -343,13 +353,19 @@ function simulate(def) {
           if (!sac) { log.push(`habilidade ${i}: nada para sacrificar — pulada`); return; }
           action.sacrifices = [sac.id];
         }
+        if (ab.kind === 'activated' && ab.cost.discard) {
+          const hand = s.players[me].zones.hand.slice(0, ab.cost.discard);
+          if (hand.length < ab.cost.discard) { log.push(`habilidade ${i}: mão vazia para descartar — pulada`); return; }
+          action.discards = hand;
+        }
+        if (ab.kind === 'loyalty' && ab.cost < 0 && (s.objects[cardId].counters['loyalty'] ?? 0) + ab.cost < 0) { log.push(`habilidade ${i}: lealdade insuficiente — pulada`); return; }
         if (obj.tapped && ab.kind === 'activated' && ab.cost.tap) { log.push(`habilidade ${i}: já virada — pulada`); return; }
         if (obj.zone !== 'battlefield') return;
         const r = game.apply(me, action);
         if (!r.ok) {
           const m = errMsg(r);
           // esperados no cenário: enjoo, mana já gasta por outra habilidade, custo de vida alto
-          if (/enjoo|mana insuficiente|pontos de vida para pagar/.test(m)) log.push(`habilidade ${i}: ${m}`);
+          if (/enjoo|mana insuficiente|pontos de vida para pagar|lealdade insuficiente/.test(m)) log.push(`habilidade ${i}: ${m}`);
           else problems.push(`habilidade ${i} recusada: ${m}`);
         } else settle(game, log);
       });

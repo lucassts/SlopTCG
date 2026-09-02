@@ -47,7 +47,13 @@ export type PlayerAction =
       sacrifices?: number[];
       /** Chosen color for "add one mana of any color" abilities. */
       manaColor?: 'W' | 'U' | 'B' | 'R' | 'G';
+      /** Hand cards discarded to pay a "Discard a card:" cost. */
+      discards?: number[];
     }
+  /** Vehicles: tap these creatures (total power ≥ crew N) to animate the vehicle. */
+  | { type: 'crew'; objectId: number; creatures: number[] }
+  /** Answer a pending "choose one —" for a triggered ability. */
+  | { type: 'chooseMode'; mode: number }
   | {
       type: 'declareAttackers';
       attackers: number[];

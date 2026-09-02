@@ -15,13 +15,14 @@ import {
   effectivePower,
   effectiveToughness,
   hasKeyword,
+  isCreature,
   type GameObject,
   type GameState,
 } from './state.js';
 import { opponentOf, type PlayerId } from './types.js';
 
 export function canAttack(state: GameState, obj: GameObject): string | null {
-  if (!obj.card.types.includes('Creature')) return 'não é uma criatura';
+  if (!isCreature(obj)) return 'não é uma criatura';
   if (obj.tapped) return 'está virada';
   if (obj.summoningSick && !hasKeyword(state, obj, 'haste')) return 'tem enjoo de invocação';
   if (hasKeyword(state, obj, 'defender')) return 'tem defensor';
@@ -38,8 +39,10 @@ const LANDWALK: [import('./types.js').Keyword, string][] = [
 ];
 
 export function canBlock(state: GameState, blocker: GameObject, attacker: GameObject): string | null {
-  if (!blocker.card.types.includes('Creature')) return 'não é uma criatura';
+  if (!isCreature(blocker)) return 'não é uma criatura';
   if (blocker.tapped) return 'está virada';
+  if (attacker.card.evasionPowerAtMost !== undefined && effectivePower(state, blocker) <= attacker.card.evasionPowerAtMost)
+    return `o atacante não pode ser bloqueado por criaturas com poder ${attacker.card.evasionPowerAtMost} ou menos`;
   if (hasKeyword(state, blocker, 'cantBlock')) return 'não pode bloquear';
   if (attachmentForbids(state, blocker, 'cantBlock')) return 'não pode bloquear (encantamento)';
   if (hasKeyword(state, attacker, 'unblockable')) return 'o atacante não pode ser bloqueado';
@@ -116,6 +119,7 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
     const lifelink = hasKeyword(state, atk, 'lifelink');
     const deathtouch = hasKeyword(state, atk, 'deathtouch');
     const trample = hasKeyword(state, atk, 'trample');
+    const atkOpts = { deathtouch, sourceColors: atk.card.colors, infect: atk.card.infect, wither: atk.card.wither };
 
     // Unblocked damage goes to the attacked planeswalker, if one was chosen
     // and is still around; otherwise to the defending player.
@@ -124,7 +128,7 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
       if (pw && pw.zone === 'battlefield') {
         dealDamageToObject(state, pw, power, atk.card.name, emit, { sourceColors: atk.card.colors });
       } else {
-        dealDamageToPlayer(state, defender, power, atk.card.name, emit);
+        dealDamageToPlayer(state, defender, power, atk.card.name, emit, { infect: atk.card.infect, toxic: atk.card.toxic });
         emit({ type: 'combatDamageToPlayer', attackerId: atk.id, player: defender, amount: power });
       }
       if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
@@ -144,13 +148,16 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
           const lethal = deathtouch ? 1 : Math.max(1, effectiveToughness(state, blk) - blk.damage);
           const isLast = blockers.indexOf(blk) === blockers.length - 1;
           const assigned = isLast && !trample ? remaining : Math.min(remaining, lethal);
-          dealDamageToObject(state, blk, assigned, atk.card.name, emit, { deathtouch, sourceColors: atk.card.colors });
+          dealDamageToObject(state, blk, assigned, atk.card.name, emit, atkOpts);
           remaining -= assigned;
         }
         if (remaining > 0 && trample) {
           if (pw && pw.zone === 'battlefield')
             dealDamageToObject(state, pw, remaining, atk.card.name, emit, { sourceColors: atk.card.colors });
-          else dealDamageToPlayer(state, defender, remaining, atk.card.name, emit);
+          else {
+            dealDamageToPlayer(state, defender, remaining, atk.card.name, emit, { infect: atk.card.infect, toxic: atk.card.toxic });
+            emit({ type: 'combatDamageToPlayer', attackerId: atk.id, player: defender, amount: remaining });
+          }
         }
         if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
       }
@@ -164,6 +171,8 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
         dealDamageToObject(state, atk, bPower, blk.card.name, emit, {
           deathtouch: hasKeyword(state, blk, 'deathtouch'),
           sourceColors: blk.card.colors,
+          infect: blk.card.infect,
+          wither: blk.card.wither,
         });
         if (hasKeyword(state, blk, 'lifelink'))
           changeLife(state, blk.controller, bPower, `vínculo com a vida de ${blk.card.name}`, emit);

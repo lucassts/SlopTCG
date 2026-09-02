@@ -15,7 +15,7 @@ for (const c of raw) {
   if (!/\b(Instant|Sorcery)\b/.test(t)) continue;
   spells++;
   const diag = { failedLines: [] };
-  const def = compileOracleCard({ name: c.name, manaCost: c.mana_cost, typeLine: t, oracleText: c.oracle_text, colors: c.colors ?? [] }, diag);
+  const def = compileOracleCard({ name: c.name, manaCost: c.mana_cost, typeLine: t, oracleText: c.oracle_text, colors: c.colors ?? [], loyalty: c.loyalty ? parseInt(c.loyalty, 10) : undefined }, diag);
   if (def) { ok++; continue; }
   manual++;
   const first = diag.failedLines[0] ?? '(sem efeito)';

@@ -22,10 +22,13 @@ export interface CardView {
   isToken: boolean;
   /** This tap-for-mana can still be undone by its controller. */
   undoableTap: boolean;
+  /** Vehicle crewed this turn (is a creature). */
+  crewed: boolean;
 }
 
 export type PendingDecisionView =
   | { type: 'discardToHandSize'; player: PlayerId; count: number }
+  | { type: 'chooseMode'; player: PlayerId; cardName: string; modes: string[] }
   | {
       type: 'chooseTargets';
       player: PlayerId;
@@ -60,6 +63,7 @@ export interface PlayerView {
   id: PlayerId;
   name: string;
   life: number;
+  poison: number;
   manaPool: ManaPool;
   librarySize: number;
   handSize: number;
@@ -93,6 +97,7 @@ function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisio
   const pd = state.pendingDecision;
   if (!pd) return null;
   if (pd.type === 'discardToHandSize') return { type: 'discardToHandSize', player: pd.player, count: pd.count };
+  if (pd.type === 'chooseMode') return { type: 'chooseMode', player: pd.player, cardName: pd.cardName, modes: pd.options.map((o) => o.label) };
   if (pd.type === 'chooseTargets')
     return { type: 'chooseTargets', player: pd.player, cardName: pd.cardName, text: pd.text, specs: pd.specs };
   return {
@@ -110,19 +115,20 @@ function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisio
 }
 
 function cardView(state: GameState, obj: GameObject): CardView {
-  const isCreature = obj.card.types.includes('Creature');
+  const creature = obj.card.types.includes('Creature') || !!obj.crewedUntilEot;
   return {
     objectId: obj.id,
     card: obj.card,
     tapped: obj.tapped,
     damage: obj.damage,
     counters: Object.fromEntries(Object.entries(obj.counters).filter(([k]) => !k.startsWith('__'))),
-    power: isCreature ? effectivePower(state, obj) : null,
-    toughness: isCreature ? effectiveToughness(state, obj) : null,
+    power: creature ? effectivePower(state, obj) : null,
+    toughness: creature ? effectiveToughness(state, obj) : null,
     attacking: obj.attacking,
     blocking: obj.blocking ?? null,
     attachedTo: obj.attachedTo ?? null,
     undoableTap: state.reversibleTaps.some((r) => r.objectId === obj.id),
+    crewed: !!obj.crewedUntilEot,
     summoningSick: obj.summoningSick,
     isToken: obj.isToken,
   };
@@ -136,6 +142,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       id: pid,
       name: p.name,
       life: p.life,
+      poison: p.poison,
       manaPool: p.manaPool,
       librarySize: p.zones.library.length,
       handSize: p.zones.hand.length,

@@ -41,7 +41,16 @@ export interface GameObject {
   activatedLoyaltyThisTurn?: boolean;
   /** Attackers: planeswalker being attacked instead of the player. */
   pwTarget?: number;
+  /** Vehicles: crewed this turn (is a creature until cleanup). */
+  crewedUntilEot?: boolean;
+  /** Control Magic: aura currently granting control of this object. */
+  controlAura?: number;
   isToken: boolean;
+}
+
+/** Creature on the battlefield — printed type or a crewed vehicle. */
+export function isCreature(obj: GameObject): boolean {
+  return obj.card.types.includes('Creature') || !!obj.crewedUntilEot;
 }
 
 export interface StackItem {
@@ -67,6 +76,8 @@ export interface PlayerState {
   id: PlayerId;
   name: string;
   life: number;
+  /** Poison counters (10 = loss). */
+  poison: number;
   manaPool: ManaPool;
   landsPlayedThisTurn: number;
   zones: Record<Exclude<ZoneName, 'stack'>, number[]>;
@@ -89,11 +100,13 @@ export interface EffectResume {
   finishSpellExile?: boolean;
 }
 
-/** A triggered ability waiting for its controller to choose targets. */
+/** A triggered ability waiting for its controller to choose targets (or a mode). */
 export interface QueuedTrigger {
   sourceId: number;
   controller: PlayerId;
   cardName: string;
+  /** "Choose one —" triggers wait for the mode before anything else. */
+  modes?: import('./cards/types.js').SpellMode[];
   text: string;
   specs: import('./cards/types.js').TargetSpec[];
   effect: EffectStep[];
@@ -109,6 +122,13 @@ export type PendingDecision =
       text: string;
       specs: import('./cards/types.js').TargetSpec[];
       effect: EffectStep[];
+    }
+  | {
+      type: 'chooseMode';
+      player: PlayerId;
+      sourceId: number;
+      cardName: string;
+      options: { label: string; effect: EffectStep[]; targets?: import('./cards/types.js').TargetSpec[] }[];
     }
   | {
       type: 'effectChoice';
@@ -211,6 +231,7 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
       id: cfg.id,
       name: cfg.name,
       life: STARTING_LIFE,
+      poison: 0,
       manaPool: emptyManaPool(),
       landsPlayedThisTurn: 0,
       zones: { library: [], hand: [], battlefield: [], graveyard: [], exile: [] },
@@ -283,8 +304,11 @@ export function moveObject(
     obj.attachedTo = undefined;
     obj.untilEot = { power: 0, toughness: 0, keywords: [] };
     obj.summoningSick = false;
+    obj.crewedUntilEot = undefined;
   } else {
-    obj.summoningSick = obj.card.types.includes('Creature');
+    // Vale para tudo que entra: um veículo tripulado no turno em que entrou
+    // também tem "enjoo" (302.6). Só criaturas consultam a flag.
+    obj.summoningSick = true;
   }
 }
 
@@ -314,7 +338,11 @@ export function matchFilter(
   filter: FilterSpec,
   obj: GameObject,
 ): boolean {
-  if (!cardMatchesFilter(obj.card, filter)) return false;
+  if (!cardMatchesFilter(obj.card, filter)) {
+    // Veículo tripulado conta como criatura para filtros de criatura.
+    const asCreature = filter.what === 'creature' && obj.crewedUntilEot && cardMatchesFilter(obj.card, { ...filter, what: undefined });
+    if (!asCreature) return false;
+  }
   if (filter.controlledBy === 'you' && obj.controller !== ctx.controller) return false;
   if (filter.controlledBy === 'opponent' && obj.controller === ctx.controller) return false;
   if (filter.other && obj.id === ctx.sourceId) return false;
@@ -328,9 +356,12 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
   for (const source of battlefield(state)) {
     for (const ability of source.card.abilities ?? []) {
       if (ability.kind !== 'static') continue;
-      if (!matchFilter({ controller: source.controller, sourceId: source.id }, ability.filter, obj)) continue;
+      if (ability.selfOnly ? source.id !== obj.id : !matchFilter({ controller: source.controller, sourceId: source.id }, ability.filter, obj)) continue;
       total.power += ability.power ?? 0;
       total.toughness += ability.toughness ?? 0;
+      const ctx = { controller: source.controller, sourceId: source.id };
+      if (ability.powerPer) total.power += battlefield(state).filter((o) => matchFilter(ctx, ability.powerPer!, o)).length;
+      if (ability.toughnessPer) total.toughness += battlefield(state).filter((o) => matchFilter(ctx, ability.toughnessPer!, o)).length;
       if (ability.keywords) total.keywords.push(...ability.keywords);
     }
   }

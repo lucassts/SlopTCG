@@ -58,6 +58,9 @@ export type GameEvent =
   /** A hand is revealed to everyone (Cabal Therapy naming). */
   | { type: 'handRevealed'; player: PlayerId; cards: string[] }
   | { type: 'cardNamed'; player: PlayerId; name: string }
+  | { type: 'poisonChanged'; player: PlayerId; delta: number; total: number }
+  | { type: 'crewed'; objectId: number; cardName: string; player: PlayerId }
+  | { type: 'modeChosen'; player: PlayerId; cardName: string; mode: string }
   | { type: 'shuffled'; player: PlayerId }
   | { type: 'priorityChanged'; player: PlayerId | null }
   | { type: 'decisionRequired'; player: PlayerId; decision: string }

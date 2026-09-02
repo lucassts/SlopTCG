@@ -205,10 +205,15 @@ interface ScryfallCard {
   type_line?: string;
   power?: string;
   toughness?: string;
+  loyalty?: string;
+  layout?: string;
   oracle_text?: string;
   colors?: string[];
-  card_faces?: { name?: string; mana_cost?: string; type_line?: string; oracle_text?: string; power?: string; toughness?: string; colors?: string[] }[];
+  card_faces?: { name?: string; mana_cost?: string; type_line?: string; oracle_text?: string; power?: string; toughness?: string; loyalty?: string; colors?: string[] }[];
 }
+
+/** Multi-face layouts whose front face is a normal card we can play. */
+const FRONT_FACE_LAYOUTS = new Set(['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle']);
 
 /** Official card data cache (name, lowercase → card or null when unknown). */
 const scryfallCache = new Map<string, ScryfallCard | null>();
@@ -275,12 +280,18 @@ function officialToDefinition(official: ScryfallCard): CardDefinition {
     oracleText: official.oracle_text ?? face?.oracle_text,
     power: num(official.power ?? face?.power),
     toughness: num(official.toughness ?? face?.toughness),
+    loyalty: num(official.loyalty ?? face?.loyalty),
     colors: (official.colors ?? face?.colors ?? []) as CardDefinition['colors'],
     oracleId: official.oracle_id,
     scryfallId: official.id,
   };
-  // Double-faced cards stay manual (only the front face is modelled).
-  const compiled = official.card_faces ? null : compileOracleCard(input);
+  // Multi-face cards: only the front face is modelled — playable, marked partial.
+  const multiface = !!official.card_faces;
+  const compiled = multiface && !FRONT_FACE_LAYOUTS.has(official.layout ?? '') ? null : compileOracleCard(input);
+  if (compiled && multiface) {
+    compiled.automation = 'partial';
+    compiled.automationNotes = [...(compiled.automationNotes ?? []), 'Outra face / verso não modelado — use o modo manual para virar'];
+  }
   if (compiled && compiled.automation === 'full') return compiled;
   if (registry) return { ...registry, scryfallId: official.id, oracleId: official.oracle_id };
   if (compiled) return compiled;

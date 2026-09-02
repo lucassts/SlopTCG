@@ -101,6 +101,7 @@ export function CardTile({ card, size = 'field', selected, targetable, dimmed, a
         </div>
       )}
       {card.summoningSick && card.card.types.includes('Creature') && <div className="card-sick" title="Enjoo de invocação">💤</div>}
+      {card.crewed && <div className="card-sick" title="Tripulado: é uma criatura até o fim do turno">🚗</div>}
       {Object.entries(card.counters).map(([k, v]) => (
         <div key={k} className="card-counter" title={`${v} marcador(es) de ${k}`}>{k}: {v}</div>
       ))}

@@ -19,6 +19,7 @@ import type {
 } from './cards/types.js';
 import { cardMatchesFilter } from './cards/types.js';
 import {
+  addPoison,
   changeLife,
   dealDamageToObject,
   dealDamageToPlayer,
@@ -120,12 +121,12 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' }>;
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return (
     step.op === 'discard' || step.op === 'sacrifice' || step.op === 'scry' || step.op === 'surveil' ||
-    step.op === 'search' || step.op === 'nameCardDiscard' || step.op === 'counterUnlessPay'
+    step.op === 'search' || step.op === 'nameCardDiscard' || step.op === 'counterUnlessPay' || step.op === 'mayDo'
   );
 }
 
@@ -234,6 +235,15 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         prompt: `${ctx.sourceName}: escolha o nome de uma carta que não seja terreno`,
         mode: 'nameCard',
       };
+    case 'mayDo':
+      return {
+        player: controller,
+        options: [],
+        min: 0,
+        max: 0,
+        prompt: `${ctx.sourceName}: ${step.prompt ?? 'aplicar o efeito opcional?'}`,
+        mode: 'confirm',
+      };
     case 'counterUnlessPay': {
       const [t] = resolveSubject(ctx, step.what);
       const item = t?.kind === 'object' ? state.stack.find((s) => s.kind === 'spell' && s.sourceId === t.id) : undefined;
@@ -256,6 +266,8 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
 export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: number[], text?: string): void {
   const { state, emit } = ctx;
   switch (step.op) {
+    case 'mayDo':
+      return; // o script escolhido é emendado em applyEffectChoice
     case 'counterUnlessPay': {
       const [t] = resolveSubject(ctx, step.what);
       if (t?.kind !== 'object') return;
@@ -445,8 +457,12 @@ export function applyEffectChoice(
     emit,
   };
   state.pendingDecision = null;
-  executeChoice(ctx, pending.resume.current as ChoiceStep, picks, text);
-  const result = runEffectScript(ctx, pending.resume.remaining);
+  const current = pending.resume.current as ChoiceStep;
+  executeChoice(ctx, current, picks, text);
+  // "You may …": o ramo escolhido roda antes do resto do script (pausas
+  // aninhadas continuam funcionando porque tudo vira um único script).
+  const branch = current.op === 'mayDo' ? (text === 'yes' ? current.effect : current.else ?? []) : [];
+  const result = runEffectScript(ctx, [...branch, ...pending.resume.remaining]);
   if (result === 'paused') {
     const next = state.pendingDecision as PendingDecision | null;
     if (next?.type === 'effectChoice') {
@@ -524,16 +540,21 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
 
     case 'damage': {
       const amount = resolveAmount(ctx, step.amount);
+      const src = state.objects[ctx.sourceId]?.card;
       for (const t of resolveSubject(ctx, step.to)) {
-        if (t.kind === 'player') dealDamageToPlayer(state, t.player, amount, ctx.sourceName, emit);
+        if (t.kind === 'player') dealDamageToPlayer(state, t.player, amount, ctx.sourceName, emit, { infect: src?.infect, toxic: src?.toxic });
         else {
           const obj = objectAlive(state, t);
           if (obj && obj.zone === 'battlefield')
-            dealDamageToObject(state, obj, amount, ctx.sourceName, emit, { sourceColors: sourceColors(ctx) });
+            dealDamageToObject(state, obj, amount, ctx.sourceName, emit, { sourceColors: sourceColors(ctx), infect: src?.infect, wither: src?.wither });
         }
       }
       return;
     }
+
+    case 'poison':
+      for (const p of resolveWho(ctx, step.who)) addPoison(state, p, step.count, emit);
+      return;
 
     case 'gainLife': {
       const amount = resolveAmount(ctx, step.amount);
@@ -655,8 +676,9 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
 
     case 'damageEach': {
       const amount = resolveAmount(ctx, step.amount);
+      const src = state.objects[ctx.sourceId]?.card;
       for (const obj of selectBattlefield(ctx, step.filter))
-        dealDamageToObject(state, obj, amount, ctx.sourceName, emit, { sourceColors: sourceColors(ctx) });
+        dealDamageToObject(state, obj, amount, ctx.sourceName, emit, { sourceColors: sourceColors(ctx), infect: src?.infect, wither: src?.wither });
       return;
     }
 
@@ -899,7 +921,7 @@ export function targetMatchesSpec(
     case 'any':
       return true;
     case 'creature':
-      return obj.card.types.includes('Creature');
+      return obj.card.types.includes('Creature') || !!obj.crewedUntilEot;
     case 'permanent':
       return true;
     case 'land':

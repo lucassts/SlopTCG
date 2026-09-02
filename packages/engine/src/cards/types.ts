@@ -26,6 +26,8 @@ export type SubjectRef = `target:${number}` | 'self' | 'host' | PlayerSel;
 export interface FilterSpec {
   what?: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent' | 'instant' | 'sorcery';
   subtype?: string;
+  /** "a Mountain or Forest card" (fetchlands). */
+  subtypeAnyOf?: string[];
   /** Restrict by supertype 'Basic' (library searches for basic lands). */
   basic?: boolean;
   /** Negations (Duress: "noncreature, nonland card"). */
@@ -120,6 +122,10 @@ export type EffectStep =
   | { op: 'putOnLibraryTop'; what: SubjectRef }
   /** Predefined artifact tokens with their own abilities. */
   | { op: 'namedToken'; who: PlayerSel; kind: 'Treasure' | 'Food' | 'Clue'; count: number }
+  /** (choice) "You may <effect>" — yes runs `effect`, no runs `else` (if any). */
+  | { op: 'mayDo'; prompt?: string; effect: EffectScript; else?: EffectScript }
+  /** Poison counters (infect/toxic). */
+  | { op: 'poison'; who: WhoSel; count: number }
   | { op: 'pump'; what: SubjectRef; power: number; toughness: number; keywords?: Keyword[] }
   /** Permanent +1/+1 or -1/-1 (or named) counters. */
   | { op: 'putCounters'; what: SubjectRef; counter: string; count: DynAmount }
@@ -191,8 +197,16 @@ export type TriggerSpec =
   /** Any object matching the filter dies (battlefield → graveyard). */
   | { on: 'dies'; what: FilterSpec }
   | { on: 'attacks'; self: true }
+  | { on: 'blocks'; self: true }
+  /** Leaves the battlefield to any zone (dies is the graveyard subset). */
+  | { on: 'leaves'; self: true }
+  | { on: 'becomesTapped'; self: true }
   /** This creature deals combat damage to a player. */
   | { on: 'combatDamageToPlayer'; self: true }
+  /** An opponent casts a spell. */
+  | { on: 'opponentCastsSpell' }
+  /** The controller attacks with one or more creatures (fires once). */
+  | { on: 'youAttack' }
   | { on: 'upkeep'; whose: 'controller' | 'each' }
   | { on: 'endStep'; whose: 'controller' | 'each' }
   /** The controller casts a spell (prowess-style). */
@@ -210,6 +224,8 @@ export interface TriggeredAbility {
    */
   targets?: TargetSpec[];
   effect: EffectScript;
+  /** "When ~ enters, choose one —": the controller picks a mode when it triggers. */
+  modes?: SpellMode[];
   /** Human-readable rules text of just this ability, for the log. */
   text: string;
 }
@@ -224,6 +240,8 @@ export interface ActivatedAbility {
     sacrifice?: FilterSpec;
     /** Pay N life (requires having at least N). */
     payLife?: number;
+    /** Discard N cards from hand (chosen in the action). */
+    discard?: number;
   };
   targets?: TargetSpec[];
   effect: EffectScript;
@@ -251,8 +269,13 @@ export interface StaticAbility {
   kind: 'static';
   /** Which battlefield objects it applies to (relative to its controller). */
   filter: FilterSpec;
+  /** Applies only to the source itself ("~ gets +1/+1 for each…"). */
+  selfOnly?: boolean;
   power?: number;
   toughness?: number;
+  /** Dynamic bonus: +1 per battlefield object matching the filter. */
+  powerPer?: FilterSpec;
+  toughnessPer?: FilterSpec;
   keywords?: Keyword[];
   text: string;
 }
@@ -330,9 +353,30 @@ export interface CardDefinition {
     cantAttack?: boolean;
     cantBlock?: boolean;
     doesntUntap?: boolean;
+    /** Control Magic: the aura's controller controls the host while attached. */
+    controlHost?: boolean;
   };
   /** Ward N: opponents' spells/abilities targeting this permanent cost {N} more. */
   ward?: number;
+  /** Vehicles: tap creatures with total power ≥ N to become a creature until end of turn. */
+  crew?: number;
+  /** "Can't be blocked by creatures with power N or less." */
+  evasionPowerAtMost?: number;
+  /** Checklands / fastlands: enters tapped unless the condition holds. */
+  entersTappedUnless?: {
+    controlsAtLeast?: { count: number; filter: FilterSpec };
+    /** Fastlands: "unless you control two or fewer other lands". */
+    controlsAtMost?: { count: number; filter: FilterSpec };
+    controlsSubtypeAnyOf?: string[];
+  };
+  /** Shocklands: may pay N life as it enters; otherwise enters tapped. */
+  shockLife?: number;
+  /** Damage-as-counters keywords. */
+  infect?: boolean;
+  wither?: boolean;
+  toxic?: number;
+  exalted?: boolean;
+  bushido?: number;
   /** Instants/sorceries that exile themselves as they resolve ("Exile ~."). */
   exileOnResolve?: boolean;
   /** "You have no maximum hand size." while this permanent is on the battlefield. */
@@ -366,6 +410,7 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
     if (!card.types.includes(typeName as CardType)) return false;
   }
   if (filter.subtype && !card.subtypes.includes(filter.subtype)) return false;
+  if (filter.subtypeAnyOf && !filter.subtypeAnyOf.some((s) => card.subtypes.includes(s))) return false;
   if (filter.basic && !card.supertypes?.includes('Basic')) return false;
   if (filter.nonland && card.types.includes('Land')) return false;
   if (filter.noncreature && card.types.includes('Creature')) return false;

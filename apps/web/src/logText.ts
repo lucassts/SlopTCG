@@ -132,6 +132,12 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${name(ev.player)} descartou ${ev.cardName}.`;
     case 'cardNamed':
       return `${name(ev.player)} nomeou "${ev.name}".`;
+    case 'poisonChanged':
+      return `${name(ev.player)} recebeu ${ev.delta} marcador(es) de veneno (${ev.total}).`;
+    case 'crewed':
+      return `${name(ev.player)} tripulou ${ev.cardName}.`;
+    case 'modeChosen':
+      return `${name(ev.player)} escolheu "${ev.mode}" para ${ev.cardName}.`;
     case 'handRevealed':
       return `${name(ev.player)} revelou a mão: ${ev.cards.length > 0 ? ev.cards.join(', ') : '(vazia)'}.`;
     case 'shuffled':

@@ -335,16 +335,21 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           altExile: handPick > 0 ? altExile : undefined,
         });
       } else {
+        // Ordem dos picks: cartas da mão (custo de descarte) → sacrifícios → alvos.
+        const handPick = t.handPickCount ?? 0;
+        const discards = t.chosen.slice(0, handPick).flatMap((c) => (c.kind === 'object' ? [c.id] : []));
+        const afterHand = t.chosen.slice(handPick);
         const sacCount = t.sacCount ?? 0;
-        const sacrifices = t.chosen
+        const sacrifices = afterHand
           .slice(0, sacCount)
           .flatMap((c) => (c.kind === 'object' ? [c.id] : []));
         onAction({
           type: 'activateAbility',
           objectId: t.objectId,
           abilityIndex: t.abilityIndex ?? 0,
-          targets: t.chosen.slice(sacCount),
+          targets: afterHand.slice(sacCount),
           sacrifices: sacCount > 0 ? sacrifices : undefined,
+          discards: handPick > 0 ? discards : undefined,
         });
       }
       setTargeting(null);
@@ -523,16 +528,19 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       const activated = abilities
         .map((a, i) => ({ a, i }))
         .filter((x): x is { a: Extract<typeof x.a, { kind: 'activated' }>; i: number } => x.a.kind === 'activated');
-      if (activated.length === 0) return;
-      if (activated.length === 1) {
-        startAbility(cv, activated[0].i, activated[0].a);
+      const opts: ActionMenu['options'] = activated.map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) }));
+      if (cv.card.crew !== undefined && !cv.crewed)
+        opts.unshift({ label: `🚗 Tripular ${cv.card.crew} (vira criatura até o fim do turno)`, run: () => crewVehicle(cv) });
+      if (opts.length === 0) return;
+      if (opts.length === 1) {
+        opts[0].run();
         return;
       }
       setActionMenu({
         x: Math.min(e?.clientX ?? 200, window.innerWidth - 280),
-        y: Math.min(e?.clientY ?? 200, window.innerHeight - 60 - activated.length * 34),
+        y: Math.min(e?.clientY ?? 200, window.innerHeight - 60 - opts.length * 34),
         title: cv.card.name,
-        options: activated.map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) })),
+        options: opts,
       });
     }
   };
@@ -560,21 +568,45 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const beginAbility = (
     cv: CardView,
     idx: number,
-    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string } } },
+    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; discard?: number } },
   ) => {
     const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice : undefined;
+    const discardCount = typeof ability.cost === 'object' ? ability.cost.discard ?? 0 : 0;
     const sacCount = sacFilter ? 1 : 0;
+    const discardSpecs = Array.from({ length: discardCount }, () => ({ what: 'carta da sua mão para descartar' }));
     const sacSpecs = sacCount > 0 ? [{ what: sacFilter?.what ?? 'permanent' }] : [];
-    const specs = [...sacSpecs, ...(ability.targets ?? [])];
+    const specs = [...discardSpecs, ...sacSpecs, ...(ability.targets ?? [])];
     if (specs.length === 0) {
       onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx });
     } else {
       const label =
-        sacCount > 0
-          ? `${cv.card.name}: ${ability.text} (escolha o sacrifício primeiro)`
-          : `${cv.card.name}: ${ability.text}`;
-      setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount });
+        discardCount > 0
+          ? `${cv.card.name}: ${ability.text} (escolha o descarte primeiro)`
+          : sacCount > 0
+            ? `${cv.card.name}: ${ability.text} (escolha o sacrifício primeiro)`
+            : `${cv.card.name}: ${ability.text}`;
+      setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined });
     }
+  };
+
+  /** Crew: auto-pick the fewest untapped creatures whose power reaches the crew number. */
+  const crewVehicle = (cv: CardView) => {
+    const need = cv.card.crew ?? 0;
+    const cands = me.battlefield
+      .filter((c) => c.objectId !== cv.objectId && !c.tapped && (c.card.types.includes('Creature') || c.crewed) && c.power !== null)
+      .sort((a, b) => (b.power ?? 0) - (a.power ?? 0));
+    const picked: number[] = [];
+    let total = 0;
+    for (const c of cands) {
+      if (total >= need) break;
+      picked.push(c.objectId);
+      total += c.power ?? 0;
+    }
+    if (total < need) {
+      onAction({ type: 'chat', text: `(não há criaturas desviradas suficientes para tripular ${cv.card.name})` });
+      return;
+    }
+    onAction({ type: 'crew', objectId: cv.objectId, creatures: picked });
   };
 
   const clickPlayer = (playerId: PlayerId) => {
@@ -627,6 +659,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           : 'Decida sua mão inicial';
       return 'Aguardando o oponente decidir a mão…';
     }
+    if (view.pendingDecision?.type === 'chooseMode' && view.pendingDecision.player !== you) return 'Aguardando o oponente escolher um modo…';
     if (targeting) return `${targeting.label}: escolha o alvo (${targeting.chosen.length + 1}/${targeting.specs.length}) — Esc cancela`;
     if (myChoice) return myChoice.prompt;
     if (effectChoice) return 'Aguardando a escolha do oponente…';
@@ -656,6 +689,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           {opp.life}
         </div>
         <strong>{opp.name}</strong>
+        {opp.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {opp.poison}</span>}
         {view.activePlayer === oppId && <span className="zone-pill">turno dele</span>}
         <span className="zone-pill" title="Cartas na mão">✋ {opp.handSize}</span>
         <span className="zone-pill" title="Cartas na biblioteca">📚 {opp.librarySize}</span>
@@ -819,6 +853,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         <div className={`life ${targeting ? 'targetable' : ''}`} onClick={() => clickPlayer(you)}>
           {me.life}
         </div>
+        {me.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {me.poison}</span>}
         <span className="zone-pill" title="Cartas na biblioteca">📚 {me.librarySize}</span>
         <span
           className="zone-pill"
@@ -1029,6 +1064,21 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               ))}
             </div>
             <button className="danger" onClick={() => setColorPick(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* -------- escolha de modo de gatilho ("ao entrar, escolha um") -------- */}
+      {view.pendingDecision?.type === 'chooseMode' && view.pendingDecision.player === you && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>{view.pendingDecision.cardName}</h2>
+            <div className="muted">Escolha um modo:</div>
+            {view.pendingDecision.modes.map((label, i) => (
+              <button key={i} onClick={() => onAction({ type: 'chooseMode', mode: i })}>
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       )}
