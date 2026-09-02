@@ -19,14 +19,14 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-02, v0.9.0)
+## Estado (2026-09-02, v0.10.0)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (Leva 1) | **v0.9 (Leva 2)** |
-|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | **6.696** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | **19.788** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | **6.539** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | **55** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (Leva 1) | v0.9 (Leva 2) | **v0.10 (Leva 3)** |
+|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | **7.062** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | **19.464** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | **6.497** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | **55** |
 
 A Leva 2 rendeu +421 full (menos que as ≈1.000 estimadas): a keyword deixou
 de bloquear, mas boa parte dessas cartas ainda tem outra frase pendente — que
@@ -80,14 +80,29 @@ Ficou para a Leva 3 (são keywords de campo, não de conjuração): Mutate,
 Reconfigure, Bestow, Emerge, Dredge, Split second, Retrace, Cipher,
 Entwine, Overload, Replicate, Miracle.
 
-### Leva 3 — keywords de campo restantes (≈800 cartas)
-Level up + bandas LEVEL (≈90), Soulshift, Exploit, Soulbond, Backup,
-Station, Start your engines, Job select, Firebending, Specialize, Graft,
-Amplify, Sunburst/Converge, Tribute, Training, Provoke, Annihilator,
-Phasing, Banding, Haunt, Hideaway, Umbra armor, Enlist, Double team,
-Mobilize, Battle cry, Melee, Ravenous, Dethrone, Ingest, Champion, Ripple,
-Assist, Bargain, Storied, Increment, Read ahead, Daybound/Nightbound,
-Monarch, Initiative, Energy, Sagas (capítulos), Batalhas, Dungeons.
+### Leva 3 — feita (v0.10.0): keywords de campo e famílias estruturais
+Feito: **Sagas** (196 cartas: capítulos I–V, marcador de lore ao entrar e
+na fase principal, sacrifício após o último capítulo, Read ahead),
+**energia** (144: `{E}` como recurso do jogador, custo de ativação, "you
+get {E}", "you may pay {E}"), **Level up** + bandas LEVEL (P/T e keywords
+por nível), **Classes** ("{custo}: Level N" com habilidades por nível),
+**Station** / Spacecraft (marcadores de carga, vira criatura no limiar),
+explore, Extort, Exploit (+ gatilho "exploits"), Soulshift, Backup (só as
+keywords), Bestow, Emerge, Mayhem, Retrace, Freerunning, Overload
+("alvo" → "cada" por transformação do efeito), Sneak, Entwine, Bargain,
+Gift (card/Food/Treasure/Clue/Fish), Reconfigure, Transmute, Outlast,
+Umbra armor, Split second, Annihilator, Mobilize, Battle cry, Melee,
+Training, Dethrone, Ingest, Firebending (mana até o fim do combate),
+Ravenous, Sunburst, Graft, Tribute, Amplify, Job select, For Mirrodin!,
+Leylines (mão inicial), Ward—Pay N life, Assist (no-op), "if it was kicked /
+the gift was promised" em gatilhos de entrada, "dies → volta para a mão".
+Infra: `subjectId` nos gatilhos (o objeto que disparou, `'triggering'` no
+DSL), habilidades com faixa de nível, `payOrElse.then`, mayDo do oponente.
+
+Ficou de fora (rules-heavy ou raro): Soulbond, Mutate, Phasing, Banding,
+Hideaway, Miracle, Dredge, Replicate, Cipher, Haunt, Provoke, Enlist,
+Monarch/Initiative, Dungeons, Batalhas, Daybound, Double team / Specialize /
+Starting intensity (Alchemy). Voltam na Leva 5 como script por carta.
 
 ### Leva 4 — gramática composicional (o grosso: ≈17.000 cartas)
 Reescrever `parseEffectText` como gramática recursiva:

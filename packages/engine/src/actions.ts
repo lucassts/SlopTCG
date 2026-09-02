@@ -34,7 +34,9 @@ export type PlayerAction =
       /** Hand cards exiled to pay the alternative cost. */
       altExile?: number[];
       /** Alternative casting method (evoke, dash, blitz, escape, foretold…, or 'suspend' to exile with time counters). */
-      method?: 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp' | 'suspend';
+      method?:
+        | 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp' | 'suspend'
+        | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak';
       /** Escape: graveyard cards exiled as part of the cost. */
       escapeExile?: number[];
       /** Morph/Disguise: cast face down as a 2/2 for {3}. */
@@ -43,6 +45,12 @@ export type PlayerAction =
       buyback?: boolean;
       /** Multikicker: how many times the kicker is paid. */
       kickerTimes?: number;
+      /** Entwine: pay the entwine cost and choose every mode. */
+      entwine?: boolean;
+      /** Retrace: the land card discarded from hand. */
+      discards?: number[];
+      /** Sneak: the unblocked attacker returned to hand. */
+      attackerId?: number;
     }
   /** Morph: turn a face-down permanent face up by paying its morph cost. */
   | { type: 'turnFaceUp'; objectId: number }
@@ -63,6 +71,8 @@ export type PlayerAction =
       manaColor?: 'W' | 'U' | 'B' | 'R' | 'G';
       /** Hand cards discarded to pay a "Discard a card:" cost. */
       discards?: number[];
+      /** Station: the other untapped creature tapped as the cost. */
+      tapCreature?: number;
     }
   /** Vehicles: tap these creatures (total power ≥ crew N) to animate the vehicle. */
   | { type: 'crew'; objectId: number; creatures: number[] }

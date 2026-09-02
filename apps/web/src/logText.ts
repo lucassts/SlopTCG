@@ -142,6 +142,14 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${name(ev.player)} virou ${ev.cardName} para cima.`;
     case 'cascaded':
       return `Cascata de ${ev.cardName}: ${ev.hit ? `${name(ev.player)} conjurou ${ev.hit} de graça.` : 'nada encontrado.'}`;
+    case 'energyChanged':
+      return `${name(ev.player)} ${ev.delta >= 0 ? 'ganhou' : 'pagou'} ${Math.abs(ev.delta)} de energia (${ev.total}).`;
+    case 'explored':
+      return `${ev.cardName} explorou: revelou ${ev.revealed}${ev.toHand ? ' (terreno, para a mão).' : ' (marcador +1/+1).'}`;
+    case 'exploited':
+      return `${ev.cardName} explorou ${ev.sacrificed} (sacrificada).`;
+    case 'loreAdded':
+      return `${ev.cardName}: capítulo ${ev.total}.`;
     case 'handRevealed':
       return `${name(ev.player)} revelou a mão: ${ev.cards.length > 0 ? ev.cards.join(', ') : '(vazia)'}.`;
     case 'shuffled':

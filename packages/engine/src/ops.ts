@@ -115,6 +115,15 @@ export function destroyObject(state: GameState, obj: GameObject, emit: Emit): bo
     emit({ type: 'regenerated', objectId: obj.id, cardName: obj.card.name });
     return false;
   }
+  // Umbra armor: destroy the aura instead, and heal the creature.
+  const umbra = Object.values(state.objects).find((a) => a.zone === 'battlefield' && a.attachedTo === obj.id && a.card.umbraArmor);
+  if (umbra) {
+    obj.damage = 0;
+    delete obj.counters['__deathtouched'];
+    moveWithEvent(state, umbra, 'graveyard', 'destroyed', emit);
+    emit({ type: 'fizzled', description: `${umbra.card.name} (armadura umbra) foi destruída no lugar de ${obj.card.name}` });
+    return false;
+  }
   moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
   return true;
 }

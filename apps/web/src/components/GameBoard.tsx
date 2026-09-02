@@ -93,6 +93,12 @@ interface Targeting {
   /** Before sacrifices/targets: pick N cards from hand to exile (alt cost). */
   handPickCount?: number;
   handPickColor?: string;
+  /** Retrace: the hand pick must be a land card. */
+  handPickLand?: boolean;
+  /** Station: first pick (after hand picks) is the creature to tap. */
+  tapPick?: boolean;
+  /** Entwine: every mode. */
+  entwine?: boolean;
 }
 
 /** A little menu of things a clicked card can do (cast / cycle / abilities…). */
@@ -324,7 +330,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         onAction({ type: 'chooseTargets', targets: t.chosen });
       } else if (t.kind === 'ninjutsu') {
         const atk = t.chosen[0];
-        if (atk?.kind === 'object') onAction({ type: 'ninjutsu', objectId: t.objectId, attackerId: atk.id });
+        if (atk?.kind === 'object') {
+          if (t.method === 'sneak') onAction({ type: 'castSpell', objectId: t.objectId, method: 'sneak', attackerId: atk.id });
+          else onAction({ type: 'ninjutsu', objectId: t.objectId, attackerId: atk.id });
+        }
       } else if (t.kind === 'spell') {
         // Ordem dos picks: cartas da mão (custo alternativo) → sacrifícios → alvos.
         const handPick = t.handPickCount ?? 0;
@@ -343,18 +352,26 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           kicked: t.kicked,
           sacrifices: sacCount > 0 ? sacrifices : undefined,
           useAltCost: t.useAltCost,
-          altExile: handPick > 0 ? altExile : undefined,
+          altExile: handPick > 0 && t.method !== 'retrace' ? altExile : undefined,
+          discards: t.method === 'retrace' ? altExile : undefined,
           method: t.method,
           escapeExile: t.escapeExile,
           faceDown: t.faceDown,
           buyback: t.buyback,
           kickerTimes: t.kickerTimes,
+          entwine: t.entwine,
         });
       } else {
-        // Ordem dos picks: cartas da mão (custo de descarte) → sacrifícios → alvos.
+        // Ordem dos picks: cartas da mão (custo de descarte) → criatura a virar (station) → sacrifícios → alvos.
         const handPick = t.handPickCount ?? 0;
         const discards = t.chosen.slice(0, handPick).flatMap((c) => (c.kind === 'object' ? [c.id] : []));
-        const afterHand = t.chosen.slice(handPick);
+        let afterHand = t.chosen.slice(handPick);
+        let tapCreature: number | undefined;
+        if (t.tapPick) {
+          const tp = afterHand[0];
+          tapCreature = tp?.kind === 'object' ? tp.id : undefined;
+          afterHand = afterHand.slice(1);
+        }
         const sacCount = t.sacCount ?? 0;
         const sacrifices = afterHand
           .slice(0, sacCount)
@@ -366,6 +383,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           targets: afterHand.slice(sacCount),
           sacrifices: sacCount > 0 ? sacrifices : undefined,
           discards: handPick > 0 ? discards : undefined,
+          tapCreature,
         });
       }
       setTargeting(null);
@@ -404,6 +422,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       if (t.handPickCount && t.chosen.length < t.handPickCount) {
         if (cv.objectId === t.objectId) return;
         if (t.handPickColor && !cv.card.colors.includes(t.handPickColor as (typeof cv.card.colors)[number])) return;
+        if (t.handPickLand && !cv.card.types.includes('Land')) return;
         addTarget({ kind: 'object', id: cv.objectId });
       }
       return;
@@ -423,9 +442,19 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         opts.push({ label: `⚡ Conjurar — ${def.altCost.label}`, run: () => beginAltCast(cv) });
       // Leva 2: métodos alternativos de conjuração a partir da mão.
       for (const cm of def.castMethods ?? []) {
-        if (cm.kind === 'escape' || cm.kind === 'foretold' || cm.kind === 'plotted') continue;
+        if (cm.kind === 'escape' || cm.kind === 'foretold' || cm.kind === 'plotted' || cm.kind === 'mayhem' || cm.kind === 'retrace') continue;
+        if (cm.kind === 'sneak') {
+          if (view.step === 'declareBlockers' && view.activePlayer === you && me.battlefield.some((c) => c.attacking && !c.wasBlocked))
+            opts.push({
+              label: `🥷 Conjurar — ${cm.label}`,
+              run: () => setTargeting({ kind: 'ninjutsu', objectId: cv.objectId, specs: [{ what: 'sua criatura atacante não bloqueada' }], chosen: [], label: `${def.name}: sneak — escolha o atacante`, method: 'sneak' }),
+            });
+          continue;
+        }
         opts.push({ label: `⚡ Conjurar — ${cm.label}`, run: () => beginCast(cv, undefined, false, { method: cm.kind }) });
       }
+      if (def.entwine && def.spellModes)
+        opts.push({ label: `⚡ Conjurar — entwine ${def.entwine} (todos os modos)`, run: () => beginCast(cv, undefined, false, { entwine: true }) });
       if (def.morph)
         opts.push({ label: `🔒 Conjurar virada para baixo {3} (${def.morph.disguise ? 'disfarce' : 'metamorfose'} ${def.morph.cost})`, run: () => onAction({ type: 'castSpell', objectId: cv.objectId, faceDown: true }) });
       if (def.suspend)
@@ -495,7 +524,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     cv: CardView,
     mode: number | undefined,
     fromGraveyard = false,
-    extra: { method?: CastMethodKind; escapeExile?: number[] } = {},
+    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean } = {},
   ) => {
     const def = cv.card;
     let x: number | undefined;
@@ -513,28 +542,39 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       kickerTimes = parseInt(raw, 10);
       if (!Number.isInteger(kickerTimes) || kickerTimes < 0) return;
       kicked = kickerTimes > 0;
-    } else if (def.kicker) kicked = confirm(`${def.name}: pagar o kicker ${def.kicker.cost}?`);
+    } else if (def.kicker) kicked = confirm(`${def.name}: ${def.kicker.label ? `${def.kicker.label}?` : `pagar o kicker ${def.kicker.cost}?`}`);
     let buyback: boolean | undefined;
     if (def.buyback && !extra.method) buyback = confirm(`${def.name}: pagar buyback ${def.buyback} (volta para a mão)?`);
-    // Custo adicional de sacrifício (Fling; flashback da Cabal Therapy):
+    // Custo adicional de sacrifício (Fling; flashback da Cabal Therapy; emerge; bargain):
     // escolhido como os primeiros "alvos".
     const fbSac = fromGraveyard ? def.flashback?.sacrifice : undefined;
-    const sacCount = def.additionalCost ? def.additionalCost.count ?? 1 : fbSac ? 1 : 0;
+    const bargainSac = kicked && def.kicker?.sacrifice ? 'artefato, encantamento ou ficha para sacrificar' : undefined;
+    const emergeSac = extra.method === 'emerge' ? 'criatura para sacrificar (emergir)' : undefined;
+    const sacCount = def.additionalCost ? def.additionalCost.count ?? 1 : fbSac || bargainSac || emergeSac ? 1 : 0;
     const sacSpecs = Array.from({ length: sacCount }, () => ({
-      what: def.additionalCost?.sacrifice.what ?? fbSac?.what ?? 'permanent',
+      what: def.additionalCost?.sacrifice.what ?? fbSac?.what ?? emergeSac ?? bargainSac ?? 'permanent',
     }));
-    const targetSpecs = mode !== undefined
-      ? def.spellModes?.[mode]?.targets ?? []
-      : def.enchant
-        ? [{ what: def.enchant.what }]
-        : def.spellTargets ?? [];
-    const specs = [...sacSpecs, ...targetSpecs];
+    // Retrace: uma carta de terreno da mão para descartar, antes de tudo.
+    const handPickCount = extra.method === 'retrace' ? 1 : 0;
+    const handSpecs = handPickCount > 0 ? [{ what: 'carta de terreno da sua mão para descartar' }] : [];
+    const targetSpecs = extra.entwine
+      ? (def.spellModes ?? []).flatMap((m) => m.targets ?? [])
+      : mode !== undefined
+        ? def.spellModes?.[mode]?.targets ?? []
+        : extra.method === 'bestow'
+          ? [{ what: 'creature' }]
+          : extra.method === 'overload'
+            ? []
+            : def.enchant
+              ? [{ what: def.enchant.what }]
+              : def.spellTargets ?? [];
+    const specs = [...handSpecs, ...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
-      const label = sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile });
+      const label = handPickCount > 0 ? `${base} (escolha o terreno a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: handPickCount > 0 || undefined });
     }
   };
 
@@ -637,24 +677,28 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const beginAbility = (
     cv: CardView,
     idx: number,
-    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; discard?: number } },
+    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; discard?: number; tapCreature?: boolean } },
   ) => {
     const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice : undefined;
     const discardCount = typeof ability.cost === 'object' ? ability.cost.discard ?? 0 : 0;
+    const tapPick = typeof ability.cost === 'object' ? !!ability.cost.tapCreature : false;
     const sacCount = sacFilter ? 1 : 0;
     const discardSpecs = Array.from({ length: discardCount }, () => ({ what: 'carta da sua mão para descartar' }));
+    const tapSpecs = tapPick ? [{ what: 'outra criatura sua desvirada para virar' }] : [];
     const sacSpecs = sacCount > 0 ? [{ what: sacFilter?.what ?? 'permanent' }] : [];
-    const specs = [...discardSpecs, ...sacSpecs, ...(ability.targets ?? [])];
+    const specs = [...discardSpecs, ...tapSpecs, ...sacSpecs, ...(ability.targets ?? [])];
     if (specs.length === 0) {
       onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx });
     } else {
       const label =
         discardCount > 0
           ? `${cv.card.name}: ${ability.text} (escolha o descarte primeiro)`
-          : sacCount > 0
-            ? `${cv.card.name}: ${ability.text} (escolha o sacrifício primeiro)`
-            : `${cv.card.name}: ${ability.text}`;
-      setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined });
+          : tapPick
+            ? `${cv.card.name}: ${ability.text} (escolha a criatura a virar)`
+            : sacCount > 0
+              ? `${cv.card.name}: ${ability.text} (escolha o sacrifício primeiro)`
+              : `${cv.card.name}: ${ability.text}`;
+      setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined, tapPick: tapPick || undefined });
     }
   };
 
@@ -759,6 +803,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         </div>
         <strong>{opp.name}</strong>
         {opp.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {opp.poison}</span>}
+        {opp.energy > 0 && <span className="zone-pill" title="Energia">⚡ {opp.energy}</span>}
         {view.activePlayer === oppId && <span className="zone-pill">turno dele</span>}
         <span className="zone-pill" title="Cartas na mão">✋ {opp.handSize}</span>
         <span className="zone-pill" title="Cartas na biblioteca">📚 {opp.librarySize}</span>
@@ -923,6 +968,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           {me.life}
         </div>
         {me.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {me.poison}</span>}
+        {me.energy > 0 && <span className="zone-pill" title="Energia">⚡ {me.energy}</span>}
         <span className="zone-pill" title="Cartas na biblioteca">📚 {me.librarySize}</span>
         {me.libraryTop && <span className="zone-pill" title="Topo da sua biblioteca (revelado para você)">🔝 {me.libraryTop.card.name}</span>}
         <span
@@ -1428,6 +1474,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                       ⚡ {c.card.castMethods.find((m) => m.kind === 'escape')?.label}
                     </button>
                   )}
+                  {zonePick.zone === 'graveyard' && zonePick.player === you &&
+                    (c.card.castMethods ?? []).filter((m) => m.kind === 'mayhem' || m.kind === 'retrace').map((m) => (
+                      <button key={m.kind} onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: m.kind }); }}>
+                        ⚡ {m.label}
+                      </button>
+                    ))}
                   {zonePick.zone === 'graveyard' && zonePick.player === you &&
                     (c.card.abilities ?? []).map((a, i) =>
                       a.kind === 'activated' && a.zone === 'graveyard' ? (

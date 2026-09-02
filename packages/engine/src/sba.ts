@@ -74,6 +74,21 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
         }
       }
 
+      // Saga past its last chapter with no chapter ability pending is sacrificed (714.4).
+      if (obj.card.saga && (obj.counters['lore'] ?? 0) >= obj.card.saga.chapters) {
+        const pending =
+          state.stack.some((i) => i.kind === 'ability' && i.sourceId === obj.id && i.chapter !== undefined) ||
+          state.triggerQueue.some((t) => t.sourceId === obj.id && t.chapter !== undefined) ||
+          (state.pendingDecision !== null && 'sourceId' in state.pendingDecision && state.pendingDecision.sourceId === obj.id) ||
+          (state.pendingDecision?.type === 'effectChoice' && state.pendingDecision.resume.sourceId === obj.id);
+        if (!pending) {
+          moveWithEvent(state, obj, 'graveyard', 'sacrificed', emit);
+          changed = true;
+          anyChange = true;
+          break;
+        }
+      }
+
       // Planeswalker with no loyalty goes to the graveyard.
       if (obj.card.types.includes('Planeswalker') && (obj.counters['loyalty'] ?? 0) <= 0) {
         moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
@@ -90,18 +105,25 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
         const wants = obj.card.enchant?.what ?? 'creature';
         const wantedType = (wants.charAt(0).toUpperCase() + wants.slice(1)) as CardType;
         const hostGone =
-          !host || host.zone !== 'battlefield' || (wants !== 'permanent' && !host.card.types.includes(wantedType));
+          !host || host.zone !== 'battlefield' || (wants !== 'permanent' && !(wants === 'creature' ? isCreature(host) : host.card.types.includes(wantedType)));
         if (hostGone) {
-          if (obj.card.enchant) {
+          // Bestowed aura: becomes a creature again instead of dying (702.103).
+          if (obj.bestowed) {
+            obj.attachedTo = undefined;
+            obj.bestowed = false;
+            emit({ type: 'fizzled', description: `${obj.card.name} volta a ser uma criatura` });
+            anyChange = true;
+          } else if (obj.card.enchant) {
             moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
             changed = true;
             anyChange = true;
             break;
+          } else {
+            obj.attachedTo = undefined;
+            anyChange = true;
           }
-          obj.attachedTo = undefined;
-          anyChange = true;
         }
-      } else if (obj.card.enchant) {
+      } else if (obj.card.enchant && !obj.bestowed) {
         // An aura must always be attached to something.
         moveWithEvent(state, obj, 'graveyard', 'destroyed', emit);
         changed = true;

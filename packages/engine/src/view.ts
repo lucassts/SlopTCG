@@ -70,6 +70,7 @@ export interface PlayerView {
   name: string;
   life: number;
   poison: number;
+  energy: number;
   manaPool: ManaPool;
   librarySize: number;
   handSize: number;
@@ -168,6 +169,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       name: p.name,
       life: p.life,
       poison: p.poison,
+      energy: p.energy,
       manaPool: p.manaPool,
       librarySize: p.zones.library.length,
       handSize: p.zones.hand.length,

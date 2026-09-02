@@ -70,6 +70,14 @@ export interface GameObject {
   exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness';
   /** Turn it was foretold/plotted (can't be cast the same turn / only as sorcery). */
   exiledOnTurn?: number;
+  /** Bestow: on the battlefield as an Aura (not a creature while attached). */
+  bestowed?: boolean;
+  /** Mayhem: the turn it was discarded. */
+  discardedOnTurn?: number;
+  /** Sunburst: distinct colors of mana spent to cast it. */
+  colorsSpent?: number;
+  /** Ravenous: X chosen when cast. */
+  castX?: number;
   isToken: boolean;
 }
 
@@ -84,7 +92,44 @@ export interface DelayedAction {
 
 /** Creature on the battlefield — printed type, a crewed vehicle, or a face-down 2/2. */
 export function isCreature(obj: GameObject): boolean {
+  // Bestowed auras and attached reconfigure equipment aren't creatures while attached.
+  if (obj.attachedTo !== undefined && (obj.bestowed || obj.card.reconfigure)) return false;
+  if (obj.card.station && (obj.counters['charge'] ?? 0) >= obj.card.station.threshold) return true;
   return obj.card.types.includes('Creature') || !!obj.crewedUntilEot || !!obj.faceDown;
+}
+
+/** Current level for Level up creatures (level counters) and Classes (counters + 1). */
+export function currentLevel(obj: GameObject): number {
+  const n = obj.counters['level'] ?? 0;
+  return obj.card.isClass ? n + 1 : n;
+}
+
+/** Level-gated abilities (Level up bands, Class levels) apply only inside their range. */
+export function abilityActive(obj: GameObject, ability: { levelMin?: number; levelMax?: number }): boolean {
+  if (ability.levelMin === undefined && ability.levelMax === undefined) return true;
+  const lvl = currentLevel(obj);
+  if (ability.levelMin !== undefined && lvl < ability.levelMin) return false;
+  if (ability.levelMax !== undefined && lvl > ability.levelMax) return false;
+  return true;
+}
+
+/** The LEVEL band a leveler is currently in, if any. */
+export function currentBand(obj: GameObject): NonNullable<CardDefinition['levels']>[number] | undefined {
+  if (!obj.card.levels) return undefined;
+  const lvl = currentLevel(obj);
+  return obj.card.levels.find((b) => lvl >= b.min && (b.max === undefined || lvl <= b.max));
+}
+
+/** Mana value of a mana cost string ("{2}{R}{R}" → 4; X counts as 0). */
+export function manaValueOf(manaCost: string | undefined): number {
+  if (!manaCost) return 0;
+  let total = 0;
+  for (const m of manaCost.matchAll(/\{([^}]+)\}/g)) {
+    const sym = m[1];
+    if (/^\d+$/.test(sym)) total += parseInt(sym, 10);
+    else if (sym !== 'X') total += 1;
+  }
+  return total;
 }
 
 export interface StackItem {
@@ -104,6 +149,10 @@ export interface StackItem {
   sacrificedPower?: number;
   /** Cast via flashback: the card is exiled instead of going to the graveyard. */
   flashback?: boolean;
+  /** Triggered abilities: the object that caused the trigger ("it"). */
+  subjectId?: number;
+  /** Saga chapter ability (keeps the saga alive until it resolves). */
+  chapter?: number;
 }
 
 export interface PlayerState {
@@ -112,9 +161,13 @@ export interface PlayerState {
   life: number;
   /** Poison counters (10 = loss). */
   poison: number;
+  /** Energy counters ({E}). */
+  energy: number;
   /** Bloodthirst: this player was dealt damage this turn. */
   damagedThisTurn?: boolean;
   manaPool: ManaPool;
+  /** Firebending: mana that survives step changes until the end of combat. */
+  stickyPool?: ManaPool;
   landsPlayedThisTurn: number;
   zones: Record<Exclude<ZoneName, 'stack'>, number[]>;
 }
@@ -126,6 +179,7 @@ export interface EffectResume {
   sourceName: string;
   targets: TargetChoice[];
   xValue?: number;
+  subjectId?: number;
   /** The step that asked for the choice. */
   current: EffectStep;
   /** Steps still to run after the current one. */
@@ -146,6 +200,8 @@ export interface QueuedTrigger {
   text: string;
   specs: import('./cards/types.js').TargetSpec[];
   effect: EffectStep[];
+  subjectId?: number;
+  chapter?: number;
 }
 
 export type PendingDecision =
@@ -158,6 +214,8 @@ export type PendingDecision =
       text: string;
       specs: import('./cards/types.js').TargetSpec[];
       effect: EffectStep[];
+      subjectId?: number;
+      chapter?: number;
     }
   | {
       type: 'chooseMode';
@@ -231,6 +289,8 @@ export interface GameState {
   delayed: DelayedAction[];
   /** Any combat damage was dealt this turn (Prowl/Spectacle-style conditions). */
   combatDamageThisTurn: boolean;
+  /** Creature subtypes that dealt combat damage to a player this turn (freerunning). */
+  combatDamageSubtypesThisTurn?: string[];
   status: 'playing' | 'finished';
   winner?: PlayerId | 'draw';
 }
@@ -274,6 +334,7 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
       name: cfg.name,
       life: STARTING_LIFE,
       poison: 0,
+      energy: 0,
       manaPool: emptyManaPool(),
       landsPlayedThisTurn: 0,
       zones: { library: [], hand: [], battlefield: [], graveyard: [], exile: [] },
@@ -382,13 +443,15 @@ export function matchFilter(
   obj: GameObject,
 ): boolean {
   if (!cardMatchesFilter(obj.card, filter)) {
-    // Veículo tripulado conta como criatura para filtros de criatura.
-    const asCreature = filter.what === 'creature' && obj.crewedUntilEot && cardMatchesFilter(obj.card, { ...filter, what: undefined });
-    if (!asCreature) return false;
+    // Veículo tripulado / nave estacionada conta como criatura; ficha satisfaz "or token" (bargain).
+    const asCreature = filter.what === 'creature' && isCreature(obj) && cardMatchesFilter(obj.card, { ...filter, what: undefined });
+    const asToken = filter.orToken && obj.isToken;
+    if (!asCreature && !asToken) return false;
   }
   if (filter.controlledBy === 'you' && obj.controller !== ctx.controller) return false;
   if (filter.controlledBy === 'opponent' && obj.controller === ctx.controller) return false;
   if (filter.other && obj.id === ctx.sourceId) return false;
+  if (filter.attacking && !obj.attacking) return false;
   if (filter.chosenSubtype) {
     const chosen = ctx.state?.objects[ctx.sourceId]?.chosenType;
     if (!chosen || !obj.card.subtypes.includes(chosen)) return false;
@@ -421,6 +484,7 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
   for (const source of battlefield(state)) {
     for (const ability of source.card.abilities ?? []) {
       if (ability.kind !== 'static') continue;
+      if (!abilityActive(source, ability)) continue;
       if (ability.selfOnly ? source.id !== obj.id : !matchFilter({ controller: source.controller, sourceId: source.id, state }, ability.filter, obj)) continue;
       if (ability.condition && !staticConditionHolds(state, source, ability.condition)) continue;
       total.power += ability.power ?? 0;
@@ -440,7 +504,8 @@ export function effectivePower(state: GameState, obj: GameObject): number {
     0,
   );
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
-  const base = obj.faceDown ? 2 : obj.card.power ?? 0; // virada para baixo: 2/2
+  const band = currentBand(obj);
+  const base = obj.faceDown ? 2 : band?.power ?? obj.card.power ?? 0; // virada para baixo: 2/2
   return base + obj.untilEot.power + counters + fromAttachments + staticsFor(state, obj).power;
 }
 
@@ -450,13 +515,16 @@ export function effectiveToughness(state: GameState, obj: GameObject): number {
     0,
   );
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
-  const base = obj.faceDown ? 2 : obj.card.toughness ?? 0;
+  const band = currentBand(obj);
+  const base = obj.faceDown ? 2 : band?.toughness ?? obj.card.toughness ?? 0;
   return base + obj.untilEot.toughness + counters + fromAttachments + staticsFor(state, obj).toughness;
 }
 
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
   // Virada para baixo: sem habilidades impressas (disguise dá ward {2}, tratado no custo).
   if (!obj.faceDown && obj.card.keywords?.includes(kw)) return true;
+  if (!obj.faceDown && currentBand(obj)?.keywords?.includes(kw)) return true;
+  if (!obj.faceDown && obj.card.station && (obj.counters['charge'] ?? 0) >= obj.card.station.threshold && obj.card.station.keywords?.includes(kw)) return true;
   if (obj.untilEot.keywords.includes(kw)) return true;
   if (attachmentsOf(state, obj).some((a) => a.card.attachEffect?.keywords?.includes(kw))) return true;
   return staticsFor(state, obj).keywords.includes(kw);

@@ -34,6 +34,8 @@ import {
   createObject,
   effectivePower,
   hasKeyword,
+  isCreature,
+  manaValueOf,
   matchFilter,
   removeFromCurrentZone,
   type GameObject,
@@ -56,6 +58,8 @@ export interface EffectContext {
   sacrificedPower?: number;
   /** Color chosen by the player for 'addManaChoice' abilities. */
   chosenMana?: 'W' | 'U' | 'B' | 'R' | 'G';
+  /** Triggered abilities: the object that caused the trigger. */
+  subjectId?: number;
   emit: Emit;
 }
 
@@ -67,6 +71,7 @@ function resolvePlayers(sel: PlayerSel, controller: PlayerId): PlayerId[] {
 
 function resolveSubject(ctx: EffectContext, ref: SubjectRef): TargetChoice[] {
   if (ref === 'self') return [{ kind: 'object', id: ctx.sourceId }];
+  if (ref === 'triggering') return ctx.subjectId !== undefined ? [{ kind: 'object', id: ctx.subjectId }] : [];
   if (ref === 'host') {
     const host = ctx.state.objects[ctx.sourceId]?.attachedTo;
     return host !== undefined ? [{ kind: 'object', id: host }] : [];
@@ -122,9 +127,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -257,7 +262,7 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       };
     case 'mayDo':
       return {
-        player: controller,
+        player: step.who === 'opponent' ? opponentOf(controller) : controller,
         options: [],
         min: 0,
         max: 0,
@@ -265,6 +270,10 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         mode: 'confirm',
       };
     case 'payOrElse': {
+      if (step.energy !== undefined) {
+        const have = state.players[controller].energy;
+        return { player: controller, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: pagar ${'{E}'.repeat(step.energy)}?`, mode: 'confirm', autoAnswer: have >= step.energy ? undefined : 'no' };
+      }
       const cost = payOrElseCost(ctx, step);
       return {
         player: controller,
@@ -275,6 +284,24 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         mode: 'confirm',
         autoAnswer: canPay(state, controller, parseCost(cost)) ? undefined : 'no',
       };
+    }
+    case 'explore': {
+      // Land on top → hand (no choice); nonland → counter, then may put it into the graveyard.
+      const [t] = resolveSubject(ctx, step.what);
+      const who = t?.kind === 'object' ? state.objects[t.id]?.controller ?? controller : controller;
+      const top = state.players[who].zones.library[0];
+      const card = top !== undefined ? state.objects[top].card : undefined;
+      if (!card) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'skip' };
+      if (card.types.includes('Land')) return { player: who, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'no' };
+      return { player: who, options: [top], min: 0, max: 0, prompt: `${ctx.sourceName} explora: revelou ${card.name}. Colocar no cemitério? (Não = fica no topo)`, mode: 'confirm' };
+    }
+    case 'exploit': {
+      const options = state.players[controller].zones.battlefield
+        .map((id) => state.objects[id])
+        .filter((o) => isCreature(o))
+        .map((o) => o.id);
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: explorar — sacrifique uma criatura (opcional)`, mode: 'cards' };
     }
     case 'chooseValue':
       return {
@@ -326,9 +353,45 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
     case 'payOrElse': {
       // Retorna true se pagou; o ramo "else" é emendado em applyEffectChoice.
       if (text !== 'yes') return false;
+      if (step.energy !== undefined) {
+        const p = state.players[ctx.controller];
+        if (p.energy < step.energy) return false;
+        p.energy -= step.energy;
+        emit({ type: 'energyChanged', player: ctx.controller, delta: -step.energy, total: p.energy });
+        return true;
+      }
       const paid = payNow(state, ctx.controller, payOrElseCost(ctx, step), emit);
       if (paid) emit({ type: 'fizzled', description: `${state.players[ctx.controller].name} pagou ${payOrElseCost(ctx, step)} por ${ctx.sourceName}` });
       return paid;
+    }
+    case 'explore': {
+      const [t] = resolveSubject(ctx, step.what);
+      const explorer = t?.kind === 'object' ? state.objects[t.id] : undefined;
+      const who = explorer?.controller ?? ctx.controller;
+      const top = state.players[who].zones.library[0];
+      if (top === undefined) return;
+      const card = state.objects[top];
+      if (card.card.types.includes('Land')) {
+        moveWithEvent(state, card, 'hand', 'searched', emit);
+        emit({ type: 'explored', player: who, cardName: ctx.sourceName, revealed: card.card.name, toHand: true });
+        return;
+      }
+      if (explorer && explorer.zone === 'battlefield') {
+        const total = (explorer.counters['+1/+1'] ?? 0) + 1;
+        explorer.counters['+1/+1'] = total;
+        emit({ type: 'countersChanged', objectId: explorer.id, cardName: explorer.card.name, counter: '+1/+1', delta: 1, total });
+      }
+      if (text === 'yes') moveWithEvent(state, card, 'graveyard', 'milled', emit);
+      emit({ type: 'explored', player: who, cardName: ctx.sourceName, revealed: card.card.name, toHand: false });
+      return;
+    }
+    case 'exploit': {
+      const id = picks[0];
+      const victim = id !== undefined ? state.objects[id] : undefined;
+      if (!victim || victim.zone !== 'battlefield') return;
+      moveWithEvent(state, victim, 'graveyard', 'sacrificed', emit);
+      emit({ type: 'exploited', objectId: ctx.sourceId, cardName: ctx.sourceName, sacrificed: victim.card.name });
+      return;
     }
     case 'chooseValue': {
       const src = state.objects[ctx.sourceId];
@@ -511,6 +574,7 @@ function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep
       sourceName: ctx.sourceName,
       targets: ctx.targets,
       xValue: ctx.xValue,
+      subjectId: ctx.subjectId,
       current: step,
       remaining,
       finishSpellId: null,
@@ -540,6 +604,7 @@ export function applyEffectChoice(
     sourceName: pending.resume.sourceName,
     targets: pending.resume.targets,
     xValue: pending.resume.xValue,
+    subjectId: pending.resume.subjectId,
     emit,
   };
   state.pendingDecision = null;
@@ -549,7 +614,7 @@ export function applyEffectChoice(
   // script (pausas aninhadas continuam funcionando: vira um único script).
   const branch =
     current.op === 'mayDo' ? (text === 'yes' ? current.effect : current.else ?? [])
-    : current.op === 'payOrElse' ? (outcome === true ? [] : current.else)
+    : current.op === 'payOrElse' ? (outcome === true ? current.then ?? [] : current.else)
     : [];
   const result = runEffectScript(ctx, [...branch, ...pending.resume.remaining]);
   if (result === 'paused') {
@@ -884,11 +949,62 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       const source = state.objects[ctx.sourceId];
       const t = ctx.targets[0];
       if (!source || source.zone !== 'battlefield') return;
-      if (!t || t.kind !== 'object') return;
+      if (!t || t.kind !== 'object' || t.id === source.id) return;
       const host = state.objects[t.id];
       if (!host || host.zone !== 'battlefield') return;
       source.attachedTo = host.id;
+      source.attacking = false;
+      source.blocking = undefined;
       emit({ type: 'attached', sourceId: source.id, sourceName: source.card.name, hostId: host.id, hostName: host.card.name });
+      return;
+    }
+
+    case 'unattach': {
+      const source = state.objects[ctx.sourceId];
+      if (!source || source.attachedTo === undefined) return;
+      source.attachedTo = undefined;
+      emit({ type: 'fizzled', description: `${source.card.name} foi desanexada` });
+      return;
+    }
+
+    case 'energy':
+      for (const p of resolveWho(ctx, step.who)) {
+        const ps = state.players[p];
+        ps.energy = Math.max(0, ps.energy + step.amount);
+        emit({ type: 'energyChanged', player: p, delta: step.amount, total: ps.energy });
+      }
+      return;
+
+    case 'exileTop':
+      for (const p of resolveWho(ctx, step.who)) {
+        for (let i = 0; i < step.count; i++) {
+          const top = state.players[p].zones.library[0];
+          if (top === undefined) break;
+          moveWithEvent(state, state.objects[top], 'exile', 'exiled', emit);
+        }
+      }
+      return;
+
+    case 'moveCounter': {
+      const [f] = resolveSubject(ctx, step.from);
+      const [t] = resolveSubject(ctx, step.to);
+      const from = f?.kind === 'object' ? state.objects[f.id] : undefined;
+      const to = t?.kind === 'object' ? state.objects[t.id] : undefined;
+      if (!from || !to || from.zone !== 'battlefield' || to.zone !== 'battlefield' || (from.counters[step.counter] ?? 0) <= 0) return;
+      from.counters[step.counter] -= 1;
+      emit({ type: 'countersChanged', objectId: from.id, cardName: from.card.name, counter: step.counter, delta: -1, total: from.counters[step.counter] });
+      to.counters[step.counter] = (to.counters[step.counter] ?? 0) + 1;
+      emit({ type: 'countersChanged', objectId: to.id, cardName: to.card.name, counter: step.counter, delta: 1, total: to.counters[step.counter] });
+      return;
+    }
+
+    case 'addLore': {
+      const saga = state.objects[ctx.sourceId];
+      if (!saga || saga.zone !== 'battlefield') return;
+      const total = (saga.counters['lore'] ?? 0) + step.count;
+      saga.counters['lore'] = total;
+      emit({ type: 'countersChanged', objectId: saga.id, cardName: saga.card.name, counter: 'lore', delta: step.count, total });
+      emit({ type: 'loreAdded', objectId: saga.id, cardName: saga.card.name, total });
       return;
     }
 
@@ -1017,6 +1133,12 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
     case 'addMana':
       for (const p of resolvePlayers(step.who, ctx.controller)) {
         for (const sym of step.mana) state.players[p].manaPool[sym] += 1;
+        if (step.untilEndOfCombat) {
+          // Firebending: this mana survives step changes until the end of combat.
+          const ps = state.players[p];
+          ps.stickyPool = ps.stickyPool ?? { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+          for (const sym of step.mana) ps.stickyPool[sym] += 1;
+        }
         emit({ type: 'manaAdded', player: p, mana: step.mana, sourceName: ctx.sourceName });
       }
       return;
@@ -1038,7 +1160,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
           const obj = createObject(state, {
             id: `token-${step.name.toLowerCase().replace(/\s+/g, '-')}`,
             name: step.name,
-            types: ['Creature'],
+            types: step.types ?? ['Creature'],
             subtypes: step.subtypes,
             colors: step.colors,
             power: step.power,
@@ -1049,8 +1171,18 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
           obj.isToken = true;
           obj.zone = 'battlefield';
           obj.summoningSick = true;
+          if (step.tapped) obj.tapped = true;
+          if (step.attacking && state.activePlayer === p && /declare|combat/i.test(state.step)) obj.attacking = true;
+          if (step.sacrificeAtEnd) state.delayed.push({ at: 'endStep', objectId: obj.id, action: 'sacrifice' });
           state.players[p].zones.battlefield.push(obj.id);
           emit({ type: 'tokenCreated', player: p, objectId: obj.id, name: step.name });
+          if (step.attachSource) {
+            const src = state.objects[ctx.sourceId];
+            if (src && src.zone === 'battlefield' && src.controller === p) {
+              src.attachedTo = obj.id;
+              emit({ type: 'attached', sourceId: src.id, sourceName: src.card.name, hostId: obj.id, hostName: obj.card.name });
+            }
+          }
         }
       }
       return;
@@ -1177,11 +1309,13 @@ export function targetMatchesSpec(
     if (!src || effectivePower(state, obj) >= effectivePower(state, src)) return false;
   }
   if (spec.typeAnyOf && !spec.typeAnyOf.some((t) => obj.card.types.includes(t))) return false;
+  if (spec.subtype && !obj.card.subtypes.includes(spec.subtype)) return false;
+  if (spec.cmcAtMost !== undefined && manaValueOf(obj.card.manaCost) > spec.cmcAtMost) return false;
   switch (spec.what) {
     case 'any':
       return true;
     case 'creature':
-      return obj.card.types.includes('Creature') || !!obj.crewedUntilEot;
+      return requiredZone === 'graveyard' ? obj.card.types.includes('Creature') : isCreature(obj);
     case 'permanent':
       return true;
     case 'land':

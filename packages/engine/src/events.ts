@@ -64,6 +64,11 @@ export type GameEvent =
   | { type: 'valueChosen'; player: PlayerId; cardName: string; value: string }
   | { type: 'turnedFaceUp'; objectId: number; cardName: string; player: PlayerId }
   | { type: 'cascaded'; player: PlayerId; cardName: string; hit: string | null }
+  | { type: 'energyChanged'; player: PlayerId; delta: number; total: number }
+  | { type: 'explored'; player: PlayerId; cardName: string; revealed: string; toHand: boolean }
+  | { type: 'exploited'; objectId: number; cardName: string; sacrificed: string }
+  /** Saga: lore counters reached `total` (chapter abilities trigger from this). */
+  | { type: 'loreAdded'; objectId: number; cardName: string; total: number }
   /** An object became the target of a spell or ability (trigger hook). */
   | { type: 'targeted'; objectId: number; by: PlayerId }
   | { type: 'shuffled'; player: PlayerId }

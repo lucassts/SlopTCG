@@ -16,7 +16,8 @@ export type PlayerSel = 'controller' | 'opponent' | 'each';
  * - 'self'        → the source object itself
  * - a PlayerSel   → player(s)
  */
-export type SubjectRef = `target:${number}` | 'self' | 'host' | PlayerSel;
+/** 'triggering' = the object that caused the trigger ("whenever another creature enters, … it"). */
+export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | PlayerSel;
 
 /**
  * Object filter, evaluated relative to the effect's controller/source.
@@ -43,6 +44,14 @@ export interface FilterSpec {
   controlledBy?: 'you' | 'opponent' | 'any';
   /** Exclude the effect's own source ("another creature…"). */
   other?: boolean;
+  /** "artifact or enchantment" as a filter (overload, bargain). */
+  typeAnyOf?: CardType[];
+  /** Bargain: "an artifact, enchantment, or token" — a token also qualifies. */
+  orToken?: boolean;
+  /** Only attacking creatures (battle cry). */
+  attacking?: boolean;
+  /** Mana value exactly N (transmute). */
+  cmcEquals?: number;
 }
 
 /**
@@ -87,6 +96,9 @@ export interface TargetSpec {
   zone?: 'battlefield' | 'graveyard';
   ownedBy?: 'you';
   optional?: boolean;
+  /** Soulshift: "Spirit permanent card with mana value N or less". */
+  subtype?: string;
+  cmcAtMost?: number;
 }
 
 /**
@@ -127,13 +139,27 @@ export type EffectStep =
   /** Predefined artifact tokens with their own abilities. */
   | { op: 'namedToken'; who: PlayerSel; kind: 'Treasure' | 'Food' | 'Clue'; count: number }
   /** (choice) "You may <effect>" — yes runs `effect`, no runs `else` (if any). */
-  | { op: 'mayDo'; prompt?: string; effect: EffectScript; else?: EffectScript }
+  | { op: 'mayDo'; prompt?: string; effect: EffectScript; else?: EffectScript; who?: 'opponent' }
+  /** Energy: "you get {E}{E}" (negative = pay). */
+  | { op: 'energy'; who: WhoSel; amount: number }
+  /** (choice) Explore: reveal top; land → hand, else +1/+1 counter and may put it into the graveyard. */
+  | { op: 'explore'; what: SubjectRef }
+  /** (choice) Exploit: may sacrifice a creature; if so, "exploits" triggers fire. */
+  | { op: 'exploit' }
+  /** Ingest: that player exiles the top N cards of their library. */
+  | { op: 'exileTop'; who: WhoSel; count: number }
+  /** Graft: move a counter from one object to another. */
+  | { op: 'moveCounter'; counter: string; from: SubjectRef; to: SubjectRef }
+  /** Reconfigure: unattach the source. */
+  | { op: 'unattach' }
+  /** Sagas: add lore counters (chapter abilities trigger via the event). */
+  | { op: 'addLore'; count: number }
   /**
    * (choice) "Sacrifice ~ unless you pay {N}" / echo / cumulative upkeep:
    * the controller may pay the cost (per age counter when `perCounter`);
    * otherwise `else` runs.
    */
-  | { op: 'payOrElse'; cost: string; perCounter?: string; else: EffectScript }
+  | { op: 'payOrElse'; cost: string; perCounter?: string; else: EffectScript; /** Runs only if paid (extort). */ then?: EffectScript; /** Pay energy instead of mana. */ energy?: number }
   /** Poison counters (infect/toxic). */
   | { op: 'poison'; who: WhoSel; count: number }
   /** Sacrifice the source itself. */
@@ -214,7 +240,7 @@ export type EffectStep =
   | { op: 'copySpell'; what: SubjectRef }
   /** Fog: no combat damage is dealt for the rest of this turn. */
   | { op: 'preventCombatDamage' }
-  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[] }
+  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean }
   /** "Add one mana of any color" (or "of these colors") — the activation
    *  carries the chosen color; `colors` restricts the legal choices. */
   | { op: 'addManaChoice'; who: PlayerSel; count?: number; colors?: Color[] }
@@ -233,6 +259,14 @@ export type EffectStep =
       colors: Color[];
       subtypes: string[];
       keywords?: Keyword[];
+      /** Card types (default Creature): "Robot artifact creature token". */
+      types?: CardType[];
+      /** Mobilize: tapped and attacking, sacrificed at the next end step. */
+      tapped?: boolean;
+      attacking?: boolean;
+      sacrificeAtEnd?: boolean;
+      /** Job select / For Mirrodin!: attach the source Equipment to the token. */
+      attachSource?: boolean;
     };
 
 export type EffectScript = EffectStep[];
@@ -266,11 +300,23 @@ export type TriggerSpec =
   /** The controller casts a spell (prowess-style). */
   | { on: 'youCastSpell'; noncreatureOnly?: boolean; instantSorceryOnly?: boolean }
   /** The controller gains life (Ajani's Pridemate). */
-  | { on: 'youGainLife' };
+  | { on: 'youGainLife' }
+  /** Saga chapter(s): fires when the lore counter total reaches one of these. */
+  | { on: 'chapter'; chapters: number[] }
+  /** Exploit: this creature sacrificed a creature via its exploit ability. */
+  | { on: 'exploits'; self: true };
 
-export interface TriggeredAbility {
+/** Level up / Class: the ability works only within this level range. */
+export interface LevelGate {
+  levelMin?: number;
+  levelMax?: number;
+}
+
+export interface TriggeredAbility extends LevelGate {
   kind: 'triggered';
   trigger: TriggerSpec;
+  /** "When ~ enters, if it was kicked / the gift was promised / tribute wasn't paid, …". */
+  requiresKicked?: boolean;
   /**
    * Targets chosen by the controller when the trigger goes on the stack
    * (Flametongue Kavu-style). If no legal target exists, the trigger is
@@ -284,12 +330,14 @@ export interface TriggeredAbility {
   text: string;
 }
 
-export interface ActivatedAbility {
+export interface ActivatedAbility extends LevelGate {
   kind: 'activated';
   /** Where the card must be to activate (default battlefield): Unearth/Scavenge/Embalm from the graveyard, Foretell from hand. */
   zone?: 'battlefield' | 'graveyard' | 'hand';
   /** Graveyard abilities that exile the card as a cost (Scavenge, Embalm, Eternalize, Encore). */
   exileSelf?: boolean;
+  /** Class: "{cost}: Level N" is available only at level N-1. */
+  requiresLevel?: number;
   cost: {
     tap?: boolean;
     mana?: string;
@@ -300,6 +348,12 @@ export interface ActivatedAbility {
     payLife?: number;
     /** Discard N cards from hand (chosen in the action). */
     discard?: number;
+    /** Pay N energy counters. */
+    energy?: number;
+    /** Station: tap another untapped creature you control (chosen in the action); charge counters = its power. */
+    tapCreature?: boolean;
+    /** Transmute: discard this card from hand as part of the cost. */
+    discardSelf?: boolean;
   };
   targets?: TargetSpec[];
   effect: EffectScript;
@@ -338,7 +392,7 @@ export type StaticCondition =
   /** Has a counter of this kind. */
   | { kind: 'hasCounter'; counter: string };
 
-export interface StaticAbility {
+export interface StaticAbility extends LevelGate {
   kind: 'static';
   /** Which battlefield objects it applies to (relative to its controller). */
   filter: FilterSpec;
@@ -359,7 +413,11 @@ export type AbilityDef = TriggeredAbility | ActivatedAbility | StaticAbility | L
 
 /** One alternative way to cast a card (Evoke, Dash, Blitz, Escape, Surge, Prowl, Spectacle, Foretell, Plot, Warp). */
 export interface CastMethod {
-  kind: 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp';
+  kind:
+    | 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp'
+    /** Leva 3: bestow (as an Aura), emerge (sacrifice a creature, reduced by its MV), mayhem (from graveyard the turn it was discarded),
+     *  retrace (from graveyard discarding a land), freerunning, overload ("target" → "each"), sneak (ninjutsu for spells). */
+    | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak';
   /** Mana cost of this method ('' = free). */
   cost: string;
   /** Escape: exile this many other cards from your graveyard. */
@@ -404,7 +462,64 @@ export interface CardDefinition {
   additionalCost?: { sacrifice: FilterSpec; count?: number };
   /** Kicker: optional extra mana cost; when paid, `effect` is appended
    *  (spells) or the permanent enters with `entersWithCounters` (creatures). */
-  kicker?: { cost: string; effect: EffectScript; entersWithCounters?: { counter: string; count: number } };
+  kicker?: {
+    cost: string;
+    effect: EffectScript;
+    entersWithCounters?: { counter: string; count: number };
+    /** Bargain: the "kicker" is sacrificing an artifact, enchantment or token instead of mana. */
+    sacrifice?: FilterSpec;
+    /** Gift: what the opponent gets when the gift is promised (runs first). */
+    gift?: EffectScript;
+    /** Label for the client ("bargain", "gift a card"). */
+    label?: string;
+  };
+  // ---- Leva 3
+  /** Saga: number of chapters; read ahead lets the controller pick the starting chapter. */
+  saga?: { chapters: number; readAhead?: boolean };
+  /** Class enchantment: level = level counters + 1. */
+  isClass?: boolean;
+  /** Level up {cost}: adds a level counter (sorcery speed). */
+  levelUp?: string;
+  /** LEVEL bands: printed P/T and keywords by level counter count. */
+  levels?: { min: number; max?: number; power?: number; toughness?: number; keywords?: Keyword[] }[];
+  /** Spacecraft: an artifact creature with these keywords once it has ≥ threshold charge counters. */
+  station?: { threshold: number; keywords?: Keyword[] };
+  /** Split second: while on the stack, no spells or non-mana abilities. */
+  splitSecond?: boolean;
+  /** Entwine {cost}: pay to choose every mode. */
+  entwine?: string;
+  /** Overload: the spell's effect with "target" turned into "each". */
+  overloadEffect?: EffectScript;
+  /** Reconfigure {cost}: equipment creature that attaches/unattaches. */
+  reconfigure?: string;
+  /** Umbra armor: destruction of the enchanted creature destroys this aura instead. */
+  umbraArmor?: boolean;
+  /** Attack-trigger keywords. */
+  battleCry?: boolean;
+  melee?: boolean;
+  training?: boolean;
+  dethrone?: boolean;
+  annihilator?: number;
+  mobilize?: number;
+  firebending?: number;
+  /** Ingest: combat damage to a player exiles their top card. */
+  ingest?: boolean;
+  /** Ravenous: X +1/+1 counters; draw if X ≥ 5. */
+  ravenous?: boolean;
+  /** Sunburst: enters with a counter per color of mana spent. */
+  sunburst?: boolean;
+  /** Graft N: enters with N +1/+1 counters; may move one onto each other entering creature. */
+  graft?: number;
+  /** Tribute N: an opponent may put N +1/+1 counters; otherwise `effect`. */
+  tribute?: { count: number; effect: EffectScript };
+  /** Amplify N: N counters per creature card in hand sharing a type. */
+  amplify?: number;
+  /** Leylines: may start on the battlefield from the opening hand. */
+  openingHand?: boolean;
+  /** Ward—Pay N life. */
+  wardLife?: number;
+  /** Sneak {cost}: creature spell cast during blockers by returning an unblocked attacker; enters tapped and attacking. */
+  sneak?: string;
   /** Blocking restrictions ("can't be blocked by more than one creature" / "except by three or more"). */
   maxBlockers?: number;
   minBlockers?: number;
@@ -585,6 +700,12 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.color && !card.colors.includes(filter.color)) return false;
   if (filter.withKeyword && !card.keywords?.includes(filter.withKeyword)) return false;
   if (filter.withoutKeyword && card.keywords?.includes(filter.withoutKeyword)) return false;
+  if (filter.typeAnyOf && !filter.typeAnyOf.some((t) => card.types.includes(t))) return false;
+  if (filter.cmcEquals !== undefined) {
+    let mv = 0;
+    for (const m of (card.manaCost ?? '').matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : m[1] === 'X' ? 0 : 1;
+    if (mv !== filter.cmcEquals) return false;
+  }
   return true;
 }
 

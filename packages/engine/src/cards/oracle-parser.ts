@@ -385,6 +385,11 @@ function parseTargetedEffect(clause: string): Parsed | null {
   let m: RegExpMatchArray | null;
   const simple = parseSimpleEffect(clause);
   if (simple) return { steps: simple };
+  // Energia: "You get {E}{E}" / "Target creature you control explores" / "~ explores".
+  if ((m = clause.match(/^you get ((?:\{E\})+)$/i))) return { steps: [{ op: 'energy', who: 'controller', amount: m[1].split('{E}').length - 1 }] };
+  if (/^(?:~|it) explores$/i.test(clause)) return { steps: [{ op: 'explore', what: 'self' }] };
+  if (/^target creature you control explores$/i.test(clause)) return { steps: [{ op: 'explore', what: 'target:0' }], spec: { what: 'creature', controlledBy: 'you' } };
+  if (/^target creature explores$/i.test(clause)) return { steps: [{ op: 'explore', what: 'target:0' }], spec: { what: 'creature' } };
 
   if ((m = clause.match(/^~ deals (\w+) damage to any target$/i))) {
     const n = amt(m[1]);
@@ -608,12 +613,22 @@ function parseEffectText(text: string): { steps: EffectStep[]; spec?: TargetSpec
   for (const rawSentence of sentences) {
     let sentence = rawSentence;
     if (/^exile ~$/i.test(sentence)) { selfExile = true; continue; }
-    // Kicker aditivo: "If this spell was kicked, draw a card" (sem "instead").
+    // Kicker aditivo: "If this spell was kicked, draw a card" (sem "instead"). Bargain e gift usam a mesma infra.
     let kicked = false;
-    if ((m = sentence.match(/^If (?:this spell|~) was kicked, (.+)$/i))) {
+    if ((m = sentence.match(/^If (?:(?:this spell|~) was (?:kicked|bargained)|the gift was promised), (.+)$/i))) {
       if (/\binstead\b/i.test(m[1])) return null;
       kicked = true;
       sentence = m[1];
+    }
+    // "You may pay {cost}. If you do, X" → pague-ou-nada com ramo "then" (mana ou energia).
+    if ((m = sentence.match(/^you may pay ((?:\{E\})+|(?:\{[^}]+\})+)$/i))) {
+      const isEnergy = /^(?:\{E\})+$/.test(m[1]);
+      const step: Extract<EffectStep, { op: 'payOrElse' }> = isEnergy
+        ? { op: 'payOrElse', cost: '', energy: m[1].split('{E}').length - 1, then: [], else: [] }
+        : { op: 'payOrElse', cost: m[1], then: [], else: [] };
+      lastMayDo = { op: 'mayDo', effect: step.then! }; // "If you do" alimenta o ramo then
+      (kicked ? kickerSteps : steps).push(step);
+      continue;
     }
     // "You may <efeito>" → decisão sim/não; "If you do, <efeito>" entra no mesmo ramo.
     let optional = false;
@@ -735,8 +750,60 @@ interface ParseState {
   multikicker: boolean;
   /** Leva 2 flags copied onto the definition. */
   flags2: Partial<Pick<CardDefinition, 'offspring' | 'squad' | 'affinity' | 'convoke' | 'delve' | 'improvise' | 'cascade' | 'rebound' | 'morph' | 'ninjutsu' | 'suspend' | 'madness'>>;
+  /** Leva 3 flags copied onto the definition. */
+  flags3: Partial<Pick<CardDefinition, 'levelUp' | 'station' | 'splitSecond' | 'entwine' | 'reconfigure' | 'umbraArmor' | 'battleCry' | 'melee' | 'training' | 'dethrone' | 'annihilator' | 'mobilize' | 'firebending' | 'ingest' | 'ravenous' | 'sunburst' | 'graft' | 'amplify' | 'openingHand' | 'wardLife' | 'sneak'>>;
+  /** Saga: highest chapter seen; read ahead. */
+  sagaChapters?: number;
+  readAhead?: boolean;
+  /** LEVEL bands (Level up creatures) and the band currently being filled. */
+  levels: NonNullable<CardDefinition['levels']>;
+  levelBand?: NonNullable<CardDefinition['levels']>[number];
+  /** Class: level whose abilities are being read (2, 3…). */
+  classLevel?: number;
+  tributeCount?: number;
+  tributeEffect?: EffectStep[];
+  giftEffect?: EffectStep[];
+  bargain?: boolean;
+  backup?: number;
+  transmute?: string;
+  overloadCost?: string;
   /** Recognized-but-ignored lines (cost reducers etc.): card becomes 'partial'. */
   softNotes: string[];
+}
+
+const ROMAN: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5 };
+
+/** Overload: rewrite a single-target spell effect as "each" (null if any step can't be converted). */
+function overloadOf(targets: TargetSpec[] | undefined, effect: EffectStep[]): EffectStep[] | null {
+  if (!targets || targets.length !== 1) return null;
+  const t = targets[0];
+  if (t.what === 'player' || t.what === 'any' || t.what === 'spell' || t.zone === 'graveyard') return null;
+  const filter: FilterSpec = {
+    what: t.what,
+    controlledBy: t.controlledBy,
+    typeAnyOf: t.typeAnyOf,
+    withKeyword: t.withKeyword,
+    withoutKeyword: t.withoutKeyword,
+  };
+  const out: EffectStep[] = [];
+  for (const step of effect) {
+    if (step.op === 'damage' && step.to === 'target:0') { out.push({ op: 'damageEach', filter, amount: step.amount }); continue; }
+    if (!('what' in step) || step.what !== 'target:0') {
+      if (JSON.stringify(step).includes('"target:0"')) return null;
+      out.push(step);
+      continue;
+    }
+    switch (step.op) {
+      case 'destroy': out.push({ op: 'destroyEach', filter }); break;
+      case 'exile': out.push({ op: 'exileEach', filter }); break;
+      case 'pump': out.push({ op: 'pumpEach', filter, power: step.power, toughness: step.toughness, keywords: step.keywords }); break;
+      case 'tap': out.push({ op: 'tapEach', filter }); break;
+      case 'untap': out.push({ op: 'untapEach', filter }); break;
+      case 'putCounters': out.push({ op: 'putCountersEach', filter, counter: step.counter, count: typeof step.count === 'number' ? step.count : 1 }); break;
+      default: return null;
+    }
+  }
+  return out;
 }
 
 /** "Activate only if you control three or more artifacts." → condition. */
@@ -760,6 +827,10 @@ function parseActivationCost(text: string): Extract<AbilityDef, { kind: 'activat
     const tok = tokRaw.trim();
     let m: RegExpMatchArray | null;
     if (tok === '{T}') { cost.tap = true; any = true; continue; }
+    const energyTok = tok.match(/^(?:Pay )?((?:\{E\})+)$/i);
+    if (energyTok) {
+      cost.energy = (cost.energy ?? 0) + energyTok[1].split('{E}').length - 1; any = true; continue;
+    }
     if (/^(?:\{[^}]+\})+$/.test(tok)) {
       if (tok.includes('{Q}') || tok.includes('{E}')) return null;
       cost.mana = (cost.mana ?? '') + tok; any = true; continue;
@@ -794,6 +865,7 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever an opponent casts a spell$/i.test(head)) return { trigger: { on: 'opponentCastsSpell' } };
   if (/^Whenever you attack$/i.test(head)) return { trigger: { on: 'youAttack' } };
   if (/^Whenever ~ deals combat damage to a player$/i.test(head)) return { trigger: { on: 'combatDamageToPlayer', self: true } };
+  if (/^When ~ exploits a creature$/i.test(head)) return { trigger: { on: 'exploits', self: true } };
   const zoneTrigger = (on: 'etb' | 'dies', what: FilterSpec): TriggerSpec =>
     on === 'etb' ? { on: 'etb', what } : { on: 'dies', what };
   const selfTrigger = (on: 'etb' | 'dies'): TriggerSpec => (on === 'etb' ? { on: 'etb', self: true } : { on: 'dies', self: true });
@@ -850,7 +922,129 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if (line.startsWith('• ')) return false;
 
   // Linhas de formato (Commander/draft/ante) sem efeito num jogo de dois: reconhecidas e ignoradas.
-  if (/^(~ can be your commander\.|Choose a Background|Doctor's companion|Partner(?:—.+)?|Friends forever|Draft ~ face up\.|Draft this card face up\.|A deck can have any number of cards named ~\.|Remove this card from your deck before playing if you're not playing for ante\.|Job select|Companion — .+|Start your engines!|Ascend|Increment|Storied|Read ahead|Play with the top card of your library revealed\.)$/i.test(line)) return true;
+  if (/^(~ can be your commander\.|Choose a Background|Doctor's companion|Partner(?:—.+)?|Friends forever|Draft ~ face up\.|Draft this card face up\.|A deck can have any number of cards named ~\.|Remove this card from your deck before playing if you're not playing for ante\.|Companion — .+|Start your engines!|Ascend|Increment|Storied|Assist|Play with the top card of your library revealed\.)$/i.test(line)) return true;
+
+  // ---- Leva 3: Sagas, Classes, Level up, Station, energia, keywords de campo
+  if ((m = line.match(/^((?:I|II|III|IV|V)(?:, (?:I|II|III|IV|V))*) — (.+)$/))) {
+    const chapters = m[1].split(', ').map((r) => ROMAN[r]);
+    st.sagaChapters = Math.max(st.sagaChapters ?? 0, ...chapters);
+    const parsed = parseEffectText(m[2].replace(/\.?$/, '.'));
+    if (!parsed) return false;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'chapter', chapters }, targets: specsOf(parsed), effect: parsed.steps, text: line });
+    return true;
+  }
+  if (/^Read ahead$/i.test(line)) { st.readAhead = true; return true; }
+  if ((m = line.match(/^((?:\{[^}]+\})+): Level (\d+)$/i))) {
+    const lvl = parseInt(m[2], 10);
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1] }, requiresLevel: lvl - 1, effect: [{ op: 'putCounters', what: 'self', counter: 'level', count: 1 }], text: `${m[1]}: Nível ${lvl}`, sorceryOnly: true });
+    st.classLevel = lvl;
+    return true;
+  }
+  if ((m = line.match(/^Level up ((?:\{[^}]+\})+)$/i))) {
+    st.flags3.levelUp = m[1];
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1] }, effect: [{ op: 'putCounters', what: 'self', counter: 'level', count: 1 }], text: `Subir de nível ${m[1]}`, sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(/^LEVEL (\d+)(?:-(\d+)|\+)$/i))) {
+    st.levelBand = { min: parseInt(m[1], 10), max: m[2] ? parseInt(m[2], 10) : undefined };
+    st.levels.push(st.levelBand);
+    return true;
+  }
+  if (st.levelBand && (m = line.match(/^(\d+)\/(\d+)$/))) { st.levelBand.power = parseInt(m[1], 10); st.levelBand.toughness = parseInt(m[2], 10); return true; }
+  if (/^Station$/i.test(line)) {
+    st.abilities.push({ kind: 'activated', cost: { tapCreature: true }, effect: [], text: 'Estacionar (vire outra criatura: marcadores de carga iguais ao poder dela)', sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(/^(\d+)\+ \| (.+)$/))) {
+    const kws = keywordList(m[2]);
+    if (!kws) return false;
+    st.flags3.station = { threshold: parseInt(m[1], 10), keywords: kws };
+    return true;
+  }
+  if ((m = line.match(/^Ward—Pay (\d+) life\.$/i))) { st.flags3.wardLife = parseInt(m[1], 10); return true; }
+  if (/^If this card is in your opening hand, you may begin the game with it on the battlefield\.$/i.test(line)) { st.flags3.openingHand = true; return true; }
+  if ((m = line.match(/^When ~ enters, if (?:~ was kicked|it was kicked|the gift was promised|~ was bargained|it was bargained), (.+)$/i))) {
+    const parsed = parseEffectText(m[1]);
+    if (!parsed) return false;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, requiresKicked: true, targets: specsOf(parsed), effect: parsed.steps, text: line });
+    return true;
+  }
+  if ((m = line.match(/^When ~ enters, if tribute wasn't paid, (.+)$/i))) {
+    const parsed = parseEffectText(m[1]);
+    if (!parsed || specsOf(parsed)) return false;
+    st.tributeEffect = parsed.steps;
+    return true;
+  }
+  if (/^When ~ (?:dies|is put into a graveyard from the battlefield), return it to its owner's hand\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'dies', self: true }, effect: [{ op: 'returnToHand', what: 'self' }], text: 'ao morrer, volta para a mão' });
+    return true;
+  }
+  if ((m = line.match(/^Gift (a card|a Food|a Treasure|a Clue|a tapped Fish)$/i))) {
+    const g = m[1].toLowerCase();
+    st.giftEffect =
+      g === 'a card' ? [{ op: 'draw', who: 'opponent', count: 1 }]
+      : g === 'a tapped fish' ? [{ op: 'token', who: 'opponent', count: 1, name: 'Fish', power: 1, toughness: 1, colors: ['U'], subtypes: ['Fish'], tapped: true }]
+      : [{ op: 'namedToken', who: 'opponent', kind: (g.slice(2).charAt(0).toUpperCase() + g.slice(3)) as 'Food', count: 1 }];
+    st.kickerCost = '';
+    return true;
+  }
+  if (/^Bargain$/i.test(line)) { st.bargain = true; st.kickerCost = ''; return true; }
+  if ((m = line.match(/^Reconfigure ((?:\{[^}]+\})+)$/i))) {
+    st.flags3.reconfigure = m[1];
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1] }, targets: [{ what: 'creature', controlledBy: 'you' }], effect: [{ op: 'attach' }], text: `Reconfigurar ${m[1]}: anexar a uma criatura sua`, sorceryOnly: true });
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1] }, effect: [{ op: 'unattach' }], text: `Reconfigurar ${m[1]}: desanexar`, sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(/^Transmute ((?:\{[^}]+\})+)$/i))) { st.transmute = m[1]; return true; }
+  if ((m = line.match(/^Outlast ((?:\{[^}]+\})+)$/i))) {
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1], tap: true }, effect: [{ op: 'putCounters', what: 'self', counter: '+1/+1', count: 1 }], text: `Sobreviver ${m[1]}`, sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(/^(Bestow|Emerge|Mayhem|Freerunning|Sneak) ((?:\{[^}]+\})+)$/i))) {
+    const k = m[1].toLowerCase() as 'bestow' | 'emerge' | 'mayhem' | 'freerunning' | 'sneak';
+    const labels = { bestow: 'conceder (como Aura)', emerge: 'emergir (sacrifique uma criatura)', mayhem: 'mayhem (do cemitério)', freerunning: 'freerunning', sneak: 'sneak (troca por atacante não bloqueado)' };
+    st.castMethods.push({ kind: k, cost: m[2], label: `${labels[k]} ${m[2]}` });
+    if (k === 'sneak') st.flags3.sneak = m[2];
+    return true;
+  }
+  if (/^Retrace$/i.test(line)) { st.castMethods.push({ kind: 'retrace', cost: '', label: 'retrace (do cemitério, descartando um terreno)' }); return true; }
+  if ((m = line.match(/^Overload ((?:\{[^}]+\})+)$/i))) { st.overloadCost = m[1]; return true; }
+  if ((m = line.match(/^Entwine ((?:\{[^}]+\})+)$/i))) { st.flags3.entwine = m[1]; return true; }
+  if (/^Split second$/i.test(line)) { st.flags3.splitSecond = true; return true; }
+  if (/^Umbra armor$/i.test(line)) { st.flags3.umbraArmor = true; return true; }
+  if (/^Ravenous$/i.test(line)) { st.flags3.ravenous = true; st.entersWithCounters = { counter: '+1/+1', count: 'X' }; return true; }
+  if (/^Sunburst$/i.test(line)) { st.flags3.sunburst = true; return true; }
+  if (/^Exploit$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, effect: [{ op: 'exploit' }], text: 'Explorar (pode sacrificar uma criatura)' });
+    return true;
+  }
+  if (/^Extort$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'youCastSpell' }, effect: [{ op: 'payOrElse', cost: '{W/B}', then: [{ op: 'loseLife', who: 'opponent', amount: 1 }, { op: 'gainLife', who: 'controller', amount: 1 }], else: [] }], text: 'Extorquir: pague {W/B} para drenar 1' });
+    return true;
+  }
+  if (/^Job select$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, effect: [{ op: 'token', who: 'controller', count: 1, name: 'Hero', power: 1, toughness: 1, colors: [], subtypes: ['Hero'], attachSource: true }], text: 'Job select: cria um Herói 1/1 e anexa' });
+    return true;
+  }
+  if (/^For Mirrodin!$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, effect: [{ op: 'token', who: 'controller', count: 1, name: 'Rebel', power: 2, toughness: 2, colors: ['R'], subtypes: ['Rebel'], attachSource: true }], text: 'Por Mirrodin!: cria um Rebelde 2/2 e anexa' });
+    return true;
+  }
+  if ((m = line.match(/^Soulshift (\d+)$/i))) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'dies', self: true }, targets: [{ what: 'permanent', zone: 'graveyard', ownedBy: 'you', subtype: 'Spirit', cmcAtMost: parseInt(m[1], 10), optional: true }], effect: [{ op: 'returnToHand', what: 'target:0' }], text: `Soulshift ${m[1]}` });
+    return true;
+  }
+  if ((m = line.match(/^Backup (\d+)$/i))) { st.backup = parseInt(m[1], 10); return true; }
+  if ((m = line.match(/^Tribute (\d+)$/i))) { st.tributeCount = parseInt(m[1], 10); return true; }
+  if ((m = line.match(/^(Annihilator|Mobilize|Firebending|Graft|Amplify) (\d+)$/i))) {
+    (st.flags3 as Record<string, number>)[m[1].toLowerCase()] = parseInt(m[2], 10);
+    return true;
+  }
+  if ((m = line.match(/^(Battle cry|Melee|Training|Dethrone|Ingest)$/i))) {
+    const key = m[1].toLowerCase() === 'battle cry' ? 'battleCry' : m[1].toLowerCase();
+    (st.flags3 as Record<string, boolean>)[key] = true;
+    return true;
+  }
   if (/^You may look at the top card of your library any time\.$/i.test(line)) { st.revealTop = true; return true; }
   if (/^~ enters tapped unless you have two or more opponents\.$/i.test(line)) { st.entersTapped = true; return true; }
   if (/^You may play an additional land on each of your turns\.$/i.test(line)) { st.extraLands = 1; return true; }
@@ -1025,7 +1219,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // Keywords de custo/extra que não mudam a resolução: a mágica fica jogável
   // pagando o custo cheio (parcial, com nota). Storm a engine já faz.
   if (/^Storm$/i.test(line)) { st.storm = true; return true; }
-  if (/^(Assist|Split second|Retrace|Cipher|Gravestorm|Replicate (?:\{[^}]+\})+|Escalate (?:\{[^}]+\})+|Entwine (?:\{[^}]+\})+|Miracle (?:\{[^}]+\})+|Overload (?:\{[^}]+\})+)$/i.test(line)) {
+  if (/^(Cipher|Gravestorm|Replicate (?:\{[^}]+\})+|Escalate (?:\{[^}]+\})+|Miracle (?:\{[^}]+\})+)$/i.test(line)) {
     st.softNotes.push(line);
     return true;
   }
@@ -1046,11 +1240,16 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     KEYWORDS[p.toLowerCase()] !== undefined ||
     /^protection from (white|blue|black|red|green)$/i.test(p) ||
     /^ward \{\d+\}$/i.test(p) ||
-    /^(prowess|devoid|infect|wither|exalted|flanking|skulk|persist|undying|evolve|mentor|unleash|riot|living weapon)$/i.test(p) ||
-    /^(toxic|bushido|crew|saddle|rampage|afflict|renown|modular|afterlife|fabricate|bloodthirst|vanishing|fading|devour) \d+$/i.test(p) ||
+    /^(prowess|devoid|infect|wither|exalted|flanking|skulk|persist|undying|evolve|mentor|unleash|riot|living weapon|battle cry|melee|training|dethrone|ingest|split second|sunburst|ravenous)$/i.test(p) ||
+    /^(toxic|bushido|crew|saddle|rampage|afflict|renown|modular|afterlife|fabricate|bloodthirst|vanishing|fading|devour|annihilator|mobilize|firebending|graft|amplify) \d+$/i.test(p) ||
     /^(echo|cumulative upkeep) (?:\{[^}]+\})+$/i.test(p);
   if (parts.length > 0 && parts.every(isKw)) {
     for (const p of parts) {
+      // Leva 3 keywords numa lista com vírgulas ("Flying, ingest"): reaproveita as linhas próprias.
+      if (/^(battle cry|melee|training|dethrone|ingest|split second|sunburst|ravenous)$/i.test(p) || /^(annihilator|mobilize|firebending|graft|amplify) \d+$/i.test(p)) {
+        parseLine(p, st, isSpell, subtypes);
+        continue;
+      }
       const prot = p.match(/^protection from (white|blue|black|red|green)$/i);
       const ward = p.match(/^ward \{(\d+)\}$/i);
       const numKw = p.match(/^(toxic|bushido|crew|saddle|rampage|afflict|renown|modular|afterlife|fabricate|bloodthirst|vanishing|fading|devour) (\d+)$/i);
@@ -1370,7 +1569,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     .replace(/\([^)]*\)/g, '')
     .split(input.name).join('~')
     .split(shortName).join('~')
-    .replace(/\bThis (creature|land|artifact|enchantment|permanent|Aura|Equipment|Vehicle|spell)\b/gi, '~')
+    .replace(/\bThis (creature|land|artifact|enchantment|permanent|Aura|Equipment|Vehicle|Saga|Class|Spacecraft|spell)\b/gi, '~')
     .replace(/[ \t]+/g, ' ')
     .trim();
 
@@ -1398,6 +1597,8 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     castMethods: [],
     multikicker: false,
     flags2: {},
+    flags3: {},
+    levels: [],
     softNotes: [],
   };
 
@@ -1408,12 +1609,51 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
+    const nAbilities = st.abilities.length;
+    const nKeywords = st.keywords.length;
+    const band = st.levelBand;
+    const classLevel = st.classLevel;
     if (!parseLine(line, st, isSpell, subtypes)) {
       diag?.failedLines.push(line);
       if (isSpell) return null;
       unparsed.push(line);
+      continue;
+    }
+    // Level up bands / Class levels: what was just read belongs to that level range.
+    if (band && st.levelBand === band) {
+      if (st.keywords.length > nKeywords) band.keywords = [...(band.keywords ?? []), ...st.keywords.splice(nKeywords)];
+      for (const a of st.abilities.slice(nAbilities)) if (a.kind !== 'loyalty') { a.levelMin = band.min; a.levelMax = band.max; }
+    } else if (classLevel !== undefined && st.classLevel === classLevel) {
+      for (const a of st.abilities.slice(nAbilities)) if (a.kind !== 'loyalty') a.levelMin = classLevel;
     }
   }
+  // Leva 3: abilities built from several lines / the card's own cost.
+  if (st.backup !== undefined) {
+    st.abilities.push({
+      kind: 'triggered',
+      trigger: { on: 'etb', self: true },
+      targets: [{ what: 'creature' }],
+      effect: [{ op: 'putCounters', what: 'target:0', counter: '+1/+1', count: st.backup }, ...(st.keywords.length > 0 ? [{ op: 'pump' as const, what: 'target:0' as const, power: 0, toughness: 0, keywords: [...st.keywords] }] : [])],
+      text: `Reforço ${st.backup}`,
+    });
+    // As habilidades não-keyword que o reforço concederia não são copiadas: parcial.
+    if (st.abilities.some((a) => a.kind === 'triggered' && a.trigger.on !== 'etb')) st.softNotes.push(`Backup ${st.backup} (só concede as keywords, não as outras habilidades)`);
+  }
+  if (st.transmute) {
+    let mv = 0;
+    for (const mm of (input.manaCost ?? '').matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(mm[1]) ? parseInt(mm[1], 10) : mm[1] === 'X' ? 0 : 1;
+    st.abilities.push({ kind: 'activated', zone: 'hand', cost: { mana: st.transmute, discardSelf: true }, effect: [{ op: 'search', filter: { cmcEquals: mv }, count: 1, to: 'hand' }], text: `Transmutar ${st.transmute} (busque uma carta de valor de mana ${mv})`, sorceryOnly: true });
+  }
+  for (const cmx of st.castMethods) if (cmx.kind === 'retrace') cmx.cost = input.manaCost ?? '';
+  let overloadEffect: EffectStep[] | undefined;
+  if (st.overloadCost) {
+    const ov = isSpell ? overloadOf(st.spellTargets, st.spellEffect) : null;
+    if (ov) {
+      overloadEffect = ov;
+      st.castMethods.push({ kind: 'overload', cost: st.overloadCost, label: `sobrecarga ${st.overloadCost} ("alvo" vira "cada")` });
+    } else st.softNotes.push(`Overload ${st.overloadCost}`);
+  }
+  if (st.giftEffect || st.bargain) st.kickerCost = st.kickerCost ?? '';
 
   // Regra 305.6: terrenos básicos têm a habilidade de mana intrínseca — o
   // texto oracle deles é só lembrete entre parênteses (descartado acima).
@@ -1430,12 +1670,15 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   if (isSpell && st.spellEffect.length === 0 && st.spellModes.length === 0) return null;
   if (isSpell && st.spellModes.length > 0 && st.spellEffect.length > 0) return null; // modal + efeito solto: fora do escopo
   // Kicker sem efeito condicional reconhecido (ou vice-versa): fora do escopo.
-  if (isSpell && (!!st.kickerCost !== st.kickerEffect.length > 0)) return null;
-  if (!isSpell && st.kickerCost && !st.kickerEnters && !st.flags2.offspring && !st.flags2.squad) unparsed.push(`Kicker ${st.kickerCost} (efeito do kicker não reconhecido)`);
+  const hasKickerCost = st.kickerCost !== undefined;
+  const kickerHasEffect = st.kickerEffect.length > 0 || !!st.giftEffect || st.abilities.some((a) => a.kind === 'triggered' && a.requiresKicked);
+  if (isSpell && hasKickerCost !== kickerHasEffect) return null;
+  if (!isSpell && hasKickerCost && !st.kickerEnters && !st.flags2.offspring && !st.flags2.squad && !kickerHasEffect) unparsed.push(`Kicker ${st.kickerCost} (efeito do kicker não reconhecido)`);
   if (isSpell && st.modalOpen && st.spellModes.length < 2) return null;
   // Aura sem "Enchant X" reconhecido não pode ser conjurada nem parcialmente.
   if (subtypes.includes('Aura') && !st.enchant) return null;
-  if (st.attachEffect && !st.enchant && !st.equipCost && !subtypes.includes('Equipment')) return null;
+  const hasBestow = st.castMethods.some((c) => c.kind === 'bestow');
+  if (st.attachEffect && !st.enchant && !st.equipCost && !subtypes.includes('Equipment') && !hasBestow && !st.flags3.reconfigure) return null;
 
   if (st.equipCost) {
     st.abilities.push({
@@ -1486,6 +1729,12 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     bushido: st.bushido,
     ...st.flags,
     ...st.flags2,
+    ...st.flags3,
+    saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
+    isClass: subtypes.includes('Class') || undefined,
+    levels: st.levels.length > 0 ? st.levels : undefined,
+    overloadEffect,
+    tribute: st.tributeCount !== undefined ? { count: st.tributeCount, effect: st.tributeEffect ?? [] } : undefined,
     castMethods: st.castMethods.length > 0 ? st.castMethods : undefined,
     buyback: st.buyback,
     multikicker: st.multikicker || undefined,
@@ -1508,8 +1757,15 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     exileOnResolve: st.exileOnResolve || undefined,
     storm: st.storm || undefined,
     noMaxHandSize: st.noMaxHandSize || undefined,
-    kicker: st.kickerCost && (st.kickerEffect.length > 0 || st.kickerEnters || st.flags2.offspring || st.flags2.squad)
-      ? { cost: st.kickerCost, effect: st.kickerEffect, entersWithCounters: st.kickerEnters }
+    kicker: st.kickerCost !== undefined && (kickerHasEffect || st.kickerEnters || st.flags2.offspring || st.flags2.squad)
+      ? {
+          cost: st.kickerCost,
+          effect: st.kickerEffect,
+          entersWithCounters: st.kickerEnters,
+          gift: st.giftEffect,
+          sacrifice: st.bargain ? { typeAnyOf: ['Artifact', 'Enchantment'], orToken: true } : undefined,
+          label: st.giftEffect ? 'presente' : st.bargain ? 'barganha (sacrifique artefato, encantamento ou ficha)' : undefined,
+        }
       : undefined,
     enchant: st.enchant,
     attachEffect: st.attachEffect,
