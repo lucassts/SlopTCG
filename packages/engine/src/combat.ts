@@ -26,6 +26,7 @@ export function canAttack(state: GameState, obj: GameObject): string | null {
   if (obj.tapped) return 'está virada';
   if (obj.summoningSick && !hasKeyword(state, obj, 'haste')) return 'tem enjoo de invocação';
   if (hasKeyword(state, obj, 'defender')) return 'tem defensor';
+  if ((obj.cantAttackUntilTurn ?? -1) >= state.turn) return 'não pode atacar até o próximo turno do controlador';
   if (attachmentForbids(state, obj, 'cantAttack')) return 'não pode atacar (encantamento)';
   return null;
 }

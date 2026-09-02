@@ -19,14 +19,14 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-02, v0.10.0)
+## Estado (2026-09-02, v0.11.0)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (Leva 1) | v0.9 (Leva 2) | **v0.10 (Leva 3)** |
-|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | **7.062** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | **19.464** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | **6.497** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | **55** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (Leva 1) | v0.9 (Leva 2) | v0.10 (Leva 3) | **v0.11 (Leva 3 completa)** |
+|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | **7.136** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | **19.400** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | **6.487** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | **55** |
 
 A Leva 2 rendeu +421 full (menos que as ≈1.000 estimadas): a keyword deixou
 de bloquear, mas boa parte dessas cartas ainda tem outra frase pendente — que
@@ -99,10 +99,27 @@ the gift was promised" em gatilhos de entrada, "dies → volta para a mão".
 Infra: `subjectId` nos gatilhos (o objeto que disparou, `'triggering'` no
 DSL), habilidades com faixa de nível, `payOrElse.then`, mayDo do oponente.
 
-Ficou de fora (rules-heavy ou raro): Soulbond, Mutate, Phasing, Banding,
-Hideaway, Miracle, Dredge, Replicate, Cipher, Haunt, Provoke, Enlist,
-Monarch/Initiative, Dungeons, Batalhas, Daybound, Double team / Specialize /
-Starting intensity (Alchemy). Voltam na Leva 5 como script por carta.
+Fechamento (v0.11.0): **Hideaway** (esconde uma das N do topo; "{custo},
+{T}: jogue a carta escondida de graça se <condição>" com biblioteca ≤ N /
+atacou com N criaturas / controla N permanentes / completou masmorra / é o
+monarca), **Miracle** (janela ao comprar a primeira carta do turno, fecha
+ao fazer qualquer outra coisa), **Dredge** (arma-se do cemitério e
+substitui a próxima compra), **Replicate** (N cópias por N pagamentos),
+**Cipher** (codifica numa criatura; cópia grátis ao causar dano de
+combate), **Haunt** (criatura e mágica; gatilho "a criatura que ela
+assombra morre"), **Monarca** (compra no fim do turno; passa por dano de
+combate; "se você for o monarca"), **Iniciativa** (aventura em Undercity na
+manutenção; passa por dano de combate), **Masmorras** (as quatro — Lost
+Mine of Phandelver, Tomb of Annihilation, Dungeon of the Mad Mage,
+Undercity — com todas as salas, escolha de caminho, "completou uma
+masmorra"), **impulso** ("exile o topo, pode jogar neste turno" — 95
+cartas), goad. Quatro salas são aproximadas e o log avisa: Fungi Cavern e
+Twisted Caverns duram até o fim do turno, Mad Wizard's Lair compra três sem
+a conjuração grátis, Throne of the Dead Three busca na biblioteca inteira.
+
+Ficou de fora de verdade (rules-heavy ou Alchemy): Soulbond, Mutate,
+Phasing, Banding, Provoke, Enlist, Batalhas, Daybound, Double team /
+Specialize / Starting intensity. Voltam na Leva 5 como script por carta.
 
 ### Leva 4 — gramática composicional (o grosso: ≈17.000 cartas)
 Reescrever `parseEffectText` como gramática recursiva:

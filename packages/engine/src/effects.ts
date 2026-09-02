@@ -45,6 +45,7 @@ import {
 } from './state.js';
 import { opponentOf, type PlayerId, type TargetChoice } from './types.js';
 import { shuffle } from './rng.js';
+import { DUNGEONS } from './dungeons.js';
 import { canPay, parseCost, planPayment } from './mana.js';
 
 export interface EffectContext {
@@ -127,9 +128,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -303,6 +304,19 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
       return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: explorar — sacrifique uma criatura (opcional)`, mode: 'cards' };
     }
+    case 'hideaway': {
+      const top = state.players[controller].zones.library.slice(0, step.count);
+      if (top.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options: top, min: 1, max: 1, prompt: `${ctx.sourceName}: esconderijo — escolha a carta a exilar virada para baixo (as outras vão para o fundo)`, mode: 'cards' };
+    }
+    case 'cipherEncode': {
+      const options = state.players[controller].zones.battlefield
+        .map((id) => state.objects[id])
+        .filter((o) => isCreature(o))
+        .map((o) => o.id);
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: cifra — codificar em qual criatura sua? (opcional)`, mode: 'cards' };
+    }
     case 'chooseValue':
       return {
         player: controller,
@@ -391,6 +405,32 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (!victim || victim.zone !== 'battlefield') return;
       moveWithEvent(state, victim, 'graveyard', 'sacrificed', emit);
       emit({ type: 'exploited', objectId: ctx.sourceId, cardName: ctx.sourceName, sacrificed: victim.card.name });
+      return;
+    }
+    case 'hideaway': {
+      const top = state.players[ctx.controller].zones.library.slice(0, step.count);
+      const pick = picks[0];
+      const src = state.objects[ctx.sourceId];
+      for (const id of top) {
+        const o = state.objects[id];
+        if (id === pick) {
+          moveWithEvent(state, o, 'exile', 'exiled', emit);
+          o.exiledAs = 'hideaway';
+          if (src) src.hideawayCard = id;
+        } else moveWithEvent(state, o, 'library', 'returned', emit, 'bottom');
+      }
+      emit({ type: 'hideawayExiled', player: ctx.controller, sourceName: ctx.sourceName });
+      return;
+    }
+    case 'cipherEncode': {
+      const id = picks[0];
+      const creature = id !== undefined ? state.objects[id] : undefined;
+      const spell = state.objects[ctx.sourceId];
+      if (!creature || creature.zone !== 'battlefield' || !spell || spell.zone !== 'stack') return;
+      moveWithEvent(state, spell, 'exile', 'exiled', emit);
+      spell.exiledAs = 'cipher';
+      spell.encodedOn = creature.id;
+      emit({ type: 'encoded', cardName: spell.card.name, creatureName: creature.card.name });
       return;
     }
     case 'chooseValue': {
@@ -523,6 +563,11 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         }
         moveWithEvent(state, obj, step.to, 'searched', emit);
         if (step.to === 'battlefield' && step.tapped) setTapped(state, obj, true, emit);
+        if (step.to === 'battlefield' && step.withCounters) {
+          const { counter, count } = step.withCounters;
+          obj.counters[counter] = (obj.counters[counter] ?? 0) + count;
+          emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter, delta: count, total: obj.counters[counter] });
+        }
       }
       emit({ type: 'searched', player: ctx.controller, found, to: step.to });
       const r = shuffle(state.players[ctx.controller].zones.library, state.rngState);
@@ -1005,6 +1050,97 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       saga.counters['lore'] = total;
       emit({ type: 'countersChanged', objectId: saga.id, cardName: saga.card.name, counter: 'lore', delta: step.count, total });
       emit({ type: 'loreAdded', objectId: saga.id, cardName: saga.card.name, total });
+      return;
+    }
+
+    case 'playHideaway': {
+      const src = state.objects[ctx.sourceId];
+      const hidden = src?.hideawayCard !== undefined ? state.objects[src.hideawayCard] : undefined;
+      if (!hidden || hidden.zone !== 'exile') return;
+      if (hidden.card.types.includes('Land')) {
+        hidden.exiledAs = undefined;
+        moveWithEvent(state, hidden, 'battlefield', 'resolved', emit);
+        return;
+      }
+      castCardFree(state, hidden, ctx.controller, emit, 'esconderijo');
+      return;
+    }
+
+    case 'hauntExile': {
+      const [t] = resolveSubject(ctx, step.what);
+      const target = t?.kind === 'object' ? state.objects[t.id] : undefined;
+      const src = state.objects[ctx.sourceId];
+      if (!src || !target || target.zone !== 'battlefield' || (src.zone !== 'graveyard' && src.zone !== 'battlefield')) return;
+      moveWithEvent(state, src, 'exile', 'exiled', emit);
+      src.exiledAs = 'haunting';
+      src.haunting = target.id;
+      emit({ type: 'hauntExiled', cardName: src.card.name, hauntedName: target.card.name });
+      return;
+    }
+
+    case 'becomeMonarch':
+      for (const p of resolveWho(ctx, step.who)) {
+        if (state.monarch === p) continue;
+        state.monarch = p;
+        emit({ type: 'monarchChanged', player: p });
+      }
+      return;
+
+    case 'takeInitiative':
+      for (const p of resolveWho(ctx, step.who)) {
+        if (state.initiative !== p) {
+          state.initiative = p;
+          emit({ type: 'initiativeChanged', player: p });
+        }
+        emit({ type: 'ventureRequested', player: p, sourceId: ctx.sourceId, dungeon: 'Undercity' });
+      }
+      return;
+
+    case 'venture':
+      emit({ type: 'ventureRequested', player: ctx.controller, sourceId: ctx.sourceId });
+      return;
+
+    case 'ventureTo': {
+      const ps = state.players[ctx.controller];
+      const dungeon = DUNGEONS.find((d) => d.name === step.dungeon);
+      const room = dungeon?.rooms[step.room];
+      if (!dungeon || !room) return;
+      const completed = room.next.length === 0;
+      ps.dungeon = completed ? undefined : { name: dungeon.name, room: step.room };
+      if (completed) ps.completedDungeons += 1;
+      emit({ type: 'ventured', player: ctx.controller, dungeon: dungeon.name, room: room.name, completed, note: room.note });
+      return;
+    }
+
+    case 'armDredge': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || src.zone !== 'graveyard') return;
+      state.players[ctx.controller].dredgeNext = src.id;
+      emit({ type: 'fizzled', description: `${src.card.name}: dragar ${step.count} substituirá a próxima compra de ${state.players[ctx.controller].name}` });
+      return;
+    }
+
+    case 'impulse': {
+      const ps = state.players[ctx.controller];
+      for (let i = 0; i < step.count; i++) {
+        const top = ps.zones.library[0];
+        if (top === undefined) break;
+        const o = state.objects[top];
+        moveWithEvent(state, o, 'exile', 'exiled', emit);
+        o.exiledAs = 'playable';
+        o.playableUntilTurn = state.turn;
+      }
+      return;
+    }
+
+    case 'goad': {
+      const [t] = resolveSubject(ctx, step.what);
+      const obj = t?.kind === 'object' ? objectAlive(state, t) : null;
+      if (!obj || obj.zone !== 'battlefield') return;
+      // Two players: goaded = must attack on its controller's next turn; "can't attack until your next turn" shares the flag.
+      if (obj.controller === ctx.controller) obj.cantAttackUntilTurn = state.turn + 1;
+      else obj.goadedUntilTurn = state.turn + 1;
+      emit({ type: 'fizzled', description: `${obj.card.name} foi ${obj.controller === ctx.controller ? 'impedida de atacar' : 'provocada'} até o próximo turno de ${state.players[ctx.controller].name}` });
       return;
     }
 

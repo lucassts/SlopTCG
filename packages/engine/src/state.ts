@@ -66,8 +66,22 @@ export interface GameObject {
   castMethod?: import('./cards/types.js').CastMethod['kind'] | 'suspend';
   buybackPaid?: boolean;
   kickerTimes?: number;
-  /** Why it sits in exile face down / waiting (foretell, plot, suspend, rebound, warp, madness). */
-  exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness';
+  /** Why it sits in exile face down / waiting (foretell, plot, suspend, rebound, warp, madness, cipher, haunting, hideaway, playable). */
+  exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness' | 'cipher' | 'haunting' | 'hideaway' | 'playable';
+  /** Miracle: just drawn as the first card this turn — castable for its miracle cost right now. */
+  miracleAvailable?: boolean;
+  /** Cipher: creature this exiled spell is encoded on. */
+  encodedOn?: number;
+  /** Haunt: creature this exiled card haunts. */
+  haunting?: number;
+  /** Hideaway: the card this permanent exiled face down. */
+  hideawayCard?: number;
+  /** Impulse ("you may play it this turn"): last turn it can be played from exile. */
+  playableUntilTurn?: number;
+  /** Goad: must attack while turn ≤ this. */
+  goadedUntilTurn?: number;
+  /** "Can't attack until your next turn" (Twisted Caverns). */
+  cantAttackUntilTurn?: number;
   /** Turn it was foretold/plotted (can't be cast the same turn / only as sorcery). */
   exiledOnTurn?: number;
   /** Bestow: on the battlefield as an Aura (not a creature while attached). */
@@ -168,6 +182,13 @@ export interface PlayerState {
   manaPool: ManaPool;
   /** Firebending: mana that survives step changes until the end of combat. */
   stickyPool?: ManaPool;
+  /** Cards drawn this turn (miracle: the first one). */
+  drawsThisTurn: number;
+  /** Dredge: graveyard card armed to replace the next draw. */
+  dredgeNext?: number;
+  /** Dungeon the player is currently in, and the room index. */
+  dungeon?: { name: string; room: number };
+  completedDungeons: number;
   landsPlayedThisTurn: number;
   zones: Record<Exclude<ZoneName, 'stack'>, number[]>;
 }
@@ -291,6 +312,10 @@ export interface GameState {
   combatDamageThisTurn: boolean;
   /** Creature subtypes that dealt combat damage to a player this turn (freerunning). */
   combatDamageSubtypesThisTurn?: string[];
+  /** Creatures declared as attackers this turn (Windbrisk Heights). */
+  attackersThisTurn?: number;
+  monarch?: PlayerId;
+  initiative?: PlayerId;
   status: 'playing' | 'finished';
   winner?: PlayerId | 'draw';
 }
@@ -335,6 +360,8 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
       life: STARTING_LIFE,
       poison: 0,
       energy: 0,
+      drawsThisTurn: 0,
+      completedDungeons: 0,
       manaPool: emptyManaPool(),
       landsPlayedThisTurn: 0,
       zones: { library: [], hand: [], battlefield: [], graveyard: [], exile: [] },
@@ -474,6 +501,9 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
         .map((id) => state.objects[id])
         .filter((o) => matchFilter({ controller: source.controller, sourceId: source.id, state }, cond.filter, o)).length >= cond.count;
     case 'hasCounter': return (source.counters[cond.counter] ?? 0) > 0;
+    case 'isMonarch': return state.monarch === source.controller;
+    case 'hasInitiative': return state.initiative === source.controller;
+    case 'completedDungeon': return state.players[source.controller].completedDungeons > 0;
   }
 }
 

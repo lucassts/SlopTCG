@@ -5,6 +5,7 @@
 import type { CardDefinition } from './cards/types.js';
 import { effectivePower, effectiveToughness, type GameState, type GameObject } from './state.js';
 import { opponentOf, PLAYER_IDS, type ManaPool, type PlayerId, type Step, type TargetChoice } from './types.js';
+import { DUNGEONS } from './dungeons.js';
 
 export interface CardView {
   objectId: number;
@@ -30,6 +31,10 @@ export interface CardView {
   exiledAs?: string;
   /** Attacker was blocked this combat (ninjutsu needs an unblocked one). */
   wasBlocked?: boolean;
+  /** Miracle: castable for its miracle cost right now. */
+  miracleAvailable?: boolean;
+  /** Impulse: playable from exile this turn. */
+  playableNow?: boolean;
 }
 
 export type PendingDecisionView =
@@ -71,6 +76,11 @@ export interface PlayerView {
   life: number;
   poison: number;
   energy: number;
+  /** Dungeon exploration (AFR): current dungeon and room, dungeons completed. */
+  dungeon?: { name: string; room: string };
+  completedDungeons: number;
+  /** A dredge card is armed to replace the next draw. */
+  dredgeArmed?: string;
   manaPool: ManaPool;
   librarySize: number;
   handSize: number;
@@ -91,6 +101,8 @@ export interface GameView {
   activePlayer: PlayerId;
   priority: PlayerId | null;
   combatAwaiting: 'attackers' | 'blockers' | null;
+  monarch?: PlayerId;
+  initiative?: PlayerId;
   pendingDecision: PendingDecisionView | null;
   /** Non-null while opening hands are being decided. */
   mulligan: { taken: Record<PlayerId, number>; phase: Record<PlayerId, 'deciding' | 'kept'> } | null;
@@ -155,6 +167,8 @@ function cardView(state: GameState, obj: GameObject, viewer?: PlayerId): CardVie
     crewed: !!obj.crewedUntilEot,
     exiledAs: obj.exiledAs,
     wasBlocked: obj.wasBlocked || undefined,
+    miracleAvailable: obj.miracleAvailable || undefined,
+    playableNow: obj.exiledAs === 'playable' && obj.playableUntilTurn === state.turn ? true : undefined,
     summoningSick: obj.summoningSick,
     isToken: obj.isToken,
   };
@@ -170,6 +184,9 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       life: p.life,
       poison: p.poison,
       energy: p.energy,
+      dungeon: p.dungeon ? { name: p.dungeon.name, room: DUNGEONS.find((d) => d.name === p.dungeon!.name)?.rooms[p.dungeon.room]?.name ?? '' } : undefined,
+      completedDungeons: p.completedDungeons,
+      dredgeArmed: p.dredgeNext !== undefined ? state.objects[p.dredgeNext]?.card.name : undefined,
       manaPool: p.manaPool,
       librarySize: p.zones.library.length,
       handSize: p.zones.hand.length,
@@ -185,7 +202,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       exile: p.zones.exile.map((id) => {
         const o = state.objects[id];
         const cv = cardView(state, o);
-        return o.exiledAs && (o.exiledAs === 'foretold' || o.exiledAs === 'plotted') && viewer !== o.owner ? { ...cv, card: FACE_DOWN_CARD, exiledAs: 'oculta' } : cv;
+        return o.exiledAs && (o.exiledAs === 'foretold' || o.exiledAs === 'plotted' || o.exiledAs === 'hideaway') && viewer !== o.owner ? { ...cv, card: FACE_DOWN_CARD, exiledAs: 'oculta' } : cv;
       }),
     };
   }
@@ -196,6 +213,8 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
     activePlayer: state.activePlayer,
     priority: state.priority,
     combatAwaiting: state.combatAwaiting,
+    monarch: state.monarch,
+    initiative: state.initiative,
     pendingDecision: pendingDecisionView(state, viewer),
     mulligan: state.mulligan,
     starter: state.starter,

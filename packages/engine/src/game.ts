@@ -21,8 +21,10 @@ import { canPay, costCmc, parseCost, planPayment } from './mana.js';
 import { castCardFree } from './effects.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
+import { DUNGEONS } from './dungeons.js';
 import {
   abilityActive,
+  staticConditionHolds,
   createGameState,
   currentLevel,
   effectivePower,
@@ -224,6 +226,9 @@ export class Game {
     this.buf = [];
     this.triggerCursor = 0;
     const s = this.state;
+    // Miracle: the window closes as soon as its owner does anything else.
+    if (action.type !== 'chat' && !(action.type === 'castSpell' && action.method === 'miracle'))
+      for (const id of s.players[playerId].zones.hand) s.objects[id].miracleAvailable = undefined;
 
     if (s.status === 'finished' && action.type !== 'chat') {
       return this.fail(playerId, 'a partida já terminou');
@@ -306,6 +311,7 @@ export class Game {
           entwine: action.entwine,
           discards: action.discards,
           attackerId: action.attackerId,
+          replicateTimes: action.replicateTimes,
         });
       case 'turnFaceUp':
         return this.doTurnFaceUp(playerId, action.objectId);
@@ -401,10 +407,12 @@ export class Game {
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
     const obj = s.objects[objectId];
-    if (!obj || obj.zone !== 'hand' || obj.owner !== playerId)
+    const playableFromExile = !!obj && obj.zone === 'exile' && obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn;
+    if (!obj || (obj.zone !== 'hand' && !playableFromExile) || obj.owner !== playerId)
       { this.fail(playerId, 'carta inválida'); return false; }
     if (!obj.card.types.includes('Land'))
       { this.fail(playerId, 'isso não é um terreno'); return false; }
+    obj.exiledAs = undefined;
     if (!this.sorceryTiming(playerId))
       { this.fail(playerId, 'terrenos só podem ser jogados na sua fase principal com a pilha vazia'); return false; }
     const extraLands = s.players[playerId].zones.battlefield.reduce((n, id) => n + (s.objects[id].card.extraLands ?? 0), 0);
@@ -553,6 +561,7 @@ export class Game {
       entwine?: boolean;
       discards?: number[];
       attackerId?: number;
+      replicateTimes?: number;
     } = {},
   ): boolean {
     const s = this.state;
@@ -604,12 +613,17 @@ export class Game {
     }
     if (extra.entwine && (!card.entwine || !card.spellModes))
       { this.fail(playerId, 'essa mágica não tem entwine'); return false; }
+    if (method === 'miracle' && !obj.miracleAvailable)
+      { this.fail(playerId, 'milagre: só no momento em que é a primeira carta comprada no turno'); return false; }
+    const viaImpulse = obj.zone === 'exile' && obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn && !method;
+    const replicateTimes = Math.max(0, extra.replicateTimes ?? 0);
+    if (replicateTimes > 0 && !card.replicate) { this.fail(playerId, 'essa mágica não tem replicar'); return false; }
     if (viaExile) {
       if (obj.zone !== 'exile' || (method === 'warp' ? obj.exiledAs !== 'warped' : obj.exiledAs !== method))
         { this.fail(playerId, 'essa carta não está exilada para isso'); return false; }
       if (obj.exiledOnTurn === s.turn && method !== 'warp')
         { this.fail(playerId, 'não pode ser conjurada no mesmo turno em que foi exilada'); return false; }
-    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard) {
+    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse) {
       { this.fail(playerId, 'carta inválida'); return false; }
     }
     if (kicked && !card.kicker)
@@ -624,7 +638,7 @@ export class Game {
       { this.fail(playerId, 'surge: você precisa ter conjurado outra mágica neste turno'); return false; }
     if ((cm?.kind === 'prowl' || cm?.kind === 'spectacle') && !s.combatDamageThisTurn)
       { this.fail(playerId, `${cm.kind}: precisa ter causado dano de combate neste turno`); return false; }
-    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak';
+    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak' || method === 'miracle';
     if (!isInstant && !this.sorceryTiming(playerId))
       { this.fail(playerId, 'só pode ser conjurada na sua fase principal com a pilha vazia'); return false; }
 
@@ -770,6 +784,14 @@ export class Game {
         cost.colorless += en.colorless;
         cost.colored.push(...en.colored);
       }
+      if (replicateTimes > 0 && card.replicate) {
+        const rp = parseCost(card.replicate);
+        for (let i = 0; i < replicateTimes; i++) {
+          cost.generic += rp.generic;
+          cost.colorless += rp.colorless;
+          cost.colored.push(...rp.colored);
+        }
+      }
       if (cost.xCount > 0) {
         if (x === undefined || !Number.isInteger(x) || x < 0)
           { this.fail(playerId, 'escolha um valor de X'); return false; }
@@ -844,6 +866,7 @@ export class Game {
     obj.buybackPaid = !!extra.buyback;
     obj.faceDown = !!extra.faceDown;
     obj.exiledAs = undefined;
+    obj.miracleAvailable = undefined;
     obj.castX = xValue;
     if (fromHand && card.rebound) obj.castMethod = obj.castMethod ?? undefined, (obj as GameObject & { reboundFromHand?: boolean }).reboundFromHand = true;
     const description =
@@ -871,8 +894,8 @@ export class Game {
       sacrificedPower,
       flashback: viaFlashback,
     });
-    // Storm: one copy per spell cast earlier this turn (they resolve first).
-    const copies = card.storm ? s.spellsCastThisTurn : 0;
+    // Storm: one copy per spell cast earlier this turn (they resolve first). Replicate: one copy per extra payment.
+    const copies = (card.storm ? s.spellsCastThisTurn : 0) + replicateTimes;
     s.spellsCastThisTurn += 1;
     for (let i = 0; i < copies; i++) {
       s.stack.push({
@@ -1055,7 +1078,7 @@ export class Game {
       { this.fail(playerId, `${obj.card.name}: essa habilidade só funciona ${ability.zone === 'graveyard' ? 'do cemitério' : ability.zone === 'hand' ? 'da mão' : 'no campo de batalha'}`); return false; }
 
     // Mana abilities may be activated at any time; others need priority.
-    if (!ability.isManaAbility) {
+    if (!ability.isManaAbility && !ability.immediate) {
       const err = this.requirePriority(playerId);
       if (err) { this.fail(playerId, err); return false; }
       if (ability.sorceryOnly && !this.sorceryTiming(playerId))
@@ -1064,16 +1087,27 @@ export class Game {
       { this.fail(playerId, 'agora não'); return false; }
     }
 
-    // Metalcraft-style activation condition.
+    // Metalcraft-style / hideaway activation conditions.
     if (ability.condition) {
-      const req = ability.condition.controlsAtLeast;
-      const have = s.players[playerId].zones.battlefield
-        .map((id) => s.objects[id])
-        .filter((o) => matchFilter({ controller: playerId, sourceId: obj.id }, req.filter, o)).length;
-      if (have < req.count) {
-        this.fail(playerId, `${obj.card.name}: requer ${req.count} ${req.filter.what ?? 'permanente'}(s) — você controla ${have}`);
-        return false;
+      const c = ability.condition;
+      if (c.controlsAtLeast) {
+        const req = c.controlsAtLeast;
+        const have = s.players[playerId].zones.battlefield
+          .map((id) => s.objects[id])
+          .filter((o) => matchFilter({ controller: playerId, sourceId: obj.id }, req.filter, o)).length;
+        if (have < req.count) {
+          this.fail(playerId, `${obj.card.name}: requer ${req.count} ${req.filter.what ?? 'permanente'}(s) — você controla ${have}`);
+          return false;
+        }
       }
+      if (c.libraryAtMost !== undefined && !PLAYER_IDS.some((p) => s.players[p].zones.library.length <= c.libraryAtMost!))
+        { this.fail(playerId, `${obj.card.name}: só se uma biblioteca tiver ${c.libraryAtMost} cartas ou menos`); return false; }
+      if (c.attackedWithAtLeast !== undefined && (s.attackersThisTurn ?? 0) < c.attackedWithAtLeast)
+        { this.fail(playerId, `${obj.card.name}: só se você atacou com ${c.attackedWithAtLeast} ou mais criaturas neste turno`); return false; }
+      if (c.completedDungeon && s.players[playerId].completedDungeons === 0)
+        { this.fail(playerId, `${obj.card.name}: só se você completou uma masmorra`); return false; }
+      if (c.isMonarch && s.monarch !== playerId)
+        { this.fail(playerId, `${obj.card.name}: só se você for o monarca`); return false; }
     }
 
     // "Add one mana of any color": the activation must carry the color.
@@ -1166,11 +1200,12 @@ export class Game {
     if (ability.cost.sacrificeSelf) moveWithEvent(s, obj, 'graveyard', 'sacrificed', this.emit);
     if (ability.exileSelf && obj.zone === 'graveyard') moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
 
-    if (ability.isManaAbility) {
+    if (ability.isManaAbility || ability.immediate) {
       runEffectScript(
         { state: s, controller: playerId, sourceId: obj.id, sourceName: obj.card.name, targets, chosenMana: manaColor, emit: this.emit },
         ability.effect,
       );
+      if (ability.immediate) return true;
       // A tap for mana can be undone until the mana is spent or priority
       // moves — but never when other costs were paid (sacrifice, life).
       if (ability.cost.tap && !ability.cost.sacrificeSelf && !ability.cost.sacrifice && !ability.cost.payLife) {
@@ -1304,7 +1339,7 @@ export class Game {
     // "Attacks each combat if able": must be among the attackers when it can.
     for (const id of s.players[playerId].zones.battlefield) {
       const obj = s.objects[id];
-      if (hasKeyword(s, obj, 'mustAttack') && canAttack(s, obj) === null && !attackerIds.includes(id))
+      if ((hasKeyword(s, obj, 'mustAttack') || (obj.goadedUntilTurn ?? -1) >= s.turn) && canAttack(s, obj) === null && !attackerIds.includes(id))
         { this.fail(playerId, `${obj.card.name} precisa atacar este combate`); return false; }
     }
     // Optional: attack a defender's planeswalker instead of the player.
@@ -1656,6 +1691,11 @@ export class Game {
         return;
       }
       case 'end': {
+        // The monarch draws a card at the beginning of their end step.
+        if (s.monarch === s.activePlayer) {
+          draw(s, s.activePlayer, this.emit);
+          this.emit({ type: 'fizzled', description: `${s.players[s.activePlayer].name} comprou uma carta por ser o monarca` });
+        }
         this.fireStepTriggers('endStep');
         this.runDelayed('endStep');
         s.priority = s.activePlayer;
@@ -1723,9 +1763,10 @@ export class Game {
         delete obj.counters['__regen']; // regeneration shields expire
       }
     }
-    for (const p of PLAYER_IDS) s.players[p].damagedThisTurn = false;
+    for (const p of PLAYER_IDS) { s.players[p].damagedThisTurn = false; s.players[p].drawsThisTurn = 0; }
     s.combatDamageThisTurn = false;
     s.combatDamageSubtypesThisTurn = undefined;
+    s.attackersThisTurn = 0;
     // "Until end of turn" control effects wear off (Act of Treason).
     for (const revert of s.controlReverts) {
       const obj = s.objects[revert.objectId];
@@ -1895,6 +1936,9 @@ export class Game {
           s.delayed.push({ at: 'nextUpkeep', player: item.controller, objectId: obj.id, action: 'castFree' });
         } else moveWithEvent(s, obj, item.flashback || obj.card.exileOnResolve ? 'exile' : 'graveyard', 'resolved', this.emit);
         (obj as GameObject & { reboundFromHand?: boolean }).reboundFromHand = false;
+        // Haunt (spell): after resolving, exile it haunting target creature.
+        if (obj.card.haunt && (obj.zone as string) === 'graveyard')
+          this.pushTrigger(obj, { text: 'assombrar', targets: [{ what: 'creature' }], effect: [{ op: 'hauntExile', what: 'target:0' }] });
       }
       return;
     }
@@ -1929,8 +1973,17 @@ export class Game {
       if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'tokenCreated') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'landPlayed') this.fireZoneTriggers(ev.objectId, 'etb'); // landfall
-      if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.to === 'graveyard')
+      if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.to === 'graveyard') {
         this.fireZoneTriggers(ev.objectId, 'dies');
+        // Haunt: cards in exile haunting this creature trigger, then stop haunting.
+        for (const h of Object.values(this.state.objects)) {
+          if (h.zone !== 'exile' || h.haunting !== ev.objectId) continue;
+          h.haunting = undefined;
+          for (const ability of h.card.abilities ?? [])
+            if (ability.kind === 'triggered' && ability.trigger.on === 'hauntedDies') this.pushTrigger(h, ability);
+        }
+      }
+      if (ev.type === 'attackersDeclared') this.state.attackersThisTurn = (this.state.attackersThisTurn ?? 0) + ev.attackers.length;
       if (ev.type === 'attackersDeclared') {
         for (const a of ev.attackers) this.fireSelfTrigger(a.objectId, 'attacks');
         if (ev.attackers.length > 0) this.fireControllerTriggers(ev.player, 'youAttack');
@@ -2007,8 +2060,23 @@ export class Game {
           this.pushTrigger(o!, ability);
         }
       }
-      if (ev.type === 'cardDrawn') this.fireControllerTriggers(ev.player, 'youDrawCard');
+      if (ev.type === 'cardDrawn') {
+        this.fireControllerTriggers(ev.player, 'youDrawCard');
+        // Miracle: the first card drawn this turn may be cast for its miracle cost right now.
+        const drawn = this.state.objects[ev.objectId];
+        const miracle = drawn?.card.castMethods?.find((m) => m.kind === 'miracle');
+        if (drawn && miracle && drawn.zone === 'hand' && this.state.players[ev.player].drawsThisTurn === 1) {
+          drawn.miracleAvailable = true;
+          this.emit({ type: 'miracleRevealed', player: ev.player, objectId: drawn.id, cardName: drawn.card.name, cost: miracle.cost });
+        }
+      }
       if (ev.type === 'loreAdded') this.fireChapter(ev.objectId, ev.total);
+      if (ev.type === 'ventureRequested') this.handleVenture(ev.player, ev.sourceId, ev.dungeon);
+      if (ev.type === 'monarchChanged') this.fireControllerTriggers(ev.player, 'youBecomeMonarch');
+      if (ev.type === 'ventured') {
+        this.fireControllerTriggers(ev.player, 'youVenture');
+        if (ev.completed) this.fireControllerTriggers(ev.player, 'youCompleteDungeon');
+      }
       if (ev.type === 'exploited') {
         const o = this.state.objects[ev.objectId];
         if (o && o.zone === 'battlefield')
@@ -2042,6 +2110,19 @@ export class Game {
           const s3 = this.state;
           s3.combatDamageSubtypesThisTurn = [...new Set([...(s3.combatDamageSubtypesThisTurn ?? []), ...atk.card.subtypes])];
           if (atk.card.ingest) this.pushTrigger(atk, { text: 'ingerir', effect: [{ op: 'exileTop', who: 'opponent', count: 1 }] });
+          // Monarch / initiative pass to whoever dealt the combat damage.
+          if (s3.monarch === ev.player && atk.controller !== ev.player) { s3.monarch = atk.controller; this.emit({ type: 'monarchChanged', player: atk.controller }); }
+          if (s3.initiative === ev.player && atk.controller !== ev.player) {
+            s3.initiative = atk.controller;
+            this.emit({ type: 'initiativeChanged', player: atk.controller });
+            this.emit({ type: 'ventureRequested', player: atk.controller, sourceId: atk.id, dungeon: 'Undercity' });
+          }
+          // Cipher: cast a copy of each spell encoded on this creature.
+          for (const enc of Object.values(s3.objects)) {
+            if (enc.zone !== 'exile' || enc.exiledAs !== 'cipher' || enc.encodedOn !== atk.id) continue;
+            const effect = (enc.card.spellEffect ?? []).filter((st) => st.op !== 'cipherEncode');
+            this.pushTrigger(atk, { text: `cifra: ${enc.card.name}`, targets: enc.card.spellTargets, effect: [{ op: 'mayDo', prompt: `conjurar uma cópia de ${enc.card.name} de graça?`, effect }] });
+          }
         }
         if (atk?.card.renown && !atk.renowned && atk.zone === 'battlefield') {
           atk.renowned = true;
@@ -2147,8 +2228,41 @@ export class Game {
       this.pushTrigger(obj, { text: 'vida após a morte', effect: [{ op: 'token', who: 'controller', count: card.afterlife, name: 'Spirit', power: 1, toughness: 1, colors: ['W', 'B'], subtypes: ['Spirit'], keywords: ['flying'] }] });
   }
 
+  /** Venture into the dungeon: pick the dungeon (first room) or the next room; room effects run as a trigger. */
+  private handleVenture(player: PlayerId, sourceId: number, forced?: string): void {
+    const s = this.state;
+    const ps = s.players[player];
+    const src = s.objects[sourceId] ?? Object.values(s.objects).find((o) => o.owner === player);
+    if (!src) return;
+    const roomMode = (d: import('./dungeons.js').Dungeon, i: number) => {
+      const room = d.rooms[i];
+      return { label: `${d.name} — ${room.name}`, targets: room.targets, effect: [{ op: 'ventureTo' as const, dungeon: d.name, room: i }, ...room.effect] };
+    };
+    let options: { label: string; targets?: TargetSpec[]; effect: import('./cards/types.js').EffectStep[] }[];
+    if (!ps.dungeon) {
+      const pool = forced ? DUNGEONS.filter((d) => d.name === forced) : DUNGEONS.filter((d) => d.name !== 'Undercity');
+      options = pool.map((d) => roomMode(d, 0));
+    } else {
+      const d = DUNGEONS.find((x) => x.name === ps.dungeon!.name);
+      if (!d) return;
+      options = d.rooms[ps.dungeon.room].next.map((i) => roomMode(d, i));
+    }
+    if (options.length === 0) return;
+    const trig = { text: 'aventurar-se na masmorra' };
+    if (options.length === 1) this.pushTriggerAs(src, player, { ...trig, targets: options[0].targets, effect: options[0].effect });
+    else this.pushTriggerAs(src, player, { ...trig, effect: [], modes: options });
+  }
+
+  /** pushTrigger with an explicit controller (venture sources may be cards in the graveyard). */
+  private pushTriggerAs(obj: GameObject, controller: PlayerId, ability: Parameters<Game['pushTrigger']>[1]): void {
+    const prev = obj.controller;
+    obj.controller = controller;
+    this.pushTrigger(obj, ability);
+    if (obj.zone !== 'battlefield') obj.controller = prev;
+  }
+
   /** Triggers on a player's permanents keyed on the player ("whenever you attack"). */
-  private fireControllerTriggers(player: PlayerId, on: 'youAttack' | 'youDrawCard'): void {
+  private fireControllerTriggers(player: PlayerId, on: 'youAttack' | 'youDrawCard' | 'youBecomeMonarch' | 'youVenture' | 'youCompleteDungeon'): void {
     const s = this.state;
     for (const id of [...s.players[player].zones.battlefield]) {
       const obj = s.objects[id];
@@ -2199,6 +2313,11 @@ export class Game {
   /** Echo, cumulative upkeep, vanishing, fading — as stack abilities of the active player's permanents. */
   private fireUpkeepKeywords(): void {
     const s = this.state;
+    // Initiative: its holder ventures into Undercity at the beginning of their upkeep.
+    if (s.initiative === s.activePlayer) {
+      const src = Object.values(s.objects).find((o) => o.owner === s.activePlayer);
+      if (src) this.emit({ type: 'ventureRequested', player: s.activePlayer, sourceId: src.id, dungeon: 'Undercity' });
+    }
     // Suspend: remove a time counter from each suspended card; at zero, cast it.
     for (const id of [...s.players[s.activePlayer].zones.exile]) {
       const obj = s.objects[id];
@@ -2251,11 +2370,13 @@ export class Game {
 
   private pushTrigger(
     obj: GameObject,
-    ability: { text: string; effect: StackItem['effect']; targets?: import('./cards/types.js').TargetSpec[]; modes?: import('./cards/types.js').SpellMode[] },
+    ability: { text: string; effect: StackItem['effect']; targets?: import('./cards/types.js').TargetSpec[]; modes?: import('./cards/types.js').SpellMode[]; condition?: import('./cards/types.js').StaticCondition },
     subjectId?: number,
     chapter?: number,
   ): void {
     const s = this.state;
+    // Intervening "if" ("…, if you're the monarch, …"): checked as it would trigger.
+    if (ability.condition && !staticConditionHolds(s, obj, ability.condition)) return;
     this.emit({
       type: 'abilityTriggered',
       player: obj.controller,

@@ -11,6 +11,23 @@ export type Emit = (ev: GameEvent) => void;
 
 export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
   const player = state.players[playerId];
+  player.drawsThisTurn += 1;
+  // Dredge: an armed graveyard card replaces this draw (mill N, return it) if the library allows.
+  if (player.dredgeNext !== undefined) {
+    const d = state.objects[player.dredgeNext];
+    const n = d?.card.dredge ?? 0;
+    player.dredgeNext = undefined;
+    if (d && d.zone === 'graveyard' && n > 0 && player.zones.library.length >= n) {
+      for (let i = 0; i < n; i++) {
+        const top = player.zones.library[0];
+        if (top === undefined) break;
+        moveWithEvent(state, state.objects[top], 'graveyard', 'milled', emit);
+      }
+      moveWithEvent(state, d, 'hand', 'returned', emit);
+      emit({ type: 'dredged', player: playerId, cardName: d.card.name, milled: n });
+      return;
+    }
+  }
   const topId = player.zones.library[0];
   if (topId === undefined) {
     // Drawing from an empty library loses the game (SBA, applied immediately).

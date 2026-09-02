@@ -69,6 +69,16 @@ export type GameEvent =
   | { type: 'exploited'; objectId: number; cardName: string; sacrificed: string }
   /** Saga: lore counters reached `total` (chapter abilities trigger from this). */
   | { type: 'loreAdded'; objectId: number; cardName: string; total: number }
+  | { type: 'miracleRevealed'; player: PlayerId; objectId: number; cardName: string; cost: string }
+  | { type: 'dredged'; player: PlayerId; cardName: string; milled: number }
+  | { type: 'monarchChanged'; player: PlayerId }
+  | { type: 'initiativeChanged'; player: PlayerId }
+  /** Internal hook: an effect asked its controller to venture (the engine picks dungeon/room). */
+  | { type: 'ventureRequested'; player: PlayerId; sourceId: number; dungeon?: string }
+  | { type: 'ventured'; player: PlayerId; dungeon: string; room: string; completed: boolean; note?: string }
+  | { type: 'hauntExiled'; cardName: string; hauntedName: string }
+  | { type: 'encoded'; cardName: string; creatureName: string }
+  | { type: 'hideawayExiled'; player: PlayerId; sourceName: string }
   /** An object became the target of a spell or ability (trigger hook). */
   | { type: 'targeted'; objectId: number; by: PlayerId }
   | { type: 'shuffled'; player: PlayerId }

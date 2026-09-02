@@ -154,6 +154,26 @@ export type EffectStep =
   | { op: 'unattach' }
   /** Sagas: add lore counters (chapter abilities trigger via the event). */
   | { op: 'addLore'; count: number }
+  /** (choice) Hideaway: look at the top N, exile one face down (linked to the source), rest to the bottom. */
+  | { op: 'hideaway'; count: number }
+  /** Play the card hidden away by the source without paying its cost. */
+  | { op: 'playHideaway' }
+  /** (choice) Cipher: after resolving, may exile the spell encoded on a creature you control. */
+  | { op: 'cipherEncode' }
+  /** Haunt: exile the source from the graveyard haunting the target creature. */
+  | { op: 'hauntExile'; what: SubjectRef }
+  | { op: 'becomeMonarch'; who: WhoSel }
+  | { op: 'takeInitiative'; who: WhoSel }
+  /** Venture into the dungeon (the engine asks which dungeon / which room). */
+  | { op: 'venture' }
+  /** Internal: move the controller to a dungeon room (room effects follow). */
+  | { op: 'ventureTo'; dungeon: string; room: number }
+  /** Dredge: the source (in the graveyard) replaces the controller's next draw. */
+  | { op: 'armDredge'; count: number }
+  /** "Exile the top N cards of your library. You may play them this turn." */
+  | { op: 'impulse'; count: number }
+  /** Goad: must attack (a player other than you) until your next turn. */
+  | { op: 'goad'; what: SubjectRef }
   /**
    * (choice) "Sacrifice ~ unless you pay {N}" / echo / cumulative upkeep:
    * the controller may pay the cost (per age counter when `perCounter`);
@@ -228,6 +248,8 @@ export type EffectStep =
       count: number;
       to: 'hand' | 'battlefield' | 'libraryTop';
       tapped?: boolean;
+      /** Undercity's throne: enters with counters. */
+      withCounters?: { counter: string; count: number };
     }
   /** Reanimation: move a (graveyard) target onto the battlefield. */
   | { op: 'returnToBattlefield'; what: SubjectRef; tapped?: boolean }
@@ -304,7 +326,12 @@ export type TriggerSpec =
   /** Saga chapter(s): fires when the lore counter total reaches one of these. */
   | { on: 'chapter'; chapters: number[] }
   /** Exploit: this creature sacrificed a creature via its exploit ability. */
-  | { on: 'exploits'; self: true };
+  | { on: 'exploits'; self: true }
+  /** Haunt: the creature this (exiled) card haunts dies. */
+  | { on: 'hauntedDies'; self: true }
+  | { on: 'youBecomeMonarch' }
+  | { on: 'youVenture' }
+  | { on: 'youCompleteDungeon' };
 
 /** Level up / Class: the ability works only within this level range. */
 export interface LevelGate {
@@ -317,6 +344,8 @@ export interface TriggeredAbility extends LevelGate {
   trigger: TriggerSpec;
   /** "When ~ enters, if it was kicked / the gift was promised / tribute wasn't paid, …". */
   requiresKicked?: boolean;
+  /** Intervening "if": "…, if you're the monarch, …" — checked when it would trigger. */
+  condition?: StaticCondition;
   /**
    * Targets chosen by the controller when the trigger goes on the stack
    * (Flametongue Kavu-style). If no legal target exists, the trigger is
@@ -362,8 +391,18 @@ export interface ActivatedAbility extends LevelGate {
   isManaAbility?: boolean;
   /** Equip-style: only during your main phase with an empty stack. */
   sorceryOnly?: boolean;
-  /** Metalcraft-style: activatable only while controlling ≥ count of filter. */
-  condition?: { controlsAtLeast: { count: number; filter: FilterSpec } };
+  /** Metalcraft-style / hideaway conditions: all present fields must hold. */
+  condition?: {
+    controlsAtLeast?: { count: number; filter: FilterSpec };
+    /** Shelldock Isle: "if a library has twenty or fewer cards in it". */
+    libraryAtMost?: number;
+    /** Windbrisk Heights: "if you attacked with three or more creatures this turn". */
+    attackedWithAtLeast?: number;
+    completedDungeon?: boolean;
+    isMonarch?: boolean;
+  };
+  /** Resolves immediately, like a mana ability (dredge arming). */
+  immediate?: boolean;
 }
 
 /** Planeswalker loyalty ability: sorcery speed, once per turn per walker. */
@@ -390,7 +429,10 @@ export type StaticCondition =
   /** Metalcraft & friends: you control ≥ count permanents matching the filter. */
   | { kind: 'controlsAtLeast'; count: number; filter: FilterSpec }
   /** Has a counter of this kind. */
-  | { kind: 'hasCounter'; counter: string };
+  | { kind: 'hasCounter'; counter: string }
+  | { kind: 'isMonarch' }
+  | { kind: 'hasInitiative' }
+  | { kind: 'completedDungeon' };
 
 export interface StaticAbility extends LevelGate {
   kind: 'static';
@@ -417,7 +459,9 @@ export interface CastMethod {
     | 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp'
     /** Leva 3: bestow (as an Aura), emerge (sacrifice a creature, reduced by its MV), mayhem (from graveyard the turn it was discarded),
      *  retrace (from graveyard discarding a land), freerunning, overload ("target" → "each"), sneak (ninjutsu for spells). */
-    | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak';
+    | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak'
+    /** Miracle: castable for this cost the moment it's the first card drawn this turn. */
+    | 'miracle';
   /** Mana cost of this method ('' = free). */
   cost: string;
   /** Escape: exile this many other cards from your graveyard. */
@@ -520,6 +564,16 @@ export interface CardDefinition {
   wardLife?: number;
   /** Sneak {cost}: creature spell cast during blockers by returning an unblocked attacker; enters tapped and attacking. */
   sneak?: string;
+  /** Dredge N: from the graveyard, replace your next draw by milling N and returning this. */
+  dredge?: number;
+  /** Replicate {cost}: pay any number of times when casting; one copy per payment. */
+  replicate?: string;
+  /** Cipher: may be exiled encoded on a creature after resolving; copies cast on combat damage. */
+  cipher?: boolean;
+  /** Haunt: exiled haunting a creature (creature: when it dies; spell: after resolving). */
+  haunt?: boolean;
+  /** Hideaway N. */
+  hideaway?: number;
   /** Blocking restrictions ("can't be blocked by more than one creature" / "except by three or more"). */
   maxBlockers?: number;
   minBlockers?: number;

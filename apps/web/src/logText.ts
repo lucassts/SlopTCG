@@ -150,6 +150,24 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${ev.cardName} explorou ${ev.sacrificed} (sacrificada).`;
     case 'loreAdded':
       return `${ev.cardName}: capítulo ${ev.total}.`;
+    case 'miracleRevealed':
+      return `${name(ev.player)} comprou ${ev.cardName} — milagre disponível por ${ev.cost}.`;
+    case 'dredged':
+      return `${name(ev.player)} dragou ${ev.cardName} (moeu ${ev.milled}).`;
+    case 'monarchChanged':
+      return `${name(ev.player)} é o monarca.`;
+    case 'initiativeChanged':
+      return `${name(ev.player)} tomou a iniciativa.`;
+    case 'ventureRequested':
+      return null;
+    case 'ventured':
+      return `${name(ev.player)} entrou em ${ev.dungeon} — ${ev.room}${ev.completed ? ' (masmorra completada!)' : ''}${ev.note ? ` [${ev.note}]` : ''}.`;
+    case 'hauntExiled':
+      return `${ev.cardName} agora assombra ${ev.hauntedName}.`;
+    case 'encoded':
+      return `${ev.cardName} foi codificada em ${ev.creatureName}.`;
+    case 'hideawayExiled':
+      return `${name(ev.player)} escondeu uma carta com ${ev.sourceName}.`;
     case 'handRevealed':
       return `${name(ev.player)} revelou a mão: ${ev.cards.length > 0 ? ev.cards.join(', ') : '(vazia)'}.`;
     case 'shuffled':

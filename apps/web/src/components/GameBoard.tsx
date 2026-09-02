@@ -99,6 +99,7 @@ interface Targeting {
   tapPick?: boolean;
   /** Entwine: every mode. */
   entwine?: boolean;
+  replicateTimes?: number;
 }
 
 /** A little menu of things a clicked card can do (cast / cycle / abilities…). */
@@ -360,6 +361,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           buyback: t.buyback,
           kickerTimes: t.kickerTimes,
           entwine: t.entwine,
+          replicateTimes: t.replicateTimes,
         });
       } else {
         // Ordem dos picks: cartas da mão (custo de descarte) → criatura a virar (station) → sacrifícios → alvos.
@@ -455,6 +457,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       }
       if (def.entwine && def.spellModes)
         opts.push({ label: `⚡ Conjurar — entwine ${def.entwine} (todos os modos)`, run: () => beginCast(cv, undefined, false, { entwine: true }) });
+      if (cv.miracleAvailable) {
+        const mir = def.castMethods?.find((m) => m.kind === 'miracle');
+        if (mir) opts.unshift({ label: `✨ Milagre! Conjurar por ${mir.cost}`, run: () => beginCast(cv, undefined, false, { method: 'miracle' }) });
+      }
       if (def.morph)
         opts.push({ label: `🔒 Conjurar virada para baixo {3} (${def.morph.disguise ? 'disfarce' : 'metamorfose'} ${def.morph.cost})`, run: () => onAction({ type: 'castSpell', objectId: cv.objectId, faceDown: true }) });
       if (def.suspend)
@@ -545,6 +551,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     } else if (def.kicker) kicked = confirm(`${def.name}: ${def.kicker.label ? `${def.kicker.label}?` : `pagar o kicker ${def.kicker.cost}?`}`);
     let buyback: boolean | undefined;
     if (def.buyback && !extra.method) buyback = confirm(`${def.name}: pagar buyback ${def.buyback} (volta para a mão)?`);
+    let replicateTimes: number | undefined;
+    if (def.replicate && !extra.method) {
+      const raw = prompt(`${def.name}: quantas vezes pagar replicar ${def.replicate}? (0 = nenhuma; cada uma cria uma cópia)`, '0');
+      if (raw === null) return;
+      replicateTimes = parseInt(raw, 10);
+      if (!Number.isInteger(replicateTimes) || replicateTimes < 0) return;
+    }
     // Custo adicional de sacrifício (Fling; flashback da Cabal Therapy; emerge; bargain):
     // escolhido como os primeiros "alvos".
     const fbSac = fromGraveyard ? def.flashback?.sacrifice : undefined;
@@ -570,11 +583,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               : def.spellTargets ?? [];
     const specs = [...handSpecs, ...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
       const label = handPickCount > 0 ? `${base} (escolha o terreno a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: handPickCount > 0 || undefined });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: handPickCount > 0 || undefined, replicateTimes });
     }
   };
 
@@ -804,6 +817,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         <strong>{opp.name}</strong>
         {opp.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {opp.poison}</span>}
         {opp.energy > 0 && <span className="zone-pill" title="Energia">⚡ {opp.energy}</span>}
+        {view.monarch === oppId && <span className="zone-pill" title="Monarca: compra uma carta no fim do turno">👑 monarca</span>}
+        {view.initiative === oppId && <span className="zone-pill" title="Iniciativa: aventura-se em Undercity na manutenção">🗡 iniciativa</span>}
+        {opp.dungeon && <span className="zone-pill" title={opp.dungeon.name}>🏰 {opp.dungeon.room}</span>}
+        {opp.completedDungeons > 0 && <span className="zone-pill" title="Masmorras completadas">🏆 {opp.completedDungeons}</span>}
         {view.activePlayer === oppId && <span className="zone-pill">turno dele</span>}
         <span className="zone-pill" title="Cartas na mão">✋ {opp.handSize}</span>
         <span className="zone-pill" title="Cartas na biblioteca">📚 {opp.librarySize}</span>
@@ -969,6 +986,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         </div>
         {me.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {me.poison}</span>}
         {me.energy > 0 && <span className="zone-pill" title="Energia">⚡ {me.energy}</span>}
+        {view.monarch === you && <span className="zone-pill" title="Monarca: você compra uma carta no fim do seu turno">👑 monarca</span>}
+        {view.initiative === you && <span className="zone-pill" title="Iniciativa: você se aventura em Undercity na sua manutenção">🗡 iniciativa</span>}
+        {me.dungeon && <span className="zone-pill" title={me.dungeon.name}>🏰 {me.dungeon.room}</span>}
+        {me.completedDungeons > 0 && <span className="zone-pill" title="Masmorras completadas">🏆 {me.completedDungeons}</span>}
+        {me.dredgeArmed && <span className="zone-pill" title="A próxima compra será substituída por dragar">♻ {me.dredgeArmed}</span>}
         <span className="zone-pill" title="Cartas na biblioteca">📚 {me.librarySize}</span>
         {me.libraryTop && <span className="zone-pill" title="Topo da sua biblioteca (revelado para você)">🔝 {me.libraryTop.card.name}</span>}
         <span
@@ -1488,6 +1510,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                         </button>
                       ) : null,
                     )}
+                  {zonePick.zone === 'exile' && zonePick.player === you && c.playableNow && myPriority && (
+                    c.card.types.includes('Land') ? (
+                      <button onClick={() => { setZonePick(null); onAction({ type: 'playLand', objectId: c.objectId }); }}>⛰ Jogar terreno (do exílio, este turno)</button>
+                    ) : (
+                      <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>✨ Conjurar {c.card.manaCost ?? ''} (do exílio, este turno)</button>
+                    )
+                  )}
                   {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs && (c.exiledAs === 'foretold' || c.exiledAs === 'plotted' || c.exiledAs === 'warped') && (
                     <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: c.exiledAs as CastMethodKind }); }}>
                       ⚡ Conjurar ({c.exiledAs === 'foretold' ? `prever ${c.card.castMethods?.find((m) => m.kind === 'foretold')?.cost ?? ''}` : c.exiledAs === 'plotted' ? 'tramada, de graça' : 'warp, de graça'})

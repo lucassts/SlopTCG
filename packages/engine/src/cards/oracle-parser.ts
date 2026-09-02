@@ -21,6 +21,7 @@ import type {
   EffectStep,
   FilterSpec,
   SpellMode,
+  StaticCondition,
   TargetSpec,
   TriggerSpec,
 } from './types.js';
@@ -387,6 +388,12 @@ function parseTargetedEffect(clause: string): Parsed | null {
   if (simple) return { steps: simple };
   // Energia: "You get {E}{E}" / "Target creature you control explores" / "~ explores".
   if ((m = clause.match(/^you get ((?:\{E\})+)$/i))) return { steps: [{ op: 'energy', who: 'controller', amount: m[1].split('{E}').length - 1 }] };
+  if (/^you become the monarch$/i.test(clause)) return { steps: [{ op: 'becomeMonarch', who: 'controller' }] };
+  if (/^you take the initiative$/i.test(clause)) return { steps: [{ op: 'takeInitiative', who: 'controller' }] };
+  if (/^venture into the dungeon$/i.test(clause)) return { steps: [{ op: 'venture' }] };
+  if (/^goad target creature$/i.test(clause)) return { steps: [{ op: 'goad', what: 'target:0' }], spec: { what: 'creature' } };
+  if (/^goad target creature (?:defending player|an opponent) controls$/i.test(clause)) return { steps: [{ op: 'goad', what: 'target:0' }], spec: { what: 'creature', controlledBy: 'opponent' } };
+  if (/^play the exiled card without paying its mana cost$/i.test(clause)) return { steps: [{ op: 'playHideaway' }] };
   if (/^(?:~|it) explores$/i.test(clause)) return { steps: [{ op: 'explore', what: 'self' }] };
   if (/^target creature you control explores$/i.test(clause)) return { steps: [{ op: 'explore', what: 'target:0' }], spec: { what: 'creature', controlledBy: 'you' } };
   if (/^target creature explores$/i.test(clause)) return { steps: [{ op: 'explore', what: 'target:0' }], spec: { what: 'creature' } };
@@ -607,6 +614,14 @@ function parseEffectText(text: string): { steps: EffectStep[]; spec?: TargetSpec
     text = m[3];
     if (!text.trim()) return { steps, spec };
   }
+  // Impulso: "Exile the top card of your library. You may play that card this turn." (duas frases acopladas).
+  if ((m = text.match(/^Exile the top (card|\w+ cards) of your library\. (?:You may play (?:that card|it|them|those cards) this turn|Until end of turn, you may play (?:that card|it|them|those cards))\.?\s*(.*)$/i))) {
+    const n = m[1] === 'card' ? 1 : num(m[1].replace(/ cards$/, ''));
+    if (n === null) return null;
+    steps.push({ op: 'impulse', count: n });
+    text = m[2];
+    if (!text.trim()) return { steps };
+  }
   const sentences = text.split(/\.\s+|\.$/).map((s) => s.trim()).filter(Boolean);
   if (sentences.length === 0) return null;
   let lastMayDo: Extract<EffectStep, { op: 'mayDo' }> | null = null;
@@ -760,6 +775,8 @@ interface ParseState {
   levelBand?: NonNullable<CardDefinition['levels']>[number];
   /** Class: level whose abilities are being read (2, 3…). */
   classLevel?: number;
+  /** Leva 3 (fechamento): dredge, replicate, cipher, haunt, hideaway. */
+  flags4: Partial<Pick<CardDefinition, 'dredge' | 'replicate' | 'cipher' | 'haunt' | 'hideaway'>>;
   tributeCount?: number;
   tributeEffect?: EffectStep[];
   giftEffect?: EffectStep[];
@@ -772,6 +789,20 @@ interface ParseState {
 }
 
 const ROMAN: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
+
+/** Hideaway play conditions ("if a library has twenty or fewer cards in it"…). */
+function parseHideawayCondition(text: string): NonNullable<Extract<AbilityDef, { kind: 'activated' }>['condition']> | null {
+  let m: RegExpMatchArray | null;
+  if ((m = text.match(/^a library has (\w+) or fewer cards in it$/i))) {
+    const n = num(m[1]) ?? ({ eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20 } as Record<string, number>)[m[1].toLowerCase()] ?? null;
+    return n === null ? null : { libraryAtMost: n };
+  }
+  if ((m = text.match(/^you attacked with (\w+) or more creatures this turn$/i))) { const n = num(m[1]); return n === null ? null : { attackedWithAtLeast: n }; }
+  if ((m = text.match(/^you control (\w+) or more (artifacts|creatures|lands|enchantments)$/i))) { const n = num(m[1]); return n === null ? null : { controlsAtLeast: { count: n, filter: { what: m[2].replace(/s$/, '').toLowerCase() as 'artifact', controlledBy: 'you' } } }; }
+  if (/^you've completed a dungeon$/i.test(text)) return { completedDungeon: true };
+  if (/^you're the monarch$/i.test(text)) return { isMonarch: true };
+  return null;
+}
 const ROMAN_RE = '(?:VIII|VII|VI|IV|IX|X|V|III|II|I)';
 
 /** Overload: rewrite a single-target spell effect as "each" (null if any step can't be converted). */
@@ -867,6 +898,11 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever you attack$/i.test(head)) return { trigger: { on: 'youAttack' } };
   if (/^Whenever ~ deals combat damage to a player$/i.test(head)) return { trigger: { on: 'combatDamageToPlayer', self: true } };
   if (/^When ~ exploits a creature$/i.test(head)) return { trigger: { on: 'exploits', self: true } };
+  if (/^When ~ enters or the creature it haunts dies$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'hauntedDies', self: true } };
+  if (/^When the creature (?:this card|~) haunts dies$/i.test(head)) return { trigger: { on: 'hauntedDies', self: true } };
+  if (/^Whenever you become the monarch$/i.test(head)) return { trigger: { on: 'youBecomeMonarch' } };
+  if (/^Whenever you venture into a dungeon$/i.test(head)) return { trigger: { on: 'youVenture' } };
+  if (/^Whenever you complete a dungeon$/i.test(head)) return { trigger: { on: 'youCompleteDungeon' } };
   const zoneTrigger = (on: 'etb' | 'dies', what: FilterSpec): TriggerSpec =>
     on === 'etb' ? { on: 'etb', what } : { on: 'dies', what };
   const selfTrigger = (on: 'etb' | 'dies'): TriggerSpec => (on === 'etb' ? { on: 'etb', self: true } : { on: 'dies', self: true });
@@ -1044,6 +1080,56 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if ((m = line.match(/^(Battle cry|Melee|Training|Dethrone|Ingest)$/i))) {
     const key = m[1].toLowerCase() === 'battle cry' ? 'battleCry' : m[1].toLowerCase();
     (st.flags3 as Record<string, boolean>)[key] = true;
+    return true;
+  }
+  // ---- Leva 3 (fechamento): dredge, miracle, replicate, cipher, haunt, hideaway, monarca/iniciativa/masmorras
+  if ((m = line.match(/^Dredge (\d+)$/i))) {
+    const n = parseInt(m[1], 10);
+    st.flags4.dredge = n;
+    st.abilities.push({ kind: 'activated', zone: 'graveyard', cost: {}, immediate: true, effect: [{ op: 'armDredge', count: n }], text: `Dragar ${n} (substitui a sua próxima compra: mói ${n} e volta para a mão)` });
+    return true;
+  }
+  if ((m = line.match(/^Miracle ((?:\{[^}]+\})+)$/i))) { st.castMethods.push({ kind: 'miracle', cost: m[1], label: `milagre ${m[1]}` }); return true; }
+  if ((m = line.match(/^Replicate ((?:\{[^}]+\})+)$/i))) { st.flags4.replicate = m[1]; return true; }
+  if (/^Cipher$/i.test(line)) { st.flags4.cipher = true; return true; }
+  if (/^Haunt$/i.test(line)) {
+    st.flags4.haunt = true;
+    if (!isSpell) st.abilities.push({ kind: 'triggered', trigger: { on: 'dies', self: true }, targets: [{ what: 'creature' }], effect: [{ op: 'hauntExile', what: 'target:0' }], text: 'Assombrar: ao morrer, exila assombrando uma criatura' });
+    return true;
+  }
+  if ((m = line.match(/^Hideaway (\d+)$/i))) {
+    const n = parseInt(m[1], 10);
+    st.flags4.hideaway = n;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, effect: [{ op: 'hideaway', count: n }], text: `Esconderijo ${n}` });
+    return true;
+  }
+  if ((m = line.match(/^((?:\{[^}]+\})+), \{T\}: You may play the exiled card without paying its mana cost if (.+)\.$/i))) {
+    const cond = parseHideawayCondition(m[2]);
+    if (!cond) return false;
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1], tap: true }, condition: cond, effect: [{ op: 'playHideaway' }], text: `${m[1]}, {T}: jogar a carta escondida de graça (se ${m[2]})` });
+    return true;
+  }
+  // "<estática> as long as you're the monarch / you have the initiative / you've completed a dungeon."
+  if ((m = line.match(/^(?:As long as (you're the monarch|you have the initiative|you've completed a dungeon), (.+)|(.+) as long as (you're the monarch|you have the initiative|you've completed a dungeon))\.$/i))) {
+    const condText = (m[1] ?? m[4]).toLowerCase();
+    const inner = (m[2] ?? m[3]).trim();
+    const cond: StaticCondition = condText.includes('monarch') ? { kind: 'isMonarch' } : condText.includes('initiative') ? { kind: 'hasInitiative' } : { kind: 'completedDungeon' };
+    let sm: RegExpMatchArray | null;
+    // "~ gets +N/+N (and has X)" / "~ has X" sobre a própria carta.
+    if ((sm = inner.match(/^(?:~|it) gets ([+-]\d+)\/([+-]\d+)(?: and has (\w[\w\s,]*?))?$/i)) || (sm = inner.match(/^(?:~|it) has (\w[\w\s,]*?)$/i))) {
+      const isPT = sm.length > 2 && sm[2] !== undefined;
+      const kwText = isPT ? sm[3] : sm[1];
+      const kws = kwText ? keywordList(kwText) : undefined;
+      if (kwText && !kws) return false;
+      st.abilities.push({ kind: 'static', selfOnly: true, filter: {}, condition: cond, power: isPT ? parseInt(sm[1], 10) : undefined, toughness: isPT ? parseInt(sm[2], 10) : undefined, keywords: kws ?? undefined, text: line });
+      return true;
+    }
+    const before = st.abilities.length;
+    const innerLine = inner.replace(/\.$/, '') + '.';
+    if (!parseLine(innerLine.charAt(0).toUpperCase() + innerLine.slice(1), st, isSpell, subtypes)) return false;
+    const added = st.abilities.slice(before);
+    if (added.length === 0 || added.some((a) => a.kind !== 'static')) return false;
+    for (const a of added) if (a.kind === 'static') a.condition = cond;
     return true;
   }
   if (/^You may look at the top card of your library any time\.$/i.test(line)) { st.revealTop = true; return true; }
@@ -1469,6 +1555,14 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     const header = parseTriggerHeader(m[1].trim());
     if (!header) return false;
     let body = m[2].trim();
+    // "If" interveniente: "…, if you're the monarch, …" → condição checada ao disparar.
+    let condition: StaticCondition | undefined;
+    const iv = body.match(/^if (you're the monarch|you have the initiative|you've completed a dungeon), (.+)$/i);
+    if (iv) {
+      const c = iv[1].toLowerCase();
+      condition = c.includes('monarch') ? { kind: 'isMonarch' } : c.includes('initiative') ? { kind: 'hasInitiative' } : { kind: 'completedDungeon' };
+      body = iv[2];
+    }
     // Pronomes referindo a própria permanente: "it deals/gets/gains" → "~ …".
     body = body.replace(/^it (deals|gets|gains) /i, '~ $1 ');
     const parsed = parseEffectText(body + '.');
@@ -1476,6 +1570,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     const ability: AbilityDef = {
       kind: 'triggered',
       trigger: header.trigger,
+      condition,
       targets: specsOf(parsed),
       effect: parsed.steps,
       text: m[2].trim(),
@@ -1599,6 +1694,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     multikicker: false,
     flags2: {},
     flags3: {},
+    flags4: {},
     levels: [],
     softNotes: [],
   };
@@ -1655,6 +1751,8 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     } else st.softNotes.push(`Overload ${st.overloadCost}`);
   }
   if (st.giftEffect || st.bargain) st.kickerCost = st.kickerCost ?? '';
+  // Cipher: after the spell's own effect, may encode it on a creature.
+  if (st.flags4.cipher && isSpell) st.spellEffect.push({ op: 'cipherEncode' });
 
   // Regra 305.6: terrenos básicos têm a habilidade de mana intrínseca — o
   // texto oracle deles é só lembrete entre parênteses (descartado acima).
@@ -1731,6 +1829,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags,
     ...st.flags2,
     ...st.flags3,
+    ...st.flags4,
     saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
     isClass: subtypes.includes('Class') || undefined,
     levels: st.levels.length > 0 ? st.levels : undefined,

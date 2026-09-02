@@ -36,7 +36,7 @@ export type PlayerAction =
       /** Alternative casting method (evoke, dash, blitz, escape, foretold…, or 'suspend' to exile with time counters). */
       method?:
         | 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp' | 'suspend'
-        | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak';
+        | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak' | 'miracle';
       /** Escape: graveyard cards exiled as part of the cost. */
       escapeExile?: number[];
       /** Morph/Disguise: cast face down as a 2/2 for {3}. */
@@ -51,6 +51,8 @@ export type PlayerAction =
       discards?: number[];
       /** Sneak: the unblocked attacker returned to hand. */
       attackerId?: number;
+      /** Replicate: how many extra times the replicate cost is paid (one copy each). */
+      replicateTimes?: number;
     }
   /** Morph: turn a face-down permanent face up by paying its morph cost. */
   | { type: 'turnFaceUp'; objectId: number }
