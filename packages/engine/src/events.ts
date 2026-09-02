@@ -62,6 +62,8 @@ export type GameEvent =
   | { type: 'crewed'; objectId: number; cardName: string; player: PlayerId }
   | { type: 'modeChosen'; player: PlayerId; cardName: string; mode: string }
   | { type: 'valueChosen'; player: PlayerId; cardName: string; value: string }
+  | { type: 'turnedFaceUp'; objectId: number; cardName: string; player: PlayerId }
+  | { type: 'cascaded'; player: PlayerId; cardName: string; hit: string | null }
   /** An object became the target of a spell or ability (trigger hook). */
   | { type: 'targeted'; objectId: number; by: PlayerId }
   | { type: 'shuffled'; player: PlayerId }

@@ -148,6 +148,32 @@ export type EffectStep =
   | { op: 'addChosenColorMana'; count?: number }
   /** (choice) Devour N: sacrifice any number of creatures, N counters each. */
   | { op: 'devour'; per: number }
+  /** Token copy of the source card (Embalm/Eternalize/Encore/Offspring/Squad). */
+  | {
+      op: 'tokenCopy';
+      count?: number;
+      /** Overrides: Embalm → white Zombie; Eternalize → 4/4 black Zombie; Offspring → 1/1. */
+      colors?: Color[];
+      addSubtype?: string;
+      power?: number;
+      toughness?: number;
+      keywords?: Keyword[];
+      /** Enters attacking (Encore) / sacrificed at end step / exiled at end step. */
+      attacking?: boolean;
+      sacrificeAtEnd?: boolean;
+      exileAtEnd?: boolean;
+    }
+  /** Unearth: return the source from the graveyard with haste; exile at end step or if it would leave. */
+  | { op: 'unearth' }
+  /** Put +1/+1 counters equal to the source card's power on the target (Scavenge). */
+  | { op: 'putPowerCounters'; what: SubjectRef }
+  /** Schedule the source to be exiled / sacrificed / returned to hand at the next end step. */
+  | { op: 'delayed'; at: 'endStep'; action: 'exile' | 'sacrifice' | 'returnToHand' }
+  /** Foretell / Plot: exile the source from hand face down to be cast later. */
+  | { op: 'exileFromHandForLater'; mode: 'foretold' | 'plotted' }
+  /** Madness: pay the cost and cast the source (in exile) for free; otherwise it goes to the graveyard. */
+  | { op: 'castSelfForCost'; cost: string }
+  | { op: 'selfToGraveyard' }
   | { op: 'pump'; what: SubjectRef; power: number; toughness: number; keywords?: Keyword[] }
   /** Permanent +1/+1 or -1/-1 (or named) counters. */
   | { op: 'putCounters'; what: SubjectRef; counter: string; count: DynAmount }
@@ -260,6 +286,10 @@ export interface TriggeredAbility {
 
 export interface ActivatedAbility {
   kind: 'activated';
+  /** Where the card must be to activate (default battlefield): Unearth/Scavenge/Embalm from the graveyard, Foretell from hand. */
+  zone?: 'battlefield' | 'graveyard' | 'hand';
+  /** Graveyard abilities that exile the card as a cost (Scavenge, Embalm, Eternalize, Encore). */
+  exileSelf?: boolean;
   cost: {
     tap?: boolean;
     mana?: string;
@@ -326,6 +356,16 @@ export interface StaticAbility {
 }
 
 export type AbilityDef = TriggeredAbility | ActivatedAbility | StaticAbility | LoyaltyAbility;
+
+/** One alternative way to cast a card (Evoke, Dash, Blitz, Escape, Surge, Prowl, Spectacle, Foretell, Plot, Warp). */
+export interface CastMethod {
+  kind: 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp';
+  /** Mana cost of this method ('' = free). */
+  cost: string;
+  /** Escape: exile this many other cards from your graveyard. */
+  exileFromGraveyard?: number;
+  label: string;
+}
 
 /** One mode of a modal spell ("Choose one —"). */
 export interface SpellMode {
@@ -398,6 +438,35 @@ export interface CardDefinition {
    * and/or exile matching cards from your hand.
    */
   altCost?: { payLife?: number; exileFromHand?: { count: number; filter: FilterSpec }; label: string };
+  /**
+   * Alternative casting methods with their own mana cost and side effects.
+   * The client offers each as a cast option; the engine applies the rules.
+   */
+  castMethods?: CastMethod[];
+  /** Buyback {N}: optional extra cost; if paid the spell returns to hand as it resolves. */
+  buyback?: string;
+  /** Multikicker: kicker may be paid any number of times (counters × times). */
+  multikicker?: boolean;
+  /** Cost reductions applied automatically at cast time. */
+  affinity?: 'artifact';
+  convoke?: boolean;
+  delve?: boolean;
+  improvise?: boolean;
+  /** Cascade: when cast, exile until a cheaper nonland card and may cast it free. */
+  cascade?: boolean;
+  /** Morph/Disguise: may be cast face down as a 2/2 for {3}; turn up for this cost. Megamorph adds a +1/+1 counter. */
+  morph?: { cost: string; megamorph?: boolean; disguise?: boolean };
+  /** Ninjutsu cost: swap with an unblocked attacker. */
+  ninjutsu?: string;
+  /** Rebound: exile on resolve from hand, cast free next upkeep. */
+  rebound?: boolean;
+  /** Suspend N—cost: exile from hand with N time counters; cast free when they run out. */
+  suspend?: { count: number; cost: string };
+  /** Madness: may cast for this cost when discarded. */
+  madness?: string;
+  /** Offspring / Squad: kicker-style extra cost that creates token copies as it enters (1/1 for offspring). */
+  offspring?: boolean;
+  squad?: boolean;
   /** Cycling: pay the cost, discard this card, apply `effect` (default: draw 1). */
   cycling?: { mana?: string; life?: number; effect?: EffectScript };
   /** This spell can't be countered. */

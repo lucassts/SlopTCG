@@ -58,12 +58,33 @@ export interface GameObject {
   renowned?: boolean;
   /** Counters it had when it last left the battlefield (persist/undying/modular). */
   lastCounters?: Record<string, number>;
+  /** Morph/Disguise: on the battlefield as a face-down 2/2 with no abilities. */
+  faceDown?: boolean;
+  /** Unearth: exiled instead of going anywhere else when it leaves. */
+  unearthed?: boolean;
+  /** How it was cast (evoke/dash/blitz…) — drives what happens on resolution. */
+  castMethod?: import('./cards/types.js').CastMethod['kind'] | 'suspend';
+  buybackPaid?: boolean;
+  kickerTimes?: number;
+  /** Why it sits in exile face down / waiting (foretell, plot, suspend, rebound, warp, madness). */
+  exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness';
+  /** Turn it was foretold/plotted (can't be cast the same turn / only as sorcery). */
+  exiledOnTurn?: number;
   isToken: boolean;
 }
 
-/** Creature on the battlefield — printed type or a crewed vehicle. */
+/** Something scheduled for a later step (dash return, blitz sacrifice, unearth exile, rebound cast…). */
+export interface DelayedAction {
+  at: 'endStep' | 'nextUpkeep';
+  /** For 'nextUpkeep': whose upkeep. */
+  player?: PlayerId;
+  objectId: number;
+  action: 'exile' | 'sacrifice' | 'returnToHand' | 'castFree';
+}
+
+/** Creature on the battlefield — printed type, a crewed vehicle, or a face-down 2/2. */
 export function isCreature(obj: GameObject): boolean {
-  return obj.card.types.includes('Creature') || !!obj.crewedUntilEot;
+  return obj.card.types.includes('Creature') || !!obj.crewedUntilEot || !!obj.faceDown;
 }
 
 export interface StackItem {
@@ -206,6 +227,10 @@ export interface GameState {
   reversibleTaps: { objectId: number; mana: ManaSymbol[] }[];
   /** Non-null while opening hands are being decided (before turn 1). */
   mulligan: MulliganState | null;
+  /** Scheduled end-step / next-upkeep actions (dash, blitz, unearth, rebound, suspend…). */
+  delayed: DelayedAction[];
+  /** Any combat damage was dealt this turn (Prowl/Spectacle-style conditions). */
+  combatDamageThisTurn: boolean;
   status: 'playing' | 'finished';
   winner?: PlayerId | 'draw';
 }
@@ -238,6 +263,8 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
     starter: null,
     reversibleTaps: [],
     mulligan: null,
+    delayed: [],
+    combatDamageThisTurn: false,
     status: 'playing',
   };
 
@@ -413,7 +440,8 @@ export function effectivePower(state: GameState, obj: GameObject): number {
     0,
   );
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
-  return (obj.card.power ?? 0) + obj.untilEot.power + counters + fromAttachments + staticsFor(state, obj).power;
+  const base = obj.faceDown ? 2 : obj.card.power ?? 0; // virada para baixo: 2/2
+  return base + obj.untilEot.power + counters + fromAttachments + staticsFor(state, obj).power;
 }
 
 export function effectiveToughness(state: GameState, obj: GameObject): number {
@@ -422,11 +450,13 @@ export function effectiveToughness(state: GameState, obj: GameObject): number {
     0,
   );
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
-  return (obj.card.toughness ?? 0) + obj.untilEot.toughness + counters + fromAttachments + staticsFor(state, obj).toughness;
+  const base = obj.faceDown ? 2 : obj.card.toughness ?? 0;
+  return base + obj.untilEot.toughness + counters + fromAttachments + staticsFor(state, obj).toughness;
 }
 
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
-  if (obj.card.keywords?.includes(kw)) return true;
+  // Virada para baixo: sem habilidades impressas (disguise dá ward {2}, tratado no custo).
+  if (!obj.faceDown && obj.card.keywords?.includes(kw)) return true;
   if (obj.untilEot.keywords.includes(kw)) return true;
   if (attachmentsOf(state, obj).some((a) => a.card.attachEffect?.keywords?.includes(kw))) return true;
   return staticsFor(state, obj).keywords.includes(kw);

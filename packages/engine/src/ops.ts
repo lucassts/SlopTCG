@@ -154,6 +154,8 @@ export function moveWithEvent(
   position: 'top' | 'bottom' = 'top',
 ): void {
   const from = obj.zone;
+  // Unearth: if it would leave the battlefield, exile it instead.
+  if (obj.unearthed && from === 'battlefield' && to !== 'exile') to = 'exile';
   const hidden = to === 'hand' || to === 'library';
   if (obj.isToken && to !== 'battlefield') {
     // Tokens cease to exist when they leave the battlefield.

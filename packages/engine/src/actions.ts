@@ -33,7 +33,21 @@ export type PlayerAction =
       useAltCost?: boolean;
       /** Hand cards exiled to pay the alternative cost. */
       altExile?: number[];
+      /** Alternative casting method (evoke, dash, blitz, escape, foretold…, or 'suspend' to exile with time counters). */
+      method?: 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp' | 'suspend';
+      /** Escape: graveyard cards exiled as part of the cost. */
+      escapeExile?: number[];
+      /** Morph/Disguise: cast face down as a 2/2 for {3}. */
+      faceDown?: boolean;
+      /** Pay buyback. */
+      buyback?: boolean;
+      /** Multikicker: how many times the kicker is paid. */
+      kickerTimes?: number;
     }
+  /** Morph: turn a face-down permanent face up by paying its morph cost. */
+  | { type: 'turnFaceUp'; objectId: number }
+  /** Ninjutsu: return an unblocked attacker to hand, put this card from hand attacking. */
+  | { type: 'ninjutsu'; objectId: number; attackerId: number }
   /** Cycle a card from hand (pay its cycling cost, discard it, draw). */
   | { type: 'cycle'; objectId: number }
   /** Choose targets for a triggered ability waiting on the queue. */

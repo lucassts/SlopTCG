@@ -47,10 +47,10 @@ describe('M12 · terrenos básicos', () => {
 });
 
 describe('M12 · compilação', () => {
-  it('fixtures compilam; Convoke vira parcial com nota; Storm liga o storm', () => {
+  it('fixtures compilam; Convoke vira full (Leva 2); Storm liga o storm', () => {
     for (const c of [manaLeak, prey, bite, thoughtseize, treasureMaker, smite, grapeshotOracle, naturalize]) expect(c.automation, c.name).toBe('full');
-    expect(convoked.automation).toBe('partial');
-    expect(convoked.automationNotes?.[0]).toContain('Convoke');
+    expect(convoked.automation).toBe('full');
+    expect(convoked.convoke).toBe(true);
     expect(grapeshotOracle.storm).toBe(true);
     expect(prey.spellTargets).toHaveLength(2);
     expect(naturalize.spellTargets?.[0]).toMatchObject({ what: 'permanent', typeAnyOf: ['Artifact', 'Enchantment'] });

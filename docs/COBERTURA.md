@@ -19,14 +19,20 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-08-30, v0.8.0)
+## Estado (2026-09-02, v0.9.0)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | **v0.8 (Leva 1)** |
-|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | **6.275** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | **20.182** |
-| Manuais | 8.739 | 6.637 | 6.596 | **6.566** |
-| Dupla-face manuais | 864 | 864 | 55 | **55** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (Leva 1) | **v0.9 (Leva 2)** |
+|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | **6.696** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | **19.788** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | **6.539** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | **55** |
+
+A Leva 2 rendeu +421 full (menos que as ≈1.000 estimadas): a keyword deixou
+de bloquear, mas boa parte dessas cartas ainda tem outra frase pendente — que
+cai na Leva 4. O ganho real da Leva 2 é de **jogabilidade**: as ≈1.000 cartas
+com essas mecânicas agora são conjuradas do jeito certo (evoke, escape,
+morph, ninjutsu, cascade…), mesmo quando outra linha continua manual.
 
 Curva medida pelo auditor (cartas parciais que ficam 100% prontas ao
 resolver as N linhas de texto mais frequentes): top 100 → +695 · top 500 →
@@ -54,19 +60,25 @@ you draw; Persist, Undying, Modular, Evolve, Renown, Mentor, Afflict,
 Rampage, Flanking, Skulk, Bloodthirst, Devour, Fabricate, Unleash, Riot,
 Afterlife, Living weapon; Monstrosity/Adapt.
 
-### Leva 2 — mecânicas de conjuração (≈1.000 cartas pela keyword + suas frases)
-Morph / Megamorph / Disguise (226 — carta virada para baixo 2/2 por {3},
-virar por custo), Kicker restante, Multikicker, Unearth (58), Ninjutsu (43),
-Evoke (36), Madness (46), Warp (37), Mutate (34), Cascade (30), Suspend
-(30), Encore (25), Plot (24), Escape (23), Dash (21), Reconfigure (21),
-Offspring (21), Foretell (20), Blitz (19), Myriad (18), Buyback (16), Squad
-(15), Bestow (15), Embalm/Eternalize (28), Emerge (14), Scavenge (13),
-Dredge (10), Convoke / Delve / Improvise / Affinity de verdade (130 — hoje
-parciais pagando custo cheio), Split second, Rebound, Retrace, Cipher,
-Entwine, Overload, Replicate, Miracle, Surge, Prowl, Spectacle.
-Infra comum: custos alternativos com zona de origem, cartas viradas para
-baixo, gatilhos atrasados ("no fim do turno", "na próxima manutenção"),
-cópias de mágica com modos.
+### Leva 2 — feita (v0.9.0): mecânicas de conjuração
+Feito: Morph / Megamorph / Disguise (carta virada para baixo 2/2 por {3},
+virar por custo), Multikicker, Unearth, Ninjutsu, Evoke, Madness, Warp,
+Cascade, Suspend, Encore, Plot, Escape, Dash, Offspring, Foretell, Blitz,
+Myriad (no-op em 2 jogadores), Buyback, Squad, Embalm/Eternalize, Scavenge,
+Convoke / Delve / Improvise / Affinity for artifacts de verdade (auto-ajuda
+no pagamento), Rebound, Surge, Prowl, Spectacle.
+Infra: `castMethods` com zona de origem (mão/cemitério/exílio), habilidades
+ativadas com `zone` (mão/cemitério) e `exileSelf`, cartas viradas para
+baixo (redação no view para o oponente), gatilhos atrasados
+(`state.delayed`: fim do turno / próxima manutenção), `castCardFree`
+(cascade, suspend, rebound), cópias-ficha parametrizadas (`tokenCopy`).
+Cliente: menus de conjuração alternativa na mão, botões no cemitério
+(escape, unearth, scavenge, embalm…) e no exílio (prever/tramar/warp),
+virar para cima no campo, ninjutsu no passo de bloqueadores.
+
+Ficou para a Leva 3 (são keywords de campo, não de conjuração): Mutate,
+Reconfigure, Bestow, Emerge, Dredge, Split second, Retrace, Cipher,
+Entwine, Overload, Replicate, Miracle.
 
 ### Leva 3 — keywords de campo restantes (≈800 cartas)
 Level up + bandas LEVEL (≈90), Soulshift, Exploit, Soulbond, Backup,

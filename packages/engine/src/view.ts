@@ -24,6 +24,12 @@ export interface CardView {
   undoableTap: boolean;
   /** Vehicle crewed this turn (is a creature). */
   crewed: boolean;
+  /** Morph/Disguise: currently face down (the controller still sees the real card). */
+  faceDown?: boolean;
+  /** Why the card waits in exile (foretold/plotted/suspended…), for the owner's exile viewer. */
+  exiledAs?: string;
+  /** Attacker was blocked this combat (ninjutsu needs an unblocked one). */
+  wasBlocked?: boolean;
 }
 
 export type PendingDecisionView =
@@ -116,11 +122,26 @@ function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisio
   };
 }
 
-function cardView(state: GameState, obj: GameObject): CardView {
-  const creature = obj.card.types.includes('Creature') || !!obj.crewedUntilEot;
+const FACE_DOWN_CARD: CardDefinition = {
+  id: 'face-down',
+  name: 'Carta virada para baixo',
+  types: ['Creature'],
+  subtypes: [],
+  colors: [],
+  power: 2,
+  toughness: 2,
+  text: 'Criatura 2/2 sem nome, tipo, cor ou habilidades (morph/disguise).',
+  automation: 'full',
+};
+
+function cardView(state: GameState, obj: GameObject, viewer?: PlayerId): CardView {
+  const creature = obj.card.types.includes('Creature') || !!obj.crewedUntilEot || !!obj.faceDown;
+  // Face-down permanents: the opponent sees only a 2/2; the controller sees the real card.
+  const card = obj.faceDown && viewer !== undefined && viewer !== obj.controller ? FACE_DOWN_CARD : obj.card;
   return {
     objectId: obj.id,
-    card: obj.card,
+    card,
+    faceDown: obj.faceDown || undefined,
     tapped: obj.tapped,
     damage: obj.damage,
     counters: Object.fromEntries(Object.entries(obj.counters).filter(([k]) => !k.startsWith('__'))),
@@ -131,6 +152,8 @@ function cardView(state: GameState, obj: GameObject): CardView {
     attachedTo: obj.attachedTo ?? null,
     undoableTap: state.reversibleTaps.some((r) => r.objectId === obj.id),
     crewed: !!obj.crewedUntilEot,
+    exiledAs: obj.exiledAs,
+    wasBlocked: obj.wasBlocked || undefined,
     summoningSick: obj.summoningSick,
     isToken: obj.isToken,
   };
@@ -154,9 +177,14 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
         pid === viewer && p.zones.library.length > 0 && p.zones.battlefield.some((id) => state.objects[id].card.revealTop)
           ? cardView(state, state.objects[p.zones.library[0]])
           : undefined,
-      battlefield: p.zones.battlefield.map((id) => cardView(state, state.objects[id])),
+      battlefield: p.zones.battlefield.map((id) => cardView(state, state.objects[id], viewer)),
       graveyard: p.zones.graveyard.map((id) => cardView(state, state.objects[id])),
-      exile: p.zones.exile.map((id) => cardView(state, state.objects[id])),
+      // Cartas exiladas "para depois" (foretell, suspend…) são viradas para baixo para o oponente.
+      exile: p.zones.exile.map((id) => {
+        const o = state.objects[id];
+        const cv = cardView(state, o);
+        return o.exiledAs && (o.exiledAs === 'foretold' || o.exiledAs === 'plotted') && viewer !== o.owner ? { ...cv, card: FACE_DOWN_CARD, exiledAs: 'oculta' } : cv;
+      }),
     };
   }
   return {
@@ -169,16 +197,20 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
     pendingDecision: pendingDecisionView(state, viewer),
     mulligan: state.mulligan,
     starter: state.starter,
-    stack: state.stack.map((item) => ({
-      id: item.id,
-      kind: item.kind,
-      sourceId: item.sourceId,
-      controller: item.controller,
-      cardName: item.cardName,
-      description: item.description,
-      targets: item.targets,
-      card: item.kind === 'spell' ? state.objects[item.sourceId]?.card ?? null : state.objects[item.sourceId]?.card ?? null,
-    })),
+    stack: state.stack.map((item) => {
+      const src = state.objects[item.sourceId];
+      const hidden = src?.faceDown && viewer !== item.controller;
+      return {
+        id: item.id,
+        kind: item.kind,
+        sourceId: item.sourceId,
+        controller: item.controller,
+        cardName: hidden ? FACE_DOWN_CARD.name : item.cardName,
+        description: hidden ? 'Mágica virada para baixo (morph)' : item.description,
+        targets: item.targets,
+        card: hidden ? FACE_DOWN_CARD : src?.card ?? null,
+      };
+    }),
     players,
     status: state.status,
     winner: state.winner,

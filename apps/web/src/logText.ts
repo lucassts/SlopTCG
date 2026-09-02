@@ -138,6 +138,10 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${name(ev.player)} tripulou ${ev.cardName}.`;
     case 'modeChosen':
       return `${name(ev.player)} escolheu "${ev.mode}" para ${ev.cardName}.`;
+    case 'turnedFaceUp':
+      return `${name(ev.player)} virou ${ev.cardName} para cima.`;
+    case 'cascaded':
+      return `Cascata de ${ev.cardName}: ${ev.hit ? `${name(ev.player)} conjurou ${ev.hit} de graça.` : 'nada encontrado.'}`;
     case 'handRevealed':
       return `${name(ev.player)} revelou a mão: ${ev.cards.length > 0 ? ev.cards.join(', ') : '(vazia)'}.`;
     case 'shuffled':

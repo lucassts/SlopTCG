@@ -35,6 +35,7 @@ import {
   effectivePower,
   hasKeyword,
   matchFilter,
+  removeFromCurrentZone,
   type GameObject,
   type GameState,
   type PendingDecision,
@@ -644,6 +645,89 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       for (const p of resolveWho(ctx, step.who)) addPoison(state, p, step.count, emit);
       return;
 
+    case 'tokenCopy': {
+      const src = state.objects[ctx.sourceId];
+      if (!src) return;
+      const base = src.card;
+      const def: import('./cards/types.js').CardDefinition = {
+        ...base,
+        id: `token-copy-${base.id}`,
+        colors: step.colors ?? base.colors,
+        subtypes: step.addSubtype && !base.subtypes.includes(step.addSubtype) ? [...base.subtypes, step.addSubtype] : base.subtypes,
+        power: step.power ?? base.power,
+        toughness: step.toughness ?? base.toughness,
+        keywords: step.keywords ? [...(base.keywords ?? []), ...step.keywords] : base.keywords,
+        manaCost: undefined,
+      };
+      for (let i = 0; i < (step.count ?? 1); i++) {
+        const tok = createObject(state, def, ctx.controller);
+        tok.isToken = true;
+        tok.zone = 'battlefield';
+        tok.summoningSick = true;
+        state.players[ctx.controller].zones.battlefield.push(tok.id);
+        if (step.attacking) { tok.attacking = true; tok.tapped = !hasKeyword(state, tok, 'vigilance'); }
+        if (step.sacrificeAtEnd) state.delayed.push({ at: 'endStep', objectId: tok.id, action: 'sacrifice' });
+        if (step.exileAtEnd) state.delayed.push({ at: 'endStep', objectId: tok.id, action: 'exile' });
+        emit({ type: 'tokenCreated', player: ctx.controller, objectId: tok.id, name: `${base.name} (cópia)` });
+      }
+      return;
+    }
+
+    case 'unearth': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || src.zone !== 'graveyard') return;
+      src.controller = ctx.controller;
+      moveWithEvent(state, src, 'battlefield', 'returned', emit);
+      src.untilEot.keywords.push('haste');
+      src.unearthed = true;
+      state.delayed.push({ at: 'endStep', objectId: src.id, action: 'exile' });
+      return;
+    }
+
+    case 'putPowerCounters': {
+      const src = state.objects[ctx.sourceId];
+      const n = Math.max(0, src?.card.power ?? 0);
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (obj && obj.zone === 'battlefield' && n > 0) {
+          const total = (obj.counters['+1/+1'] ?? 0) + n;
+          obj.counters['+1/+1'] = total;
+          emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: '+1/+1', delta: n, total });
+        }
+      }
+      return;
+    }
+
+    case 'delayed':
+      state.delayed.push({ at: step.at, objectId: ctx.sourceId, action: step.action });
+      return;
+
+    case 'castSelfForCost': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || src.zone !== 'exile') return;
+      if (!payNow(state, ctx.controller, step.cost, emit)) {
+        moveWithEvent(state, src, 'graveyard', 'discarded', emit);
+        return;
+      }
+      castCardFree(state, src, ctx.controller, emit, 'madness');
+      return;
+    }
+
+    case 'selfToGraveyard': {
+      const src = state.objects[ctx.sourceId];
+      if (src && src.zone === 'exile') { src.exiledAs = undefined; moveWithEvent(state, src, 'graveyard', 'discarded', emit); }
+      return;
+    }
+
+    case 'exileFromHandForLater': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || src.zone !== 'hand') return;
+      moveWithEvent(state, src, 'exile', 'exiled', emit);
+      src.exiledAs = step.mode;
+      src.exiledOnTurn = state.turn;
+      return;
+    }
+
     case 'putCountersEach':
       for (const obj of selectBattlefield(ctx, step.filter)) {
         const total = (obj.counters[step.counter] ?? 0) + step.count;
@@ -971,6 +1055,39 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>): voi
       }
       return;
   }
+}
+
+/**
+ * Put a card on the stack without paying its cost (cascade, suspend, rebound,
+ * madness after paying). Only cards that need no targets — a free cast that
+ * needs targets stays where it is and is logged.
+ */
+export function castCardFree(state: GameState, obj: GameObject, controller: PlayerId, emit: Emit, note: string): boolean {
+  const card = obj.card;
+  if (card.types.includes('Land')) return false;
+  const needsTargets = (card.spellTargets?.length ?? 0) > 0 || !!card.enchant || (card.spellModes?.length ?? 0) > 0;
+  if (needsTargets) {
+    emit({ type: 'fizzled', description: `${card.name}: precisa de alvos — não pode ser conjurada automaticamente (${note})` });
+    return false;
+  }
+  removeFromCurrentZone(state, obj);
+  obj.zone = 'stack';
+  obj.exiledAs = undefined;
+  obj.controller = controller;
+  state.stack.push({
+    id: state.nextStackId++,
+    kind: 'spell',
+    sourceId: obj.id,
+    controller,
+    cardName: card.name,
+    effect: card.spellEffect ?? [],
+    targets: [],
+    description: `${card.name} (${note})`,
+  });
+  state.spellsCastThisTurn += 1;
+  state.passCount = 0;
+  emit({ type: 'spellCast', player: controller, objectId: obj.id, cardName: card.name, targets: [] });
+  return true;
 }
 
 /** Artifact tokens with their own abilities (Treasure, Food, Clue). */

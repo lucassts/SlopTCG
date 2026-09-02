@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CardView, GameView, PlayerAction, PlayerId } from '@sloptcg/protocol';
 import type { Step, TargetChoice } from '@sloptcg/engine';
+
+type CastMethodKind = NonNullable<CardView['card']['castMethods']>[number]['kind'];
 import { CardFace, CardTile, HoverPreview } from './CardTile';
 import { stepName } from '../logText';
 
@@ -68,7 +70,7 @@ interface ZoneToast {
 }
 
 interface Targeting {
-  kind: 'spell' | 'ability' | 'trigger';
+  kind: 'spell' | 'ability' | 'trigger' | 'ninjutsu';
   objectId: number;
   abilityIndex?: number;
   specs: { what: string }[];
@@ -78,6 +80,12 @@ interface Targeting {
   x?: number;
   mode?: number;
   kicked?: boolean;
+  kickerTimes?: number;
+  /** Leva 2: alternative casting method (evoke/dash/escape/foretold/…), face-down (morph), buyback. */
+  method?: CastMethodKind;
+  escapeExile?: number[];
+  faceDown?: boolean;
+  buyback?: boolean;
   /** First N picks are sacrifices for an additional cost (Fling). */
   sacCount?: number;
   /** Cast via alternative cost (Force of Will). */
@@ -314,6 +322,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     if (t.chosen.length >= t.specs.length) {
       if (t.kind === 'trigger') {
         onAction({ type: 'chooseTargets', targets: t.chosen });
+      } else if (t.kind === 'ninjutsu') {
+        const atk = t.chosen[0];
+        if (atk?.kind === 'object') onAction({ type: 'ninjutsu', objectId: t.objectId, attackerId: atk.id });
       } else if (t.kind === 'spell') {
         // Ordem dos picks: cartas da mão (custo alternativo) → sacrifícios → alvos.
         const handPick = t.handPickCount ?? 0;
@@ -333,6 +344,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           sacrifices: sacCount > 0 ? sacrifices : undefined,
           useAltCost: t.useAltCost,
           altExile: handPick > 0 ? altExile : undefined,
+          method: t.method,
+          escapeExile: t.escapeExile,
+          faceDown: t.faceDown,
+          buyback: t.buyback,
+          kickerTimes: t.kickerTimes,
         });
       } else {
         // Ordem dos picks: cartas da mão (custo de descarte) → sacrifícios → alvos.
@@ -405,7 +421,29 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       else opts.push({ label: `✨ Conjurar ${def.manaCost ?? ''}`, run: () => beginCast(cv, undefined) });
       if (def.altCost)
         opts.push({ label: `⚡ Conjurar — ${def.altCost.label}`, run: () => beginAltCast(cv) });
+      // Leva 2: métodos alternativos de conjuração a partir da mão.
+      for (const cm of def.castMethods ?? []) {
+        if (cm.kind === 'escape' || cm.kind === 'foretold' || cm.kind === 'plotted') continue;
+        opts.push({ label: `⚡ Conjurar — ${cm.label}`, run: () => beginCast(cv, undefined, false, { method: cm.kind }) });
+      }
+      if (def.morph)
+        opts.push({ label: `🔒 Conjurar virada para baixo {3} (${def.morph.disguise ? 'disfarce' : 'metamorfose'} ${def.morph.cost})`, run: () => onAction({ type: 'castSpell', objectId: cv.objectId, faceDown: true }) });
+      if (def.suspend)
+        opts.push({ label: `⏳ Suspender ${def.suspend.count} — ${def.suspend.cost}`, run: () => onAction({ type: 'castSpell', objectId: cv.objectId, method: 'suspend' }) });
+      if (def.ninjutsu && view.step === 'declareBlockers' && view.activePlayer === you) {
+        const unblocked = me.battlefield.filter((c) => c.attacking && !c.wasBlocked);
+        if (unblocked.length > 0)
+          opts.push({
+            label: `🥷 Ninjutsu ${def.ninjutsu} (troca por atacante não bloqueado)`,
+            run: () => setTargeting({ kind: 'ninjutsu', objectId: cv.objectId, specs: [{ what: 'sua criatura atacante não bloqueada' }], chosen: [], label: `${def.name}: ninjutsu — escolha o atacante` }),
+          });
+      }
     }
+    // Habilidades ativáveis da mão (prever, tramar).
+    (def.abilities ?? []).forEach((a, i) => {
+      if (a.kind === 'activated' && a.zone === 'hand')
+        opts.push({ label: `🔮 ${a.text}`, run: () => onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: i }) });
+    });
     if (def.cycling)
       opts.push({
         label: `♻ Reciclar (${def.cycling.mana ?? ''}${def.cycling.life ? `${def.cycling.life} vidas` : ''})`,
@@ -453,7 +491,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   };
 
   /** Start casting: asks for X/kicker, then sacrifices/targets, then sends. */
-  const beginCast = (cv: CardView, mode: number | undefined, fromGraveyard = false) => {
+  const beginCast = (
+    cv: CardView,
+    mode: number | undefined,
+    fromGraveyard = false,
+    extra: { method?: CastMethodKind; escapeExile?: number[] } = {},
+  ) => {
     const def = cv.card;
     let x: number | undefined;
     if (def.manaCost && def.manaCost.includes('{X}')) {
@@ -463,7 +506,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       if (!Number.isInteger(x) || x < 0) return;
     }
     let kicked: boolean | undefined;
-    if (def.kicker) kicked = confirm(`${def.name}: pagar o kicker ${def.kicker.cost}?`);
+    let kickerTimes: number | undefined;
+    if (def.kicker && def.multikicker) {
+      const raw = prompt(`${def.name}: quantas vezes pagar ${def.kicker.cost}? (0 = nenhuma)`, '0');
+      if (raw === null) return;
+      kickerTimes = parseInt(raw, 10);
+      if (!Number.isInteger(kickerTimes) || kickerTimes < 0) return;
+      kicked = kickerTimes > 0;
+    } else if (def.kicker) kicked = confirm(`${def.name}: pagar o kicker ${def.kicker.cost}?`);
+    let buyback: boolean | undefined;
+    if (def.buyback && !extra.method) buyback = confirm(`${def.name}: pagar buyback ${def.buyback} (volta para a mão)?`);
     // Custo adicional de sacrifício (Fling; flashback da Cabal Therapy):
     // escolhido como os primeiros "alvos".
     const fbSac = fromGraveyard ? def.flashback?.sacrifice : undefined;
@@ -478,12 +530,25 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         : def.spellTargets ?? [];
     const specs = [...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
       const label = sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, sacCount });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile });
     }
+  };
+
+  /** Escape: exiles the N oldest other cards of the graveyard automatically. */
+  const beginEscape = (cv: CardView) => {
+    const cm = cv.card.castMethods?.find((m) => m.kind === 'escape');
+    if (!cm) return;
+    const others = me.graveyard.filter((c) => c.objectId !== cv.objectId).map((c) => c.objectId);
+    const need = cm.exileFromGraveyard ?? 0;
+    if (others.length < need) {
+      alert(`Escapar precisa exilar ${need} outras cartas do cemitério (você tem ${others.length}).`);
+      return;
+    }
+    beginCast(cv, undefined, false, { method: 'escape', escapeExile: others.slice(0, need) });
   };
 
   const clickFieldCard = (cv: CardView, owner: PlayerId, e?: React.MouseEvent) => {
@@ -528,9 +593,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       const activated = abilities
         .map((a, i) => ({ a, i }))
         .filter((x): x is { a: Extract<typeof x.a, { kind: 'activated' }>; i: number } => x.a.kind === 'activated');
-      const opts: ActionMenu['options'] = activated.map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) }));
+      const opts: ActionMenu['options'] = activated
+        .filter(({ a }) => (a.zone ?? 'battlefield') === 'battlefield' && !cv.faceDown)
+        .map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) }));
       if (cv.card.crew !== undefined && !cv.crewed)
         opts.unshift({ label: `🚗 Tripular ${cv.card.crew} (vira criatura até o fim do turno)`, run: () => crewVehicle(cv) });
+      if (cv.faceDown && cv.card.morph)
+        opts.unshift({ label: `🔓 Virar para cima — ${cv.card.morph.cost}`, run: () => onAction({ type: 'turnFaceUp', objectId: cv.objectId }) });
       if (opts.length === 0) return;
       if (opts.length === 1) {
         opts[0].run();
@@ -1352,6 +1421,24 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                       }}
                     >
                       ⚡ Flashback {c.card.flashback.cost ?? (c.card.flashback.sacrifice ? `(sacrifique ${c.card.flashback.sacrifice.what === 'creature' ? 'uma criatura' : 'uma permanente'})` : '')}
+                    </button>
+                  )}
+                  {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.castMethods?.some((m) => m.kind === 'escape') && (
+                    <button onClick={() => { setZonePick(null); beginEscape(c); }}>
+                      ⚡ {c.card.castMethods.find((m) => m.kind === 'escape')?.label}
+                    </button>
+                  )}
+                  {zonePick.zone === 'graveyard' && zonePick.player === you &&
+                    (c.card.abilities ?? []).map((a, i) =>
+                      a.kind === 'activated' && a.zone === 'graveyard' ? (
+                        <button key={i} onClick={() => { setZonePick(null); beginAbility(c, i, a); }}>
+                          ⚙ {a.text}
+                        </button>
+                      ) : null,
+                    )}
+                  {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs && (c.exiledAs === 'foretold' || c.exiledAs === 'plotted' || c.exiledAs === 'warped') && (
+                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: c.exiledAs as CastMethodKind }); }}>
+                      ⚡ Conjurar ({c.exiledAs === 'foretold' ? `prever ${c.card.castMethods?.find((m) => m.kind === 'foretold')?.cost ?? ''}` : c.exiledAs === 'plotted' ? 'tramada, de graça' : 'warp, de graça'})
                     </button>
                   )}
                 </div>

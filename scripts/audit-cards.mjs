@@ -220,7 +220,7 @@ function settle(game, log, maxSteps = 60) {
       // "attacks each combat if able": inclui os obrigados.
       const must = s.players[s.activePlayer].zones.battlefield
         .map((id) => s.objects[id])
-        .filter((o) => o.card.keywords?.includes('mustAttack') && !o.tapped && (!o.summoningSick || o.card.keywords?.includes('haste')))
+        .filter((o) => o.card.keywords?.includes('mustAttack') && !o.tapped && (!o.summoningSick || o.card.keywords?.includes('haste') || o.unearthed || o.castMethod === 'dash' || o.castMethod === 'blitz'))
         .map((o) => o.id);
       const r = game.apply(s.activePlayer, { type: 'declareAttackers', attackers: must });
       if (!r.ok) { log.push(`ataque recusado: ${errMsg(r)}`); return; }
@@ -342,6 +342,7 @@ function simulate(def) {
         if (ab.kind !== 'activated' && ab.kind !== 'loyalty') return;
         if (ab.kind === 'loyalty') { if (loyaltyUsed) return; loyaltyUsed = true; }
         if (ab.kind === 'activated' && ab.condition) return; // condição pode não valer no cenário
+        if (ab.kind === 'activated' && (ab.zone ?? 'battlefield') !== 'battlefield') return; // cemitério: testada abaixo; mão: fora do cenário
         if (game.state.status !== 'playing') return;
         const targets = (ab.targets ?? []).map((spec) => pickTarget(game, me, opp, spec));
         if (targets.some((t) => t === null)) { log.push(`habilidade ${i}: sem alvo legal — pulada`); return; }
@@ -371,6 +372,22 @@ function simulate(def) {
           else problems.push(`habilidade ${i} recusada: ${m}`);
         } else settle(game, log);
       });
+    }
+    // --- habilidades ativadas do cemitério (unearth, scavenge, embalm…): manda a carta para lá e ativa
+    const gy = (def.abilities ?? []).map((ab, i) => ({ ab, i })).filter(({ ab }) => ab.kind === 'activated' && ab.zone === 'graveyard');
+    if (gy.length > 0 && game.state.status === 'playing' && s.objects[cardId].zone !== 'library') {
+      if (s.objects[cardId].zone !== 'graveyard') game.apply(me, { type: 'manualMove', objectId: cardId, to: 'graveyard' });
+      for (const { ab, i } of gy) {
+        if (s.objects[cardId].zone !== 'graveyard' || game.state.status !== 'playing') break;
+        const targets = (ab.targets ?? []).map((spec) => pickTarget(game, me, opp, spec));
+        if (targets.some((t) => t === null)) { log.push(`habilidade ${i} (cemitério): sem alvo legal — pulada`); continue; }
+        const r = game.apply(me, { type: 'activateAbility', objectId: cardId, abilityIndex: i, targets });
+        if (!r.ok) {
+          const m = errMsg(r);
+          if (/mana insuficiente|feitiço/.test(m)) log.push(`habilidade ${i} (cemitério): ${m}`);
+          else problems.push(`habilidade ${i} (cemitério) recusada: ${m}`);
+        } else settle(game, log);
+      }
     }
     problems.push(...checkInvariants(game));
     // segue até o fim do turno para disparar gatilhos de final/upkeep

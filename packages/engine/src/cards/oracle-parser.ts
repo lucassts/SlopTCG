@@ -16,6 +16,7 @@ import type { CardType, Color, Keyword } from '../types.js';
 import type {
   AbilityDef,
   CardDefinition,
+  CastMethod,
   EffectScript,
   EffectStep,
   FilterSpec,
@@ -729,6 +730,11 @@ interface ParseState {
   evasionPowerAtLeast?: number;
   chooseOnEnter?: 'color' | 'creatureType';
   kickerEnters?: { counter: string; count: number };
+  castMethods: CastMethod[];
+  buyback?: string;
+  multikicker: boolean;
+  /** Leva 2 flags copied onto the definition. */
+  flags2: Partial<Pick<CardDefinition, 'offspring' | 'squad' | 'affinity' | 'convoke' | 'delve' | 'improvise' | 'cascade' | 'rebound' | 'morph' | 'ninjutsu' | 'suspend' | 'madness'>>;
   /** Recognized-but-ignored lines (cost reducers etc.): card becomes 'partial'. */
   softNotes: string[];
 }
@@ -953,10 +959,73 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
 
+  // ---- Leva 2: mecânicas de conjuração
+  const MANA = '((?:\\{[^}]+\\})+)';
+  const castKw: Record<string, { kind: CastMethod['kind']; label: string }> = {
+    evoke: { kind: 'evoke', label: 'evocar' }, dash: { kind: 'dash', label: 'investida' }, blitz: { kind: 'blitz', label: 'blitz' },
+    surge: { kind: 'surge', label: 'surge' }, prowl: { kind: 'prowl', label: 'prowl' }, spectacle: { kind: 'spectacle', label: 'espetáculo' }, warp: { kind: 'warp', label: 'warp' },
+  };
+  if ((m = line.match(new RegExp(`^(Evoke|Dash|Blitz|Surge|Prowl|Spectacle|Warp) ${MANA}$`, 'i')))) {
+    const k = castKw[m[1].toLowerCase()];
+    st.castMethods.push({ kind: k.kind, cost: m[2], label: `${k.label} ${m[2]}` });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Escape—${MANA}, Exile (\\w+) other cards? from your graveyard\\.$`, 'i')))) {
+    const n = num(m[2]);
+    if (n === null) return false;
+    st.castMethods.push({ kind: 'escape', cost: m[1], exileFromGraveyard: n, label: `escapar ${m[1]} + exilar ${n}` });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Foretell ${MANA}$`, 'i')))) {
+    st.castMethods.push({ kind: 'foretold', cost: m[1], label: `prever ${m[1]}` });
+    st.abilities.push({ kind: 'activated', zone: 'hand', cost: { mana: '{2}' }, effect: [{ op: 'exileFromHandForLater', mode: 'foretold' }], text: 'Prever {2} (exila virada para baixo; conjure depois pelo custo de prever)' });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Plot ${MANA}$`, 'i')))) {
+    st.castMethods.push({ kind: 'plotted', cost: '', label: 'tramar (de graça)' });
+    st.abilities.push({ kind: 'activated', zone: 'hand', cost: { mana: m[1] }, effect: [{ op: 'exileFromHandForLater', mode: 'plotted' }], text: `Tramar ${m[1]} (exila; conjure de graça num turno seguinte)`, sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Unearth ${MANA}$`, 'i')))) {
+    st.abilities.push({ kind: 'activated', zone: 'graveyard', cost: { mana: m[1] }, effect: [{ op: 'unearth' }], text: `Desenterrar ${m[1]}`, sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Scavenge ${MANA}$`, 'i')))) {
+    st.abilities.push({ kind: 'activated', zone: 'graveyard', exileSelf: true, cost: { mana: m[1] }, targets: [{ what: 'creature', controlledBy: 'you' }], effect: [{ op: 'putPowerCounters', what: 'target:0' }], text: `Vasculhar ${m[1]}`, sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^(Embalm|Eternalize|Encore) ${MANA}$`, 'i')))) {
+    const k = m[1].toLowerCase();
+    const step: EffectStep =
+      k === 'embalm' ? { op: 'tokenCopy', colors: ['W'], addSubtype: 'Zombie' }
+      : k === 'eternalize' ? { op: 'tokenCopy', colors: ['B'], addSubtype: 'Zombie', power: 4, toughness: 4 }
+      : { op: 'tokenCopy', attacking: true, sacrificeAtEnd: true, keywords: ['haste'] };
+    st.abilities.push({ kind: 'activated', zone: 'graveyard', exileSelf: true, cost: { mana: m[2] }, effect: [step], text: `${m[1]} ${m[2]}`, sorceryOnly: true });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Buyback ${MANA}$`, 'i')))) { st.buyback = m[1]; return true; }
+  if ((m = line.match(new RegExp(`^Multikicker ${MANA}$`, 'i')))) { st.kickerCost = m[1]; st.multikicker = true; return true; }
+  if ((m = line.match(new RegExp(`^(Offspring|Squad) ${MANA}$`, 'i')))) { st.kickerCost = m[2]; st.flags2[m[1].toLowerCase() as 'offspring' | 'squad'] = true; if (m[1].toLowerCase() === 'squad') st.multikicker = true; return true; }
+  if (/^Affinity for artifacts$/i.test(line)) { st.flags2.affinity = 'artifact'; return true; }
+  if (/^Convoke$/i.test(line)) { st.flags2.convoke = true; return true; }
+  if (/^Delve$/i.test(line)) { st.flags2.delve = true; return true; }
+  if (/^Improvise$/i.test(line)) { st.flags2.improvise = true; return true; }
+  if (/^Cascade$/i.test(line)) { st.flags2.cascade = true; return true; }
+  if (/^Rebound$/i.test(line)) { st.flags2.rebound = true; return true; }
+  if (/^Myriad$/i.test(line)) return true; // sem efeito em jogo de dois
+  if ((m = line.match(new RegExp(`^(Morph|Megamorph|Disguise) ${MANA}$`, 'i')))) {
+    const k = m[1].toLowerCase();
+    st.flags2.morph = { cost: m[2], megamorph: k === 'megamorph' || undefined, disguise: k === 'disguise' || undefined };
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Ninjutsu ${MANA}$`, 'i')))) { st.flags2.ninjutsu = m[1]; return true; }
+  if ((m = line.match(new RegExp(`^Suspend (\\d+)—${MANA}$`, 'i')))) { st.flags2.suspend = { count: parseInt(m[1], 10), cost: m[2] }; return true; }
+  if ((m = line.match(new RegExp(`^Madness ${MANA}$`, 'i')))) { st.flags2.madness = m[1]; return true; }
+
   // Keywords de custo/extra que não mudam a resolução: a mágica fica jogável
   // pagando o custo cheio (parcial, com nota). Storm a engine já faz.
   if (/^Storm$/i.test(line)) { st.storm = true; return true; }
-  if (/^(Convoke|Delve|Improvise|Assist|Affinity for artifacts|Buyback (?:\{[^}]+\})+|Rebound|Cascade|Split second|Retrace|Cipher|Gravestorm|Replicate (?:\{[^}]+\})+|Escalate (?:\{[^}]+\})+|Entwine (?:\{[^}]+\})+|Miracle (?:\{[^}]+\})+|Overload (?:\{[^}]+\})+|Madness (?:\{[^}]+\})+)$/i.test(line)) {
+  if (/^(Assist|Split second|Retrace|Cipher|Gravestorm|Replicate (?:\{[^}]+\})+|Escalate (?:\{[^}]+\})+|Entwine (?:\{[^}]+\})+|Miracle (?:\{[^}]+\})+|Overload (?:\{[^}]+\})+)$/i.test(line)) {
     st.softNotes.push(line);
     return true;
   }
@@ -1326,6 +1395,9 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     flags: {},
     revealTop: false,
     playerHexproof: false,
+    castMethods: [],
+    multikicker: false,
+    flags2: {},
     softNotes: [],
   };
 
@@ -1359,7 +1431,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   if (isSpell && st.spellModes.length > 0 && st.spellEffect.length > 0) return null; // modal + efeito solto: fora do escopo
   // Kicker sem efeito condicional reconhecido (ou vice-versa): fora do escopo.
   if (isSpell && (!!st.kickerCost !== st.kickerEffect.length > 0)) return null;
-  if (!isSpell && st.kickerCost && !st.kickerEnters) unparsed.push(`Kicker ${st.kickerCost} (efeito do kicker não reconhecido)`);
+  if (!isSpell && st.kickerCost && !st.kickerEnters && !st.flags2.offspring && !st.flags2.squad) unparsed.push(`Kicker ${st.kickerCost} (efeito do kicker não reconhecido)`);
   if (isSpell && st.modalOpen && st.spellModes.length < 2) return null;
   // Aura sem "Enchant X" reconhecido não pode ser conjurada nem parcialmente.
   if (subtypes.includes('Aura') && !st.enchant) return null;
@@ -1413,6 +1485,10 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     exalted: st.exalted || undefined,
     bushido: st.bushido,
     ...st.flags,
+    ...st.flags2,
+    castMethods: st.castMethods.length > 0 ? st.castMethods : undefined,
+    buyback: st.buyback,
+    multikicker: st.multikicker || undefined,
     revealTop: st.revealTop || undefined,
     extraLands: st.extraLands,
     playerHexproof: st.playerHexproof || undefined,
@@ -1432,7 +1508,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     exileOnResolve: st.exileOnResolve || undefined,
     storm: st.storm || undefined,
     noMaxHandSize: st.noMaxHandSize || undefined,
-    kicker: st.kickerCost && (st.kickerEffect.length > 0 || st.kickerEnters)
+    kicker: st.kickerCost && (st.kickerEffect.length > 0 || st.kickerEnters || st.flags2.offspring || st.flags2.squad)
       ? { cost: st.kickerCost, effect: st.kickerEffect, entersWithCounters: st.kickerEnters }
       : undefined,
     enchant: st.enchant,
