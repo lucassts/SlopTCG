@@ -19,18 +19,20 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-03, v0.13.0)
+## Estado (2026-09-03, v0.14.0)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | **v0.13 (L5 · gramática 2)** |
-|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | **11.800** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | **15.772** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | **5.453** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | **55** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a · gramática 2) | **v0.14 (L5b · faces)** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | **12.170** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | **15.620** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | **5.290** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | **0** |
 
-A gramática 2 (Leva 5, primeira metade) rendeu +1.504 full e tirou 316
-cartas do manual; frases pendentes distintas: 17.855 → 16.677. Falhas de
-simulação: 7 (todas explicáveis pelo cenário do auditor).
+A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
+"outra face não modelada" restam 143 (versos cujo texto ainda não compila).
++370 full, 163 a menos no manual, zero problemas estruturais, 15 falhas de
+simulação (criaturas de P/T variável que entram 0/0 no cenário vazio e
+afins).
 
 A Leva 4 foi a que virou a curva, como previsto: +3.160 full numa leva só,
 e as frases pendentes distintas caíram de 20.669 para 17.855.
@@ -243,12 +245,31 @@ Guiada pela cauda de `data/tail-full.txt` (frases completas, sem truncar):
 - mana: `Add {C} or one mana of the chosen color`, `{R} or {G}` pela
   gramática, habilidade genérica marcada como de mana quando só produz mana.
 
-### Leva 5b — o que sobra
-Cartas dupla-face de verdade (transformar/verso jogável, 731 cartas),
-adventure/split (segunda metade), poder/resistência `*` (CDA), rules-heavy
-(Soulbond, Mutate, Phasing, Banding, Provoke, Enlist, Batalhas, Daybound),
-cartas Un-, e o resto do `data/tail-full.txt` — nesse ponto, script por
-carta (Tier 2) é o mais barato, e a lista do auditor diz exatamente quais.
+### Leva 5b — feita (v0.14.0): faces, P/T variável e rules-heavy
+- **Segunda face compilada** como carta própria (`backFace`): transform,
+  MDFC (verso como terreno ou mágica), aventura (exílio e volta), carta
+  dividida (cada metade, **Fuse**, **Aftermath**), flip, **batalhas** (Siege:
+  atacada pelo controlador, defesa em marcadores, derrotada vira o verso) e
+  **prepare** (cópia da mágica enquanto preparada). Ao sair do campo a carta
+  volta para a frente; imagem do verso no cliente.
+- **Transformar**: "transform ~", "Exile ~, then return it transformed"
+  (Sagas), "When this creature transforms into ~", **Disturb** (do cemitério,
+  transformada, exílio em vez de cemitério), **Daybound/Nightbound** com
+  dia/noite de verdade (conta as mágicas do turno anterior), lobisomens
+  antigos ("if no spells were cast last turn").
+- **P/T variável** (`*`): "~'s power and toughness are each equal to…",
+  "power is equal to X and toughness is equal to that number plus N".
+- **Rules-heavy**: Soulbond (par com bônus estático), Provoke, Enlist,
+  Casualty, Kinship, "When you control no X, sacrifice ~" (gatilho de
+  estado), "Cast ~ only during the declare attackers step…", "Choose three,
+  same mode more than once", "Choose one (commander: both)".
+
+### Leva 6 — o que sobra
+Mutate (34), Phasing (12), Banding (14), Ward—Discard (12), Conspire, Splice,
+Strive, Companion, Meld (21), os 143 versos que ainda não compilam, Alchemy
+(Starting intensity, Teamwork, Specialize, Double team) e a cauda de frases
+únicas do `data/tail-full.txt` — script por carta (Tier 2) é o mais barato
+daqui em diante.
 
 ## Regras de trabalho por leva
 1. `node scripts/audit-cards.mjs` no começo (baseline) e no fim (medida).

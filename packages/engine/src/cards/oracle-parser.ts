@@ -14,7 +14,7 @@
  */
 import type { CardType, Color, Keyword } from '../types.js';
 import { BASIC_TYPES, COLOR_WORDS, KEYWORDS, NUMBER_WORDS, TYPE_WORD, keywordList, num } from './lexicon.js';
-import { filterToTargetSpec, parseCondG, parseNounG, parseSentenceG, parseStaticG, type GCtx } from './grammar.js';
+import { filterToTargetSpec, parseAmountG, parseCondG, parseNounG, parseSentenceG, parseStaticG, type GCtx } from './grammar.js';
 import type {
   AbilityDef,
   CardDefinition,
@@ -43,6 +43,13 @@ export interface OracleInput {
   colors?: Color[];
   oracleId?: string;
   scryfallId?: string;
+  // ---- Leva 5b: cartas de várias faces e batalhas
+  /** Scryfall layout ('transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle', 'prepare'). */
+  layout?: string;
+  /** The second face, compiled like a card of its own. */
+  backFace?: OracleInput;
+  /** Battles: starting defense. */
+  defense?: number;
 }
 
 const KNOWN_TYPES: CardType[] = ['Land', 'Creature', 'Artifact', 'Enchantment', 'Instant', 'Sorcery', 'Planeswalker', 'Battle'];
@@ -761,8 +768,10 @@ interface ParseState {
   flags6: Partial<Pick<CardDefinition, 'entersTappedUnlessCond' | 'entersTappedIf' | 'assignAsUnblocked' | 'playLandsFromGraveyard' | 'castFromLibraryTop' | 'preventDamageRemoveCounter' | 'cantAttackAlone' | 'autoRegenerate' | 'shuffleInsteadOfGraveyard' | 'opponentsCreaturesEnterTapped' | 'preventsOwnDamage' | 'oneSpellPerTurn' | 'cyclingTrigger'>>;
   /** Spree: modal spell whose modes carry their own costs. */
   spree?: boolean;
+  /** Leva 5b: faces, P/T variável, mecânicas rules-heavy. */
+  flags7: Partial<Pick<CardDefinition, 'daybound' | 'nightbound' | 'disturb' | 'aftermath' | 'fuse' | 'soulbond' | 'pairedBonus' | 'enlist' | 'casualty' | 'castOnly' | 'exileInsteadOfGraveyard' | 'entersPrepared' | 'setsDayOnEnter' | 'cdaPower' | 'cdaToughness'>>;
   costModifiers?: NonNullable<CardDefinition['costModifiers']>;
-  spellModeChoice?: { min: number; max: number };
+  spellModeChoice?: { min: number; max: number; repeat?: boolean };
   tributeCount?: number;
   tributeEffect?: EffectStep[];
   giftEffect?: EffectStep[];
@@ -1020,6 +1029,13 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever (?:enchanted|equipped) creature deals (?:combat )?damage$/i.test(head)) return { trigger: { on: 'hostDealsDamage' } };
   if (/^Whenever a creature dealt damage by ~ this turn dies$/i.test(head)) return { trigger: { on: 'damagedCreatureDies', self: true } };
   if (/^At the beginning of the upkeep of enchanted creature's controller$/i.test(head)) return { trigger: { on: 'hostControllerUpkeep' } };
+  // ---- Leva 5b
+  if (/^When(?:ever)? (?:this creature|this permanent|~|it) transforms(?: into ~)?$/i.test(head)) return { trigger: { on: 'transformsInto', self: true } };
+  if ((m = head.match(/^When you control no (.+)$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player || info.zone) return null;
+    return { trigger: { on: 'controlsNone', filter: { ...info.filter, controlledBy: 'you' } } };
+  }
   return null;
 }
 
@@ -1435,6 +1451,70 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
 
+  // ---- Leva 5b: dupla-face, dia/noite, P/T variável, mecânicas rules-heavy
+  if (/^Daybound$/i.test(line)) { st.flags7.daybound = true; return true; }
+  if (/^Nightbound$/i.test(line)) { st.flags7.nightbound = true; return true; }
+  if ((m = line.match(/^Disturb ((?:\{[^}]+\})+)$/i))) {
+    st.flags7.disturb = m[1];
+    st.castMethods.push({ kind: 'disturb', cost: m[1], label: `perturbar ${m[1]} (do cemitério, transformada)` });
+    return true;
+  }
+  if (/^Aftermath$/i.test(line)) { st.flags7.aftermath = true; st.exileOnResolve = true; return true; }
+  if (/^Fuse$/i.test(line)) { st.flags7.fuse = true; return true; }
+  if (/^Soulbond$/i.test(line)) { st.flags7.soulbond = true; return true; }
+  if (/^Enlist$/i.test(line)) { st.flags7.enlist = true; return true; }
+  if ((m = line.match(/^Casualty (\d+)$/i))) { st.flags7.casualty = parseInt(m[1], 10); return true; }
+  if (/^Provoke$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'attacks', self: true }, targets: [{ what: 'creature', controlledBy: 'opponent', optional: true }], effect: [{ op: 'untap', what: 'target:0' }, { op: 'mustBlockSource', what: 'target:0' }], text: 'Provocar: a criatura-alvo do defensor desvira e bloqueia ~ se puder' });
+    return true;
+  }
+  if ((m = line.match(/^(?:Kinship — )?At the beginning of your upkeep, you may look at the top card of your library\. If it shares a creature type with ~, you may reveal it\. If you do, (.+)\.$/i))) {
+    const parsed = parseEffectText(m[1] + '.');
+    if (!parsed || specsOf(parsed) || parsed.selfExile) return false;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'upkeep', whose: 'controller' }, effect: [{ op: 'if', cond: { kind: 'topCardSharesCreatureType' }, then: [{ op: 'mayDo', prompt: 'Parentesco: revelar a carta do topo?', effect: parsed.steps }] }], text: `Parentesco — ${m[1]}` });
+    return true;
+  }
+  if (/^~ enters prepared\.$/i.test(line)) { st.flags7.entersPrepared = true; return true; }
+  if (/^If it's neither day nor night, it becomes day as ~ enters\.$/i.test(line)) { st.flags7.setsDayOnEnter = true; return true; }
+  if (/^If ~ would be put into a graveyard from anywhere, exile it instead\.$/i.test(line)) { st.flags7.exileInsteadOfGraveyard = true; return true; }
+  if ((m = line.match(/^Cast (?:~|this spell) only (.+)\.$/i))) {
+    const t = m[1].toLowerCase();
+    const cond: Cond | null =
+      /^during the declare attackers step and only if you've been attacked this step$/.test(t) ? { kind: 'beingAttacked' }
+      : /^during combat$/.test(t) ? { kind: 'inCombat' }
+      : /^during your turn$/.test(t) ? { kind: 'yourTurn' }
+      : /^during an opponent's turn$/.test(t) ? { kind: 'not', cond: { kind: 'yourTurn' } }
+      : /^if /.test(t) ? parseCondG(m[1].slice(3)) : null;
+    if (!cond) return false;
+    st.flags7.castOnly = cond;
+    return true;
+  }
+  if ((m = line.match(/^As long as ~ is paired with another creature, (?:both creatures|each of those creatures) (?:get ([+-]\d+)\/([+-]\d+))?(?: and)?(?: (?:have|has) (\w[\w\s,]*?))?\.$/i)) && (m[1] || m[3])) {
+    const kws = m[3] ? keywordList(m[3]) : undefined;
+    if (m[3] && !kws) return false;
+    st.flags7.pairedBonus = { power: m[1] ? parseInt(m[1], 10) : undefined, toughness: m[2] ? parseInt(m[2], 10) : undefined, keywords: kws ?? undefined };
+    return true;
+  }
+  if ((m = line.match(/^~'s power and toughness are each equal to (.+)\.$/i))) {
+    const a = parseAmountG(m[1], 'self');
+    if (a === null) return false;
+    st.flags7.cdaPower = a; st.flags7.cdaToughness = a;
+    return true;
+  }
+  if ((m = line.match(/^~'s power is equal to (.+?) and its toughness is equal to that number plus (\d+)\.$/i))) {
+    const a = parseAmountG(m[1], 'self');
+    if (a === null) return false;
+    st.flags7.cdaPower = a; st.flags7.cdaToughness = { plus: parseInt(m[2], 10), of: a };
+    return true;
+  }
+  if ((m = line.match(/^~'s (power|toughness) is equal to (.+)\.$/i))) {
+    const a = parseAmountG(m[2], 'self');
+    if (a === null) return false;
+    if (m[1].toLowerCase() === 'power') st.flags7.cdaPower = a; else st.flags7.cdaToughness = a;
+    return true;
+  }
+  if (isSpell && /^Choose three\. You may choose the same mode more than once\.$/i.test(line)) { st.modalOpen = true; st.spellModeChoice = { min: 3, max: 3, repeat: true }; return true; }
+  if (isSpell && /^Choose one\. If you control a commander as you cast ~, you may choose both instead\.$/i.test(line)) { st.modalOpen = true; st.spellModeChoice = undefined; return true; }
   // ---- Leva 5: estáticas, substituições e gatilhos diversos
   if (/^You may have ~ assign its combat damage as though it weren't blocked\.$/i.test(line)) { st.flags6.assignAsUnblocked = true; return true; }
   if (/^You may play lands from your graveyard\.$/i.test(line)) { st.flags6.playLandsFromGraveyard = true; return true; }
@@ -1972,12 +2052,13 @@ export interface OracleDiagnostics {
 export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics): CardDefinition | null {
   const { supertypes, types, subtypes } = parseTypeLine(input.typeLine);
   if (types.length === 0) return null;
-  if (types.includes('Battle')) return null;
+  if (types.includes('Battle') && input.defense === undefined) return null; // batalha sem defesa não é jogável
   // Planeswalker sem lealdade numérica (ou 0, que entra "com X marcadores"): manual.
   if (types.includes('Planeswalker') && (input.loyalty === undefined || input.loyalty <= 0)) return null;
   // Criatura com poder/resistência não numéricos (*/*, X/X): a engine
   // trataria como 0/0 e ela morreria ao entrar — fica manual.
-  if (types.includes('Creature') && (input.power === undefined || input.toughness === undefined)) return null;
+  // Criaturas sem P/T numérico só compilam se o texto definir o valor ("~'s power and toughness are each equal to…").
+  const needsCda = types.includes('Creature') && (input.power === undefined || input.toughness === undefined);
   const isSpell = types.includes('Instant') || types.includes('Sorcery');
 
   // Normalize: strip reminder text, replace the card's own name with ~.
@@ -1986,7 +2067,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     .replace(/\([^)]*\)/g, '')
     .split(input.name).join('~')
     .split(shortName).join('~')
-    .replace(/\bThis (creature|land|artifact|enchantment|permanent|Aura|Equipment|Vehicle|Saga|Class|Spacecraft|spell)\b/gi, '~')
+    .replace(/\bThis (creature|land|artifact|enchantment|permanent|Aura|Equipment|Vehicle|Saga|Class|Spacecraft|spell|Siege|battle)\b/gi, '~')
     .replace(/[ \t]+/g, ' ')
     .trim();
 
@@ -2018,6 +2099,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     flags4: {},
     flags5: {},
     flags6: {},
+    flags7: {},
     levels: [],
     softNotes: [],
   };
@@ -2119,7 +2201,8 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   // Planeswalker: precisa de ao menos uma habilidade de lealdade reconhecida.
   if (types.includes('Planeswalker') && !st.abilities.some((a) => a.kind === 'loyalty')) return null;
 
-  return {
+  if (needsCda && ((input.power === undefined && st.flags7.cdaPower === undefined) || (input.toughness === undefined && st.flags7.cdaToughness === undefined))) return null;
+  const def: CardDefinition = {
     id: `oracle-${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
     name: input.name,
     oracleId: input.oracleId,
@@ -2155,6 +2238,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags4,
     ...st.flags5,
     ...st.flags6,
+    ...st.flags7,
     costModifiers: st.costModifiers,
     spellModeChoice: st.spellModeChoice,
     saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
@@ -2206,4 +2290,37 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
         ? [...unparsed, ...st.softNotes.map((l) => `${l} (não aplicado — pague o custo normal)`)].slice(0, 8)
         : undefined,
   };
+  if (input.defense !== undefined) def.defense = input.defense;
+  // ---- Leva 5b: segunda face (transform / MDFC / aventura / dividida / flip / batalha / prepare).
+  const LAYOUTS: NonNullable<CardDefinition['faceLayout']>[] = ['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle', 'prepare'];
+  const layout = LAYOUTS.find((l) => l === input.layout);
+  if (input.backFace && layout) {
+    def.faceLayout = layout;
+    const back = compileOracleCard({ ...input.backFace, layout: undefined, backFace: undefined, oracleId: input.oracleId, scryfallId: input.scryfallId }, diag);
+    if (back) {
+      back.isBackFace = true;
+      back.faceLayout = layout;
+      def.backFace = back;
+      if (layout === 'prepare' && back.spellEffect && !back.spellModes) {
+        def.entersPrepared = true;
+        def.abilities = [...(def.abilities ?? []), {
+          kind: 'activated',
+          cost: { mana: back.manaCost || '{0}' },
+          targets: back.spellTargets,
+          effect: [{ op: 'unprepare' }, ...back.spellEffect],
+          text: `Conjurar uma cópia de ${back.name} ${back.manaCost ?? ''} (enquanto preparada)`,
+          condition: { cond: { kind: 'prepared' } },
+          sorceryOnly: back.types.includes('Sorcery') || undefined,
+        }];
+      }
+      if (back.automation !== 'full') {
+        def.automation = 'partial';
+        def.automationNotes = [...(def.automationNotes ?? []), ...(back.automationNotes ?? []).map((n) => `${back.name}: ${n}`)].slice(0, 8);
+      }
+    } else {
+      def.automation = 'partial';
+      def.automationNotes = [...(def.automationNotes ?? []), `Verso (${input.backFace.name}) não modelado — use o modo manual para virar`].slice(0, 8);
+    }
+  }
+  return def;
 }

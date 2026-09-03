@@ -25,6 +25,14 @@ export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | '
  */
 export type Cond =
   | { kind: 'yourTurn' }
+  // ---- Leva 5b
+  | { kind: 'dayNight'; value: 'day' | 'night' }
+  | { kind: 'noSpellsLastTurn' }
+  | { kind: 'twoSpellsLastTurn' }
+  | { kind: 'topCardSharesCreatureType' }
+  | { kind: 'beingAttacked' }
+  | { kind: 'prepared' }
+  | { kind: 'inCombat' }
   | { kind: 'attacking' }
   | { kind: 'untapped' }
   | { kind: 'tapped' }
@@ -319,6 +327,15 @@ export type EffectStep =
   /** (choice) "You may put a land card from your hand onto the battlefield (tapped)". */
   | { op: 'putFromHand'; filter: FilterSpec; tapped?: boolean }
   | { op: 'removeCounters'; what: SubjectRef; counter: string; count: DynAmount }
+  // ---- Leva 5b: faces e mecânicas rules-heavy
+  /** Transform / flip a double-faced permanent. */
+  | { op: 'transform'; what: SubjectRef }
+  /** "Exile ~, then return it to the battlefield transformed under your control." */
+  | { op: 'returnTransformed'; what: SubjectRef }
+  /** Prepare: the copy of its spell was cast. */
+  | { op: 'unprepare' }
+  /** Soulbond: pair the source with another unpaired creature you control. */
+  | { op: 'pairSoulbond' }
   /** "Add {C} or one mana of the chosen color" / "Add {G} or {U}": the activation carries the pick. */
   | { op: 'addManaOptions'; options: ManaSymbol[]; chosenColor?: boolean }
   | { op: 'exileGraveyard'; who: WhoSel }
@@ -451,6 +468,10 @@ export type EffectScript = EffectStep[];
 
 /** Trigger conditions for triggered abilities. */
 export type TriggerSpec =
+  /** Back face: "When this creature transforms into ~" (fires on the face it became). */
+  | { on: 'transformsInto'; self: true }
+  /** State trigger: "When you control no Islands, sacrifice ~." */
+  | { on: 'controlsNone'; filter: FilterSpec }
   | { on: 'etb'; self: true }
   /** Any object matching the filter enters the battlefield. */
   | { on: 'etb'; what: FilterSpec }
@@ -663,7 +684,9 @@ export interface CastMethod {
     /** Miracle: castable for this cost the moment it's the first card drawn this turn. */
     | 'miracle'
     /** Prototype: cast for a smaller cost as a smaller creature. */
-    | 'prototype';
+    | 'prototype'
+    /** Disturb: cast from the graveyard transformed. */
+    | 'disturb';
   /** Mana cost of this method ('' = free). */
   cost: string;
   /** Escape: exile this many other cards from your graveyard. */
@@ -816,7 +839,7 @@ export interface CardDefinition {
   /** Prototype {cost} — N/N: may be cast smaller. */
   prototype?: { cost: string; power: number; toughness: number };
   /** Modal spells: how many modes may be chosen ("choose one or both", "choose two"). Default exactly one. */
-  spellModeChoice?: { min: number; max: number };
+  spellModeChoice?: { min: number; max: number; /** "You may choose the same mode more than once." */ repeat?: boolean };
   /** "You may exert ~ as it attacks." */
   canExert?: boolean;
   /** Clone: "You may have ~ enter as a copy of any creature on the battlefield." */
@@ -847,6 +870,37 @@ export interface CardDefinition {
   oneSpellPerTurn?: boolean;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
+  // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
+  /** Second face (transform/MDFC/adventure/split/flip/battle/prepare), compiled like a card. */
+  backFace?: CardDefinition;
+  faceLayout?: 'transform' | 'modal_dfc' | 'adventure' | 'split' | 'flip' | 'battle' | 'prepare';
+  /** This definition is the back face of a double-faced card. */
+  isBackFace?: boolean;
+  daybound?: boolean;
+  nightbound?: boolean;
+  /** "If it's neither day nor night, it becomes day as ~ enters." */
+  setsDayOnEnter?: boolean;
+  /** Disturb: cast from the graveyard transformed for this cost. */
+  disturb?: string;
+  /** Aftermath (split back half): cast only from the graveyard, then exile. */
+  aftermath?: boolean;
+  fuse?: boolean;
+  /** Battles: starting defense counters. */
+  defense?: number;
+  /** Characteristic-defining P/T ("~'s power and toughness are each equal to…"). */
+  cdaPower?: DynAmount;
+  cdaToughness?: DynAmount;
+  soulbond?: boolean;
+  /** "As long as ~ is paired with another creature, both creatures get +N/+N / have KW." */
+  pairedBonus?: { power?: number; toughness?: number; keywords?: Keyword[] };
+  enlist?: boolean;
+  casualty?: number;
+  /** "Cast ~ only <condition>." */
+  castOnly?: Cond;
+  /** "If ~ would be put into a graveyard from anywhere, exile it instead." */
+  exileInsteadOfGraveyard?: boolean;
+  /** Prepare: enters prepared; while prepared, its spell (back face) may be cast as a copy. */
+  entersPrepared?: boolean;
   /** "Raid — ~ enters with a +1/+1 counter if you attacked this turn" (counters conditioned). */
   entersWithCountersIf?: Cond;
   /** "~ enters with a +1/+1 counter on it for each time it was kicked" handled by kicker.entersWithCounters × times. */

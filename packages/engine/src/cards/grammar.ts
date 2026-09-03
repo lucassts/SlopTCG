@@ -331,6 +331,11 @@ export function parseCondG(raw: string): Cond | null {
   if (low === "you've cast another spell this turn" || low === 'you cast another spell this turn' || low === "you've cast a spell this turn") return { kind: 'spellsCastThisTurnAtLeast', count: 2 };
   if ((m = low.match(/^you've cast (\w+) or more (?:other )?spells this turn$/))) { const n = num(m[1]); return n === null ? null : { kind: 'spellsCastThisTurnAtLeast', count: n }; }
   if (low === 'you gained life this turn' || low === "you've gained life this turn") return { kind: 'gainedLifeThisTurn' };
+  // ---- Leva 5b
+  if (low === 'no spells were cast last turn') return { kind: 'noSpellsLastTurn' };
+  if (low === 'a player cast two or more spells last turn') return { kind: 'twoSpellsLastTurn' };
+  if (low === "it's day" || low === 'it is day') return { kind: 'dayNight', value: 'day' };
+  if (low === "it's night" || low === 'it is night') return { kind: 'dayNight', value: 'night' };
   if ((m = low.match(/^you(?:'ve)? gained (\w+) or more life this turn$/))) { const n = num(m[1]); return n === null ? null : { kind: 'lifeGainedAtLeast', amount: n }; }
   if (low === "you've cast a noncreature spell this turn" || low === 'you cast a noncreature spell this turn') return { kind: 'castNoncreatureThisTurn' };
   if (low === 'an opponent lost life this turn') return { kind: 'opponentLostLifeThisTurn' };
@@ -696,10 +701,21 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     if (subj.kind === 'player') return [{ op: 'preventAllTo', what: subj.who as SubjectRef }];
     return apply(subj, (r) => [{ op: 'preventAllTo', what: r }]);
   }
-  if ((m = clause.match(/^(destroy|exile|tap|untap|regenerate|goad|sacrifice|blink) (.+)$/i))) {
+  // Leva 5b: dupla-face.
+  if ((m = clause.match(/^exile (.+?), then return (?:it|that card) to the battlefield transformed under (?:your|its owner's) control$/i))) {
+    const subj = subjOf(m[1]);
+    if (!subj || subj.kind === 'player') return null;
+    return apply(subj, (r) => [{ op: 'returnTransformed', what: r }]);
+  }
+  if ((m = clause.match(/^(destroy|exile|tap|untap|regenerate|goad|sacrifice|blink|transform|flip) (.+)$/i))) {
     const verb = m[1].toLowerCase();
     const rest = m[2];
     if (verb === 'sacrifice') return null; // player verb
+    if (verb === 'transform' || verb === 'flip') {
+      const subj = subjOf(rest);
+      if (!subj || subj.kind === 'player') return null;
+      return apply(subj, (r) => [{ op: 'transform', what: r }]);
+    }
     let noun = rest;
     let untilLeaves = false;
     let cantRegen = false;

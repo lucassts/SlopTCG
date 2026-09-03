@@ -68,7 +68,7 @@ export interface GameObject {
   buybackPaid?: boolean;
   kickerTimes?: number;
   /** Why it sits in exile face down / waiting (foretell, plot, suspend, rebound, warp, madness, cipher, haunting, hideaway, playable). */
-  exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness' | 'cipher' | 'haunting' | 'hideaway' | 'playable';
+  exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness' | 'cipher' | 'haunting' | 'hideaway' | 'playable' | 'adventure';
   /** Miracle: just drawn as the first card this turn — castable for its miracle cost right now. */
   miracleAvailable?: boolean;
   /** Cipher: creature this exiled spell is encoded on. */
@@ -121,6 +121,16 @@ export interface GameObject {
   colorsSpent?: number;
   /** Ravenous: X chosen when cast. */
   castX?: number;
+  // ---- Leva 5b
+  /** Front-face definition of a double-faced card (obj.card is the current face). */
+  baseCard?: CardDefinition;
+  transformed?: boolean;
+  /** Soulbond partner. */
+  pairedWith?: number;
+  /** Prepare: may cast a copy of its spell. */
+  prepared?: boolean;
+  /** "When you control no X, sacrifice ~" already pushed. */
+  stateTriggerPending?: boolean;
   isToken: boolean;
 }
 
@@ -257,6 +267,8 @@ export interface EffectResume {
   finishSpellId: number | null;
   /** Flashback: the finished spell is exiled instead. */
   finishSpellExile?: boolean;
+      /** Adventure: the card waits in exile after resolving. */
+      finishSpellAdventure?: boolean;
 }
 
 /** A triggered ability waiting for its controller to choose targets (or a mode). */
@@ -370,6 +382,11 @@ export interface GameState {
   attackersPowerThisTurn?: number;
   /** Morbid. */
   creaturesDiedThisTurn?: number;
+  /** Day/night (daybound/nightbound); undefined until something makes it day or night. */
+  dayNight?: 'day' | 'night';
+  /** Spells cast during the previous turn (all players / by its active player). */
+  spellsCastLastTurn?: number;
+  activeSpellsLastTurn?: number;
   monarch?: PlayerId;
   initiative?: PlayerId;
   status: 'playing' | 'finished';
@@ -451,6 +468,7 @@ export function createObject(state: GameState, card: CardDefinition, owner: Play
     wasBlocked: false,
     isToken: false,
   };
+  if (card.backFace) obj.baseCard = card;
   state.objects[obj.id] = obj;
   return obj;
 }
@@ -492,6 +510,11 @@ export function moveObject(
     obj.untilEot = { power: 0, toughness: 0, keywords: [] };
     obj.summoningSick = false;
     obj.crewedUntilEot = undefined;
+    obj.pairedWith = undefined;
+    obj.prepared = undefined;
+    obj.stateTriggerPending = undefined;
+    // Double-faced cards leave the battlefield front face up (711.4 / 712.8).
+    if (obj.baseCard && obj.transformed) { obj.card = obj.baseCard; obj.transformed = false; }
   } else {
     // Vale para tudo que entra: um veículo tripulado no turno em que entrou
     // também tem "enjoo" (302.6). Só criaturas consultam a flag.
@@ -570,6 +593,17 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
   const who = (sel: import('./cards/types.js').PlayerSel) => (sel === 'opponent' ? [opp] : sel === 'each' ? [me, opp] : [me]);
   switch (cond.kind) {
     case 'yourTurn': return state.activePlayer === me;
+    // ---- Leva 5b
+    case 'dayNight': return state.dayNight === cond.value;
+    case 'noSpellsLastTurn': return (state.spellsCastLastTurn ?? 0) === 0;
+    case 'twoSpellsLastTurn': return (state.spellsCastLastTurn ?? 0) >= 2;
+    case 'inCombat': return /combat|declare/i.test(state.step);
+    case 'prepared': return !!source.prepared;
+    case 'beingAttacked': return state.step === 'declareAttackers' && state.combatAwaiting === null && state.activePlayer !== me && battlefield(state).some((o) => o.attacking);
+    case 'topCardSharesCreatureType': {
+      const top = state.objects[state.players[me].zones.library[0]];
+      return !!top && top.card.types.includes('Creature') && top.card.subtypes.some((t) => source.card.subtypes.includes(t));
+    }
     case 'attacking': return source.attacking;
     case 'untapped': return !source.tapped;
     case 'tapped': return source.tapped;
@@ -650,22 +684,69 @@ function attachmentBonus(state: GameState, obj: GameObject): { power: number; to
   return { power, toughness };
 }
 
+/** Characteristic-defining P/T ("~'s power is equal to the number of…"): a DynAmount evaluated from the object's controller. */
+export function cdaValue(state: GameState, obj: GameObject, amount: import('./cards/types.js').DynAmount): number {
+  const me = obj.controller;
+  if (typeof amount === 'number') return amount;
+  if (typeof amount === 'string') {
+    if (amount === 'domain') {
+      const lands = state.players[me].zones.battlefield.map((id) => state.objects[id].card);
+      return ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].filter((t) => lands.some((c) => c.subtypes.includes(t))).length;
+    }
+    return 0;
+  }
+  const ctx = { controller: me, sourceId: obj.id, state };
+  if ('per' in amount) return battlefield(state).filter((o) => matchFilter(ctx, amount.per, o)).length;
+  if ('graveyardCount' in amount) {
+    const who: PlayerId[] = amount.graveyardCount === 'each' ? [...PLAYER_IDS] : amount.graveyardCount === 'opponent' ? [opponentOf(me)] : [me];
+    return who.reduce((n, p) => n + state.players[p].zones.graveyard.filter((id) => !amount.filter || cardMatchesFilter(state.objects[id].card, amount.filter)).length, 0);
+  }
+  if ('handSize' in amount) return state.players[amount.handSize === 'opponent' ? opponentOf(me) : me].zones.hand.length;
+  if ('lifeOf' in amount) return state.players[amount.lifeOf === 'opponent' ? opponentOf(me) : me].life;
+  if ('countersOn' in amount) return obj.counters[amount.counter] ?? 0;
+  if ('times' in amount) return amount.times * cdaValue(state, obj, amount.of);
+  if ('plus' in amount) return amount.plus + cdaValue(state, obj, amount.of);
+  return 0;
+}
+
+/** Soulbond: the partner while both are on the battlefield under the same controller. */
+export function soulbondPartner(state: GameState, obj: GameObject): GameObject | undefined {
+  if (obj.pairedWith === undefined || obj.zone !== 'battlefield') return undefined;
+  const p = state.objects[obj.pairedWith];
+  if (!p || p.zone !== 'battlefield' || p.controller !== obj.controller || p.pairedWith !== obj.id) return undefined;
+  return p;
+}
+
+function pairedBonus(state: GameState, obj: GameObject): { power: number; toughness: number; keywords: import('./types.js').Keyword[] } {
+  const total = { power: 0, toughness: 0, keywords: [] as import('./types.js').Keyword[] };
+  const partner = soulbondPartner(state, obj);
+  if (!partner) return total;
+  for (const src of [obj, partner]) {
+    const b = src.card.pairedBonus;
+    if (!b) continue;
+    total.power += b.power ?? 0;
+    total.toughness += b.toughness ?? 0;
+    total.keywords.push(...(b.keywords ?? []));
+  }
+  return total;
+}
+
 export function effectivePower(state: GameState, obj: GameObject): number {
   const fromAttachments = attachmentBonus(state, obj).power;
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
-  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? obj.card.power ?? 0; // virada para baixo: 2/2
+  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? obj.card.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : 0); // virada para baixo: 2/2
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.power, 0);
-  return base + obj.untilEot.power + untilNext + counters + fromAttachments + staticsFor(state, obj).power;
+  return base + obj.untilEot.power + untilNext + counters + fromAttachments + staticsFor(state, obj).power + pairedBonus(state, obj).power;
 }
 
 export function effectiveToughness(state: GameState, obj: GameObject): number {
   const fromAttachments = attachmentBonus(state, obj).toughness;
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
-  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? obj.card.toughness ?? 0;
+  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? obj.card.toughness ?? (obj.card.cdaToughness !== undefined ? cdaValue(state, obj, obj.card.cdaToughness) : 0);
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.toughness, 0);
-  return base + obj.untilEot.toughness + untilNext + counters + fromAttachments + staticsFor(state, obj).toughness;
+  return base + obj.untilEot.toughness + untilNext + counters + fromAttachments + staticsFor(state, obj).toughness + pairedBonus(state, obj).toughness;
 }
 
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
@@ -676,6 +757,7 @@ export function hasKeyword(state: GameState, obj: GameObject, kw: import('./type
   if (!obj.faceDown && obj.card.station && (obj.counters['charge'] ?? 0) >= obj.card.station.threshold && obj.card.station.keywords?.includes(kw)) return true;
   if (obj.untilEot.keywords.includes(kw)) return true;
   if (attachmentsOf(state, obj).some((a) => a.card.attachEffect?.keywords?.includes(kw))) return true;
+  if (pairedBonus(state, obj).keywords.includes(kw)) return true;
   return staticsFor(state, obj).keywords.includes(kw);
 }
 

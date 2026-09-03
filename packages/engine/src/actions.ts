@@ -19,7 +19,7 @@ export type PlayerAction =
   | { type: 'mulligan' }
   /** Keep the hand, putting exactly `bottom` (= mulligans taken) on the bottom. */
   | { type: 'keepHand'; bottom: number[] }
-  | { type: 'playLand'; objectId: number }
+  | { type: 'playLand'; objectId: number; /** MDFC: play the back face (a land). */ face?: 'back' }
   | {
       type: 'castSpell';
       objectId: number;
@@ -36,7 +36,7 @@ export type PlayerAction =
       /** Alternative casting method (evoke, dash, blitz, escape, foretold…, or 'suspend' to exile with time counters). */
       method?:
         | 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp' | 'suspend'
-        | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak' | 'miracle' | 'prototype';
+        | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak' | 'miracle' | 'prototype' | 'disturb';
       /** Escape: graveyard cards exiled as part of the cost. */
       escapeExile?: number[];
       /** Morph/Disguise: cast face down as a 2/2 for {3}. */
@@ -55,6 +55,12 @@ export type PlayerAction =
       replicateTimes?: number;
       /** Modal spells that allow several modes ("choose one or both", "choose two"). */
       modes?: number[];
+      /** Leva 5b: cast the back face (MDFC spell, adventure, split half). */
+      face?: 'back';
+      /** Fuse: cast both halves of a split card. */
+      fuse?: boolean;
+      /** Casualty: creature sacrificed to copy the spell. */
+      casualty?: number;
     }
   /** Morph: turn a face-down permanent face up by paying its morph cost. */
   | { type: 'turnFaceUp'; objectId: number }
@@ -89,6 +95,8 @@ export type PlayerAction =
       defendTarget?: number;
       /** Attackers exerted as they attack (won't untap next untap step). */
       exerted?: number[];
+      /** Enlist: tap another creature to add its power to an attacker. */
+      enlist?: { attacker: number; creature: number }[];
     }
   | { type: 'declareBlockers'; blocks: { blocker: number; attacker: number }[] }
   | { type: 'chooseDiscard'; objectIds: number[] }

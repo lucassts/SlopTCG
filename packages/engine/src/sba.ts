@@ -97,6 +97,20 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
         anyChange = true;
         break;
       }
+      // Battle with no defense is defeated: exiled, then "cast transformed" (put onto the battlefield as its back face).
+      if (obj.card.types.includes('Battle') && !obj.transformed && (obj.counters['defense'] ?? 0) <= 0) {
+        const back = obj.baseCard?.backFace;
+        moveWithEvent(state, obj, 'exile', 'exiled', emit);
+        if (back && (obj.zone as string) === 'exile') {
+          obj.card = back;
+          obj.transformed = true;
+          moveWithEvent(state, obj, 'battlefield', 'returned', emit);
+          emit({ type: 'transformed', objectId: obj.id, cardName: back.name, back: true });
+        }
+        changed = true;
+        anyChange = true;
+        break;
+      }
 
       // Aura attached to nothing (or to something gone) goes to the graveyard;
       // equipment just becomes unattached (704.5n / 704.5p).

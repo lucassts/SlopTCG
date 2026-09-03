@@ -209,11 +209,12 @@ interface ScryfallCard {
   layout?: string;
   oracle_text?: string;
   colors?: string[];
-  card_faces?: { name?: string; mana_cost?: string; type_line?: string; oracle_text?: string; power?: string; toughness?: string; loyalty?: string; colors?: string[] }[];
+  defense?: string;
+  card_faces?: { name?: string; mana_cost?: string; type_line?: string; oracle_text?: string; power?: string; toughness?: string; loyalty?: string; defense?: string; colors?: string[] }[];
 }
 
 /** Multi-face layouts whose front face is a normal card we can play. */
-const FRONT_FACE_LAYOUTS = new Set(['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle']);
+const FRONT_FACE_LAYOUTS = new Set(['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle', 'prepare']);
 
 /** Official card data cache (name, lowercase → card or null when unknown). */
 const scryfallCache = new Map<string, ScryfallCard | null>();
@@ -273,7 +274,7 @@ const num = (v: string | undefined) => {
 function officialToDefinition(official: ScryfallCard): CardDefinition {
   const registry = DEMO_BY_NAME.get(official.name.toLowerCase());
   const face = official.card_faces?.[0];
-  const input = {
+  const input: Parameters<typeof compileOracleCard>[0] = {
     name: official.name.split('//')[0].trim(),
     manaCost: official.mana_cost || face?.mana_cost,
     typeLine: (official.type_line || face?.type_line || '').split('//')[0].trim(),
@@ -281,14 +282,30 @@ function officialToDefinition(official: ScryfallCard): CardDefinition {
     power: num(official.power ?? face?.power),
     toughness: num(official.toughness ?? face?.toughness),
     loyalty: num(official.loyalty ?? face?.loyalty),
+    defense: num(official.defense ?? face?.defense),
     colors: (official.colors ?? face?.colors ?? []) as CardDefinition['colors'],
     oracleId: official.oracle_id,
     scryfallId: official.id,
   };
-  // Multi-face cards: only the front face is modelled — playable, marked partial.
+  // Leva 5b: the second face is compiled too (transform, MDFC, adventure, split, flip, battle, prepare).
+  const back = official.card_faces?.[1];
   const multiface = !!official.card_faces;
+  if (back && FRONT_FACE_LAYOUTS.has(official.layout ?? '')) {
+    input.layout = official.layout;
+    input.backFace = {
+      name: (back.name ?? '').trim(),
+      manaCost: back.mana_cost,
+      typeLine: (back.type_line ?? '').trim(),
+      oracleText: back.oracle_text,
+      power: num(back.power),
+      toughness: num(back.toughness),
+      loyalty: num(back.loyalty),
+      defense: num(back.defense),
+      colors: (back.colors ?? []) as CardDefinition['colors'],
+    };
+  }
   const compiled = multiface && !FRONT_FACE_LAYOUTS.has(official.layout ?? '') ? null : compileOracleCard(input);
-  if (compiled && multiface) {
+  if (compiled && multiface && !compiled.backFace) {
     compiled.automation = 'partial';
     compiled.automationNotes = [...(compiled.automationNotes ?? []), 'Outra face / verso não modelado — use o modo manual para virar'];
   }
@@ -303,7 +320,7 @@ function officialToDefinition(official: ScryfallCard): CardDefinition {
     manaCost: input.manaCost,
     types: types.length > 0 ? types : ['Creature'],
     subtypes,
-    colors: input.colors,
+    colors: input.colors ?? [],
     power: input.power,
     toughness: input.toughness,
     text: input.oracleText?.slice(0, 2000),

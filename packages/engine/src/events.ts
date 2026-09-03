@@ -63,6 +63,9 @@ export type GameEvent =
   | { type: 'modeChosen'; player: PlayerId; cardName: string; mode: string }
   | { type: 'valueChosen'; player: PlayerId; cardName: string; value: string }
   | { type: 'turnedFaceUp'; objectId: number; cardName: string; player: PlayerId }
+  /** Leva 5b: a double-faced permanent changed face (`back` = now showing its back face). */
+  | { type: 'transformed'; objectId: number; cardName: string; back: boolean }
+  | { type: 'dayNightChanged'; value: 'day' | 'night' }
   | { type: 'cascaded'; player: PlayerId; cardName: string; hit: string | null }
   | { type: 'energyChanged'; player: PlayerId; delta: number; total: number }
   | { type: 'explored'; player: PlayerId; cardName: string; revealed: string; toHand: boolean }

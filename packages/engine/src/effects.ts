@@ -28,6 +28,7 @@ import {
   moveWithEvent,
   setTapped,
   type Emit,
+  transformObject,
 } from './ops.js';
 import {
   battlefield,
@@ -857,6 +858,7 @@ export function applyEffectChoice(
     if (next?.type === 'effectChoice') {
       next.resume.finishSpellId = pending.resume.finishSpellId;
       next.resume.finishSpellExile = pending.resume.finishSpellExile;
+      next.resume.finishSpellAdventure = pending.resume.finishSpellAdventure;
     }
     return 'paused';
   }
@@ -864,7 +866,8 @@ export function applyEffectChoice(
   if (spellId !== null) {
     const spell = state.objects[spellId];
     if (spell && spell.zone === 'stack')
-      moveWithEvent(state, spell, pending.resume.finishSpellExile ? 'exile' : 'graveyard', 'resolved', emit);
+      moveWithEvent(state, spell, pending.resume.finishSpellExile || pending.resume.finishSpellAdventure ? 'exile' : 'graveyard', 'resolved', emit);
+      if (pending.resume.finishSpellAdventure) spell.exiledAs = 'adventure';
   }
   return 'done';
 }
@@ -1189,6 +1192,43 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         }
       }
       return;
+
+    case 'transform':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (obj && obj.zone === 'battlefield') transformObject(state, obj, emit);
+      }
+      return;
+
+    case 'returnTransformed':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (!obj || obj.zone !== 'battlefield' || !obj.baseCard?.backFace) continue;
+        moveWithEvent(state, obj, 'exile', 'exiled', emit);
+        if ((obj.zone as string) !== 'exile') continue;
+        obj.card = obj.baseCard.backFace;
+        obj.transformed = true;
+        moveWithEvent(state, obj, 'battlefield', 'returned', emit);
+        emit({ type: 'transformed', objectId: obj.id, cardName: obj.card.name, back: true });
+      }
+      return;
+
+    case 'unprepare': {
+      const src = state.objects[ctx.sourceId];
+      if (src) src.prepared = false;
+      return;
+    }
+
+    case 'pairSoulbond': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || src.zone !== 'battlefield' || src.pairedWith !== undefined) return;
+      const partner = state.players[src.controller].zones.battlefield.map((id) => state.objects[id]).find((o) => o.id !== src.id && isCreature(o) && o.pairedWith === undefined);
+      if (!partner) return;
+      src.pairedWith = partner.id;
+      partner.pairedWith = src.id;
+      emit({ type: 'fizzled', description: `${src.card.name} forma par com ${partner.card.name} (soulbond)` });
+      return;
+    }
 
     case 'returnExiledBy': {
       for (const o of Object.values(state.objects)) {

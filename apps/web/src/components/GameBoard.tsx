@@ -97,6 +97,10 @@ interface Targeting {
   handPickLand?: boolean;
   /** Hand picks are an additional-cost discard (not an alternative-cost exile). */
   handPickDiscard?: boolean;
+  /** Leva 5b: the last sacrifice pick is the casualty creature; face/fuse of the cast. */
+  casualtyPick?: boolean;
+  face?: 'back';
+  fuse?: boolean;
   /** Station: first pick (after hand picks) is the creature to tap. */
   tapPick?: boolean;
   /** Entwine: every mode. */
@@ -349,6 +353,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         const sacrifices = afterHand
           .slice(0, sacCount)
           .flatMap((c) => (c.kind === 'object' ? [c.id] : []));
+        const casualty = t.casualtyPick ? sacrifices.pop() : undefined;
         onAction({
           type: 'castSpell',
           objectId: t.objectId,
@@ -356,7 +361,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           x: t.x,
           mode: t.mode,
           kicked: t.kicked,
-          sacrifices: sacCount > 0 ? sacrifices : undefined,
+          sacrifices: sacrifices.length > 0 ? sacrifices : undefined,
+          casualty,
+          face: t.face,
+          fuse: t.fuse,
           useAltCost: t.useAltCost,
           altExile: handPick > 0 && t.method !== 'retrace' && !t.handPickDiscard ? altExile : undefined,
           discards: t.method === 'retrace' || t.handPickDiscard ? altExile : undefined,
@@ -442,6 +450,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     if (def.types.includes('Land') && castable) {
       opts.push({ label: '⛰ Jogar terreno', run: () => onAction({ type: 'playLand', objectId: cv.objectId }) });
     }
+    // Leva 5b: verso conjurável (MDFC, aventura, carta dividida).
+    const back = def.backFace;
+    if (back && (def.faceLayout === 'modal_dfc' || def.faceLayout === 'adventure' || def.faceLayout === 'split') && back.automation !== 'manual' && !back.aftermath) {
+      if (back.types.includes('Land')) opts.push({ label: `⛰ Jogar terreno — verso: ${back.name}`, run: () => onAction({ type: 'playLand', objectId: cv.objectId, face: 'back' }) });
+      else if (back.spellModes && back.spellModes.length > 0) opts.push({ label: `✨ Conjurar verso — ${back.name} ${back.manaCost ?? ''} (escolher modo)`, run: () => setModalPick({ ...cv, card: back }) });
+      else opts.push({ label: `✨ Conjurar ${def.faceLayout === 'adventure' ? 'aventura' : 'verso'} — ${back.name} ${back.manaCost ?? ''}`, run: () => beginCast(cv, undefined, false, { face: 'back' }) });
+    }
     if (!def.types.includes('Land') && castable) {
       if (def.spellModes && def.spellModes.length > 0)
         opts.push({ label: `✨ Conjurar ${def.manaCost ?? ''} (escolher modo)`, run: () => setModalPick(cv) });
@@ -463,6 +478,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       }
       if (def.entwine && def.spellModes)
         opts.push({ label: `⚡ Conjurar — entwine ${def.entwine} (todos os modos)`, run: () => beginCast(cv, undefined, false, { entwine: true }) });
+      if (def.fuse && def.backFace)
+        opts.push({ label: `⚡ Fundir — ${def.name} + ${def.backFace.name} (${def.manaCost ?? ''}${def.backFace.manaCost ?? ''})`, run: () => beginCast(cv, undefined, false, { fuse: true }) });
       if (cv.miracleAvailable) {
         const mir = def.castMethods?.find((m) => m.kind === 'miracle');
         if (mir) opts.unshift({ label: `✨ Milagre! Conjurar por ${mir.cost}`, run: () => beginCast(cv, undefined, false, { method: 'miracle' }) });
@@ -536,9 +553,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     cv: CardView,
     mode: number | undefined,
     fromGraveyard = false,
-    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[] } = {},
+    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[]; face?: 'back'; fuse?: boolean } = {},
   ) => {
-    const def = cv.card;
+    // Leva 5b: conjurar o verso (MDFC, aventura, metade de carta dividida) usa a definição do verso.
+    const def = (extra.face === 'back' || extra.method === 'disturb') && cv.card.backFace ? cv.card.backFace : cv.card;
     let x: number | undefined;
     if (def.manaCost && def.manaCost.includes('{X}')) {
       const raw = prompt(`${def.name}: escolha o valor de X`, '1');
@@ -575,11 +593,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     }));
     // Custo adicional de vida (Leva 5): confirmação explícita.
     if (def.additionalCost?.payLife && !confirm(`${def.name}: pagar ${def.additionalCost.payLife} pontos de vida como custo adicional?`)) return;
+    // Casualty N (Leva 5b): sacrifício opcional para copiar a mágica.
+    const casualtyPick = def.casualty !== undefined && confirm(`${def.name}: casualty ${def.casualty} — sacrificar uma criatura com poder ${def.casualty} ou mais para copiar a mágica?`);
+    if (casualtyPick) sacSpecs.push({ what: `criatura com poder ${def.casualty} ou mais para sacrificar (casualty)` });
     // Retrace: uma carta de terreno da mão para descartar, antes de tudo. Custo adicional de descarte: N cartas da mão.
     const discardCost = extra.method !== 'retrace' ? def.additionalCost?.discard ?? 0 : 0;
     const handPickCount = extra.method === 'retrace' ? 1 : discardCost;
     const handSpecs = extra.method === 'retrace' ? [{ what: 'carta de terreno da sua mão para descartar' }] : Array.from({ length: discardCost }, () => ({ what: 'carta da sua mão para descartar' }));
-    const targetSpecs = extra.entwine
+    const targetSpecs = extra.fuse
+      ? [...(cv.card.spellTargets ?? []), ...(cv.card.backFace?.spellTargets ?? [])]
+      : extra.entwine
       ? (def.spellModes ?? []).flatMap((m) => m.targets ?? [])
       : extra.modes
         ? extra.modes.flatMap((i) => def.spellModes?.[i]?.targets ?? [])
@@ -594,11 +617,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               : def.spellTargets ?? [];
     const specs = [...handSpecs, ...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : extra.modes ? `${def.name} — ${extra.modes.map((i) => def.spellModes?.[i]?.label).join(' + ')}` : def.name;
       const label = handPickCount > 0 ? `${base} (escolha ${extra.method === 'retrace' ? 'o terreno' : 'a(s) carta(s)'} a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
     }
   };
 
@@ -1559,11 +1582,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you &&
-                    (c.card.castMethods ?? []).filter((m) => m.kind === 'mayhem' || m.kind === 'retrace').map((m) => (
+                    (c.card.castMethods ?? []).filter((m) => m.kind === 'mayhem' || m.kind === 'retrace' || m.kind === 'disturb').map((m) => (
                       <button key={m.kind} onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: m.kind }); }}>
                         ⚡ {m.label}
                       </button>
                     ))}
+                  {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.backFace?.aftermath && myPriority && (
+                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { face: 'back' }); }}>
+                      ⚡ Aftermath — conjurar {c.card.backFace.name} {c.card.backFace.manaCost ?? ''} (do cemitério)
+                    </button>
+                  )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you &&
                     (c.card.abilities ?? []).map((a, i) =>
                       a.kind === 'activated' && a.zone === 'graveyard' ? (
@@ -1578,6 +1606,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                     ) : (
                       <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>✨ Conjurar {c.card.manaCost ?? ''} (do exílio, este turno)</button>
                     )
+                  )}
+                  {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs === 'adventure' && myPriority && (
+                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>✨ Conjurar {c.card.name} {c.card.manaCost ?? ''} (de volta da aventura)</button>
                   )}
                   {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs && (c.exiledAs === 'foretold' || c.exiledAs === 'plotted' || c.exiledAs === 'warped') && (
                     <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: c.exiledAs as CastMethodKind }); }}>

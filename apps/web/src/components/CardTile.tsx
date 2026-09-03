@@ -59,10 +59,12 @@ export interface CardTileProps {
 export function CardTile({ card, size = 'field', selected, targetable, dimmed, attachment, onClick, onContextMenu, title }: CardTileProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const def = card.card;
+  // Leva 5b: verso de cartas dupla-face (transform / MDFC / batalha) tem imagem própria no Scryfall.
+  const backImage = !!def.isBackFace && (def.faceLayout === 'transform' || def.faceLayout === 'modal_dfc' || def.faceLayout === 'battle');
   const url = card.isToken && !def.scryfallId
     ? null
     : def.scryfallId
-      ? imageUrlById(def.scryfallId)
+      ? imageUrlById(def.scryfallId, backImage)
       : imageUrlByName(def.name);
 
   const classes = [

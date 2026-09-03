@@ -52,16 +52,25 @@ function toDefinition(official) {
     power: num(official.power ?? face?.power),
     toughness: num(official.toughness ?? face?.toughness),
     loyalty: num(official.loyalty ?? face?.loyalty),
+    defense: num(official.defense ?? face?.defense),
     colors: official.colors ?? face?.colors ?? [],
     oracleId: official.oracle_id,
     scryfallId: official.id,
   };
-  const FRONT_FACE_LAYOUTS = new Set(['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle']);
+  const FRONT_FACE_LAYOUTS = new Set(['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle', 'prepare']);
   const multiface = !!official.card_faces;
   if (multiface && !FRONT_FACE_LAYOUTS.has(official.layout ?? '')) return { def: null, source: 'multiface' };
+  const back = official.card_faces?.[1];
+  if (back && FRONT_FACE_LAYOUTS.has(official.layout ?? '')) {
+    input.layout = official.layout;
+    input.backFace = {
+      name: (back.name ?? '').trim(), manaCost: back.mana_cost, typeLine: (back.type_line ?? '').trim(), oracleText: back.oracle_text,
+      power: num(back.power), toughness: num(back.toughness), loyalty: num(back.loyalty), defense: num(back.defense), colors: back.colors ?? [],
+    };
+  }
   const diag = { failedLines: [] };
   const compiled = compileOracleCard(input, diag);
-  if (compiled && multiface) {
+  if (compiled && multiface && !compiled.backFace) {
     compiled.automation = 'partial';
     compiled.automationNotes = [...(compiled.automationNotes ?? []), 'Outra face não modelada'];
     return { def: compiled, source: 'partial' };
@@ -99,7 +108,7 @@ function validateStructure(def) {
   }
   for (const k of def.keywords ?? []) if (!KEYWORDS.has(k)) problems.push(`keyword desconhecida ${k}`);
   if (def.types.includes('Creature') && !def.isToken) {
-    if (def.power === undefined || def.toughness === undefined) problems.push('criatura sem poder/resistência numéricos');
+    if ((def.power === undefined && def.cdaPower === undefined) || (def.toughness === undefined && def.cdaToughness === undefined)) problems.push('criatura sem poder/resistência numéricos');
   }
   if (isSpell) {
     if (!def.spellEffect?.length && !def.spellModes?.length) problems.push('mágica sem efeito');
@@ -112,7 +121,7 @@ function validateStructure(def) {
       for (const r of targetRefs(ab.effect)) if (r >= n) problems.push(`habilidade ${i} referencia target:${r} sem spec`);
       if (!ab.effect?.length && !(ab.kind === 'triggered' && ab.modes?.length) && !(ab.kind === 'activated' && ab.cost?.tapCreature)) problems.push(`habilidade ${i} sem efeito`);
     }
-    if (ab.kind === 'activated' && ab.isManaAbility && !ab.effect.some((e) => e.op === 'addMana' || e.op === 'addManaChoice' || e.op === 'addChosenColorMana'))
+    if (ab.kind === 'activated' && ab.isManaAbility && !ab.effect.some((e) => e.op === 'addMana' || e.op === 'addManaChoice' || e.op === 'addChosenColorMana' || e.op === 'addManaOptions'))
       problems.push(`habilidade de mana ${i} não adiciona mana`);
   }
   if (def.subtypes.includes('Aura') && !def.enchant) problems.push('aura sem enchant');
@@ -288,13 +297,18 @@ function simulate(def) {
       if (!r.ok) problems.push(`jogar terreno recusado: ${errMsg(r)}`);
       else settle(game, log);
     } else {
-      const specs = def.spellModes?.[0]?.targets ?? (def.enchant ? [{ what: def.enchant.what, controlledBy: def.enchant.controlledBy, typeAnyOf: def.enchant.typeAnyOf }] : def.spellTargets ?? []);
+      let chosenModes = null;
+      if (def.spellModes?.length) {
+        chosenModes = def.spellModeChoice ? def.spellModes.map((_, i) => i).slice(0, Math.max(1, def.spellModeChoice.min)) : [0];
+        if (def.spellModeChoice?.repeat) while (chosenModes.length < def.spellModeChoice.min) chosenModes.push(0);
+      }
+      const specs = chosenModes ? chosenModes.flatMap((i) => def.spellModes[i]?.targets ?? []) : (def.enchant ? [{ what: def.enchant.what, controlledBy: def.enchant.controlledBy, typeAnyOf: def.enchant.typeAnyOf }] : def.spellTargets ?? []);
       const targets = specs.map((spec) => pickTarget(game, me, opp, spec));
       if (targets.some((t) => t === null)) {
         log.push(`sem alvo legal para conjurar (${specs.map((x) => x.what).join(',')}) — pulado`);
       } else {
         const action = { type: 'castSpell', objectId: cardId, targets };
-        if (def.spellModes?.length) { if (def.spellModeChoice) action.modes = def.spellModes.map((_, i) => i).slice(0, Math.max(1, def.spellModeChoice.min)); else action.mode = 0; }
+        if (chosenModes) { if (def.spellModeChoice) action.modes = chosenModes; else action.mode = 0; }
         if (def.manaCost?.includes('{X}')) action.x = 1;
         let skipCast = false;
         if (def.additionalCost?.sacrifice) {
@@ -314,7 +328,7 @@ function simulate(def) {
         }
         const r = skipCast ? { ok: true, skipped: true } : game.apply(me, action);
         if (skipCast) { /* cenário não cobre o custo adicional */ }
-        else if (!r.ok) problems.push(`conjuração recusada: ${errMsg(r)}`);
+        else if (!r.ok) { const m = errMsg(r); if (/só pode ser conjurada quando a condição/.test(m)) log.push(`conjuração: ${m}`); else problems.push(`conjuração recusada: ${m}`); }
         else {
           settle(game, log);
           const obj = s.objects[cardId];

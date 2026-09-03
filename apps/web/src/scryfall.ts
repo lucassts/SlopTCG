@@ -12,8 +12,8 @@ export function imageUrlByName(name: string): string {
   return `${API}/cards/named?exact=${encodeURIComponent(name)}&format=image&version=normal`;
 }
 
-export function imageUrlById(scryfallId: string): string {
-  return `https://cards.scryfall.io/normal/front/${scryfallId.slice(0, 1)}/${scryfallId.slice(1, 2)}/${scryfallId}.jpg`;
+export function imageUrlById(scryfallId: string, back = false): string {
+  return `https://cards.scryfall.io/normal/${back ? 'back' : 'front'}/${scryfallId.slice(0, 1)}/${scryfallId.slice(1, 2)}/${scryfallId}.jpg`;
 }
 
 interface CollectionCard {

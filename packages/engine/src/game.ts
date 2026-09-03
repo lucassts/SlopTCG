@@ -20,7 +20,7 @@ import {
 import type { GameEvent } from './events.js';
 import { canPay, costCmc, parseCost, planPayment } from './mana.js';
 import { castCardFree } from './effects.js';
-import { changeLife, draw, lose, moveWithEvent, setTapped } from './ops.js';
+import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
 import { DUNGEONS } from './dungeons.js';
 import {
@@ -60,6 +60,23 @@ export interface GameOptions {
    * loser of the previous game decides).
    */
   starterChooser?: PlayerId;
+}
+
+/** Extra options of a castSpell action (alternative methods, costs, faces). */
+interface CastExtra {
+  method?: Extract<import('./actions.js').PlayerAction, { type: 'castSpell' }>['method'];
+  escapeExile?: number[];
+  faceDown?: boolean;
+  buyback?: boolean;
+  kickerTimes?: number;
+  entwine?: boolean;
+  discards?: number[];
+  attackerId?: number;
+  replicateTimes?: number;
+  modes?: number[];
+  face?: 'back';
+  fuse?: boolean;
+  casualty?: number;
 }
 
 export class Game {
@@ -301,7 +318,7 @@ export class Game {
       case 'keepHand':
         return this.doKeepHand(playerId, action.bottom);
       case 'playLand':
-        return this.doPlayLand(playerId, action.objectId);
+        return this.doPlayLand(playerId, action.objectId, action.face);
       case 'castSpell':
         return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices, action.kicked, action.useAltCost, action.altExile, {
           method: action.method,
@@ -314,6 +331,9 @@ export class Game {
           attackerId: action.attackerId,
           replicateTimes: action.replicateTimes,
           modes: action.modes,
+          face: action.face,
+          fuse: action.fuse,
+          casualty: action.casualty,
         });
       case 'turnFaceUp':
         return this.doTurnFaceUp(playerId, action.objectId);
@@ -332,7 +352,7 @@ export class Game {
       case 'cycle':
         return this.doCycle(playerId, action.objectId);
       case 'declareAttackers':
-        return this.doDeclareAttackers(playerId, action.attackers, action.defendTarget, action.exerted);
+        return this.doDeclareAttackers(playerId, action.attackers, action.defendTarget, action.exerted, action.enlist);
       case 'declareBlockers':
         return this.doDeclareBlockers(playerId, action.blocks);
       case 'chooseDiscard':
@@ -404,7 +424,19 @@ export class Game {
     return true;
   }
 
-  private doPlayLand(playerId: PlayerId, objectId: number): boolean {
+  private doPlayLand(playerId: PlayerId, objectId: number, face?: 'back'): boolean {
+    const obj = this.state.objects[objectId];
+    if (face === 'back') {
+      if (!obj?.baseCard?.backFace || obj.baseCard.faceLayout !== 'modal_dfc') { this.fail(playerId, 'essa carta não tem verso jogável'); return false; }
+      obj.card = obj.baseCard.backFace;
+      obj.transformed = true;
+    }
+    const ok = this.doPlayLandInner(playerId, objectId);
+    if (!ok && face === 'back' && obj?.baseCard) { obj.card = obj.baseCard; obj.transformed = false; }
+    return ok;
+  }
+
+  private doPlayLandInner(playerId: PlayerId, objectId: number): boolean {
     const s = this.state;
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
@@ -490,8 +522,24 @@ export class Game {
         this.emit({ type: 'loreAdded', objectId: obj.id, cardName: card.name, total: 1 });
       }
     }
+    // ---- Leva 5b: batalhas, prepare, soulbond, dia/noite
+    if (card.defense !== undefined) add('defense', card.defense);
+    if (card.entersPrepared) obj.prepared = true;
+    if (card.setsDayOnEnter && s.dayNight === undefined) this.setDayNight('day');
+    if (card.daybound) {
+      if (s.dayNight === undefined) this.setDayNight('day');
+      else if (s.dayNight === 'night' && !obj.transformed) transformObject(s, obj, this.emit);
+    }
+    if (isCreature(obj) && !card.soulbond) {
+      for (const id of s.players[obj.controller].zones.battlefield) {
+        const sb = s.objects[id];
+        if (sb.id !== obj.id && sb.card.soulbond && sb.pairedWith === undefined && sb.zone === 'battlefield')
+          this.pushTrigger(sb, { text: 'soulbond', effect: [{ op: 'mayDo', prompt: `formar par entre ${sb.card.name} e ${card.name}?`, effect: [{ op: 'pairSoulbond' }] }] });
+      }
+    }
     // Escolhas e devorar ao entrar: viram habilidade na pilha (podem pausar).
     const enterScript: import('./cards/types.js').EffectStep[] = [];
+    if (card.soulbond) enterScript.push({ op: 'mayDo', prompt: `${card.name}: formar par com outra criatura (soulbond)?`, effect: [{ op: 'pairSoulbond' }] });
     if (card.copyOnEnter) { obj.copyPending = true; enterScript.push({ op: 'copyOf' }); }
     if (card.chooseOnEnter) enterScript.push({ op: 'chooseValue', kind: card.chooseOnEnter });
     if (card.devour) enterScript.push({ op: 'devour', per: card.devour });
@@ -561,18 +609,37 @@ export class Game {
     kicked?: boolean,
     useAltCost?: boolean,
     altExile?: number[],
-    extra: {
-      method?: Extract<import('./actions.js').PlayerAction, { type: 'castSpell' }>['method'];
-      escapeExile?: number[];
-      faceDown?: boolean;
-      buyback?: boolean;
-      kickerTimes?: number;
-      entwine?: boolean;
-      discards?: number[];
-      attackerId?: number;
-      replicateTimes?: number;
-      modes?: number[];
-    } = {},
+    extra: CastExtra = {},
+  ): boolean {
+    // Leva 5b: casting the back face (MDFC spell, adventure, split half, aftermath, disturb) swaps the face first;
+    // if the cast is refused the card goes back to its front.
+    const obj = this.state.objects[objectId];
+    const wantBack = extra.face === 'back' || extra.method === 'disturb';
+    if (wantBack) {
+      const base = obj?.baseCard;
+      const layout = base?.faceLayout;
+      if (!obj || !base?.backFace || !(layout === 'modal_dfc' || layout === 'adventure' || layout === 'split' || extra.method === 'disturb'))
+        { this.fail(playerId, 'essa carta não tem outra face conjurável'); return false; }
+      if (obj.transformed) { this.fail(playerId, 'a carta já está mostrando o verso'); return false; }
+      obj.card = base.backFace;
+      obj.transformed = true;
+    }
+    const ok = this.doCastSpellInner(playerId, objectId, targets, x, modeIndex, sacrifices, kicked, useAltCost, altExile, extra);
+    if (!ok && wantBack && obj?.baseCard && obj.zone !== 'stack') { obj.card = obj.baseCard; obj.transformed = false; }
+    return ok;
+  }
+
+  private doCastSpellInner(
+    playerId: PlayerId,
+    objectId: number,
+    targets: TargetChoice[],
+    x?: number,
+    modeIndex?: number,
+    sacrifices?: number[],
+    kicked?: boolean,
+    useAltCost?: boolean,
+    altExile?: number[],
+    extra: CastExtra = {},
   ): boolean {
     const s = this.state;
     const err = this.requirePriority(playerId);
@@ -582,9 +649,15 @@ export class Game {
       { this.fail(playerId, 'carta inválida'); return false; }
     const card = obj.card;
     const method = extra.method;
-    const cm = method && method !== 'suspend' ? card.castMethods?.find((m) => m.kind === method) : undefined;
+    const cm: import('./cards/types.js').CastMethod | undefined =
+      method === 'disturb'
+        ? (obj.baseCard?.disturb !== undefined ? { kind: 'disturb', cost: obj.baseCard.disturb, label: `perturbar ${obj.baseCard.disturb}` } : undefined)
+        : method && method !== 'suspend' ? card.castMethods?.find((m) => m.kind === method) : undefined;
     if (method && method !== 'suspend' && !cm)
       { this.fail(playerId, `${card.name} não pode ser conjurada assim`); return false; }
+    // "Cast ~ only during the declare attackers step and only if you've been attacked this step." etc.
+    if (card.castOnly && !staticConditionHolds(s, { ...obj, controller: playerId }, card.castOnly))
+      { this.fail(playerId, `${card.name} só pode ser conjurada quando a condição do texto vale`); return false; }
     // Split second: nothing can be cast while such a spell is on the stack.
     if (s.stack.some((i) => i.kind === 'spell' && s.objects[i.sourceId]?.card.splitSecond))
       { this.fail(playerId, 'fração de segundo: nada pode ser conjurado agora'); return false; }
@@ -608,7 +681,7 @@ export class Game {
       return true;
     }
     // Flashback / escape / mayhem / retrace: from your graveyard. Foretold / plotted / warped: from exile.
-    const viaGraveyard = method === 'mayhem' || method === 'retrace';
+    const viaGraveyard = method === 'mayhem' || method === 'retrace' || method === 'disturb';
     const viaFlashback = obj.zone === 'graveyard' && !!obj.card.flashback && method !== 'escape' && !viaGraveyard;
     const viaEscape = method === 'escape';
     const viaExile = method === 'foretold' || method === 'plotted' || method === 'warp';
@@ -632,6 +705,10 @@ export class Game {
     if (method === 'miracle' && !obj.miracleAvailable)
       { this.fail(playerId, 'milagre: só no momento em que é a primeira carta comprada no turno'); return false; }
     const viaImpulse = obj.zone === 'exile' && obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn && !method;
+    // Adventure: the creature half is castable from exile after the adventure resolved; aftermath: the back half only from the graveyard.
+    const viaAdventure = obj.zone === 'exile' && obj.exiledAs === 'adventure' && !method && !obj.transformed;
+    const viaAftermath = !!card.aftermath && obj.transformed === true && obj.zone === 'graveyard';
+    if (card.aftermath && obj.transformed && obj.zone !== 'graveyard') { this.fail(playerId, 'aftermath: essa metade só pode ser conjurada do cemitério'); return false; }
     const replicateTimes = Math.max(0, extra.replicateTimes ?? 0);
     if (replicateTimes > 0 && !card.replicate) { this.fail(playerId, 'essa mágica não tem replicar'); return false; }
     if (viaExile) {
@@ -639,7 +716,7 @@ export class Game {
         { this.fail(playerId, 'essa carta não está exilada para isso'); return false; }
       if (obj.exiledOnTurn === s.turn && method !== 'warp')
         { this.fail(playerId, 'não pode ser conjurada no mesmo turno em que foi exilada'); return false; }
-    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse && !viaLibraryTop) {
+    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse && !viaLibraryTop && !viaAdventure && !viaAftermath) {
       { this.fail(playerId, 'carta inválida'); return false; }
     }
     if (kicked && !card.kicker)
@@ -676,10 +753,25 @@ export class Game {
       if (extra.entwine) mode = combineModes(card.spellModes.map((_, i) => i));
       else {
         const picked = extra.modes ?? (modeIndex !== undefined ? [modeIndex] : []);
-        if (picked.length < choice.min || picked.length > choice.max || new Set(picked).size !== picked.length || picked.some((i) => !card.spellModes![i]))
+        if (picked.length < choice.min || picked.length > choice.max || (!choice.repeat && new Set(picked).size !== picked.length) || picked.some((i) => !card.spellModes![i]))
           { this.fail(playerId, choice.max > 1 ? `escolha de ${choice.min} a ${choice.max} modos da mágica` : 'escolha um modo da mágica'); return false; }
         mode = picked.length === 1 ? card.spellModes[picked[0]] : combineModes(picked);
       }
+    }
+    // Fuse: both halves of a split card, from the hand, as one spell (costs add up).
+    if (extra.fuse) {
+      const back = obj.baseCard?.backFace;
+      if (!card.fuse || !back || obj.zone !== 'hand' || obj.transformed) { this.fail(playerId, 'fundir: só da mão, em uma carta dividida com fuse'); return false; }
+      const off = (card.spellTargets ?? []).length;
+      const backEffect = JSON.parse(JSON.stringify(back.spellEffect ?? []).replace(/"target:(\d+)"/g, (_s, n) => `"target:${parseInt(n, 10) + off}"`)) as import('./cards/types.js').EffectStep[];
+      mode = { label: `${card.name} + ${back.name} (fuse)`, targets: [...(card.spellTargets ?? []), ...(back.spellTargets ?? [])], effect: [...(card.spellEffect ?? []), ...backEffect] };
+    }
+    // Casualty N: sacrifice a creature with power ≥ N to copy the spell.
+    let casualtyObj: GameObject | undefined;
+    if (extra.casualty !== undefined) {
+      casualtyObj = s.objects[extra.casualty];
+      if (card.casualty === undefined || !casualtyObj || casualtyObj.zone !== 'battlefield' || casualtyObj.controller !== playerId || !isCreature(casualtyObj) || effectivePower(s, casualtyObj) < card.casualty)
+        { this.fail(playerId, `casualty ${card.casualty ?? ''}: sacrifique uma criatura sua com poder ${card.casualty ?? 0} ou mais`); return false; }
     }
 
     // Auras derive their (mandatory) target from the enchant spec; bestow makes the card an Aura; overload has no targets.
@@ -797,6 +889,15 @@ export class Game {
     } else {
       const baseCost = extra.faceDown ? '{3}' : cm ? cm.cost : viaFlashback ? card.flashback!.cost : card.manaCost;
       const cost = parseCost(baseCost);
+      if (extra.fuse && obj.baseCard?.backFace) {
+        const bc = parseCost(obj.baseCard.backFace.manaCost);
+        cost.generic += bc.generic;
+        cost.colorless += bc.colorless;
+        cost.colored.push(...bc.colored);
+        cost.hybrid.push(...bc.hybrid);
+        cost.phyrexian.push(...bc.phyrexian);
+        cost.xCount += bc.xCount;
+      }
       if (kickerTimes > 0 && card.kicker) {
         const kick = parseCost(card.kicker.cost);
         for (let i = 0; i < kickerTimes; i++) {
@@ -914,6 +1015,7 @@ export class Game {
       sacrificedPower = sacs.reduce((sum, id) => sum + Math.max(0, effectivePower(s, s.objects[id])), 0);
       for (const id of sacs) moveWithEvent(s, s.objects[id], 'graveyard', 'sacrificed', this.emit);
     }
+    if (casualtyObj) moveWithEvent(s, casualtyObj, 'graveyard', 'sacrificed', this.emit);
 
     const fromHand = obj.zone === 'hand';
     removeFromCurrentZone(s, obj);
@@ -953,7 +1055,7 @@ export class Game {
       flashback: viaFlashback,
     });
     // Storm: one copy per spell cast earlier this turn (they resolve first). Replicate: one copy per extra payment.
-    const copies = (card.storm ? s.spellsCastThisTurn : 0) + replicateTimes;
+    const copies = (card.storm ? s.spellsCastThisTurn : 0) + replicateTimes + (casualtyObj ? 1 : 0);
     s.spellsCastThisTurn += 1;
     for (let i = 0; i < copies; i++) {
       s.stack.push({
@@ -1469,7 +1571,7 @@ export class Game {
     return true;
   }
 
-  private doDeclareAttackers(playerId: PlayerId, attackerIds: number[], defendTarget?: number, exerted: number[] = []): boolean {
+  private doDeclareAttackers(playerId: PlayerId, attackerIds: number[], defendTarget?: number, exerted: number[] = [], enlist: { attacker: number; creature: number }[] = []): boolean {
     const s = this.state;
     if (s.combatAwaiting !== 'attackers' || playerId !== s.activePlayer)
       { this.fail(playerId, 'não é hora de declarar atacantes'); return false; }
@@ -1493,13 +1595,20 @@ export class Game {
     // Optional: attack a defender's planeswalker instead of the player.
     if (defendTarget !== undefined) {
       const pw = s.objects[defendTarget];
+      const isBattle = !!pw && pw.card.types.includes('Battle') && pw.controller === playerId && !pw.transformed; // Siege: protected by the opponent
       if (
         !pw ||
         pw.zone !== 'battlefield' ||
-        pw.controller !== opponentOf(playerId) ||
-        !pw.card.types.includes('Planeswalker')
+        (!isBattle && (pw.controller !== opponentOf(playerId) || !pw.card.types.includes('Planeswalker')))
       )
-        { this.fail(playerId, 'alvo de ataque inválido (planeswalker do oponente)'); return false; }
+        { this.fail(playerId, 'alvo de ataque inválido (planeswalker do oponente ou batalha sua)'); return false; }
+    }
+    for (const e of enlist) {
+      const atk = s.objects[e.attacker];
+      const c = s.objects[e.creature];
+      if (!atk || !attackerIds.includes(e.attacker) || !atk.card.enlist) { this.fail(playerId, 'enlist: só atacantes com alistar'); return false; }
+      if (!c || c.zone !== 'battlefield' || c.controller !== playerId || attackerIds.includes(c.id) || c.tapped || !isCreature(c) || (c.summoningSick && !hasKeyword(s, c, 'haste')) || enlist.filter((x) => x.creature === c.id).length > 1)
+        { this.fail(playerId, 'alistar: vire outra criatura sua desvirada, que não ataca e sem enjoo'); return false; }
     }
     for (const id of exerted) {
       const o = s.objects[id];
@@ -1512,6 +1621,13 @@ export class Game {
       obj.pwTarget = defendTarget;
       if (!hasKeyword(s, obj, 'vigilance')) setTapped(s, obj, true, this.emit);
       if (exerted.includes(obj.id)) obj.exertedUntilTurn = s.turn + 2;
+    }
+    for (const e of enlist) {
+      const c = s.objects[e.creature];
+      const atk = s.objects[e.attacker];
+      setTapped(s, c, true, this.emit);
+      atk.untilEot.power += Math.max(0, effectivePower(s, c));
+      this.emit({ type: 'fizzled', description: `${atk.card.name} alista ${c.card.name} (+${Math.max(0, effectivePower(s, c))}/+0)` });
     }
     s.attackersPowerThisTurn = (s.attackersPowerThisTurn ?? 0) + attackers.reduce((sum, o) => sum + Math.max(0, effectivePower(s, o)), 0);
     s.combatAwaiting = null;
@@ -1842,6 +1958,7 @@ export class Game {
 
     switch (step) {
       case 'untap': {
+        this.checkDayNight();
         const player = s.players[s.activePlayer];
         player.landsPlayedThisTurn = 0;
         for (const id of player.zones.battlefield) {
@@ -1961,6 +2078,8 @@ export class Game {
         delete obj.counters['__regen']; // regeneration shields expire
       }
     }
+    s.spellsCastLastTurn = s.spellsCastThisTurn;
+    s.activeSpellsLastTurn = s.players[s.activePlayer].spellsCastThisTurn ?? 0;
     for (const p of PLAYER_IDS) {
       const ps = s.players[p];
       ps.damagedThisTurn = false;
@@ -2137,6 +2256,7 @@ export class Game {
         if (s.pendingDecision?.type === 'effectChoice') {
           s.pendingDecision.resume.finishSpellId = obj.id;
           s.pendingDecision.resume.finishSpellExile = item.flashback || !!obj.card.exileOnResolve;
+          s.pendingDecision.resume.finishSpellAdventure = !!obj.transformed && obj.baseCard?.faceLayout === 'adventure';
         }
         this.emit({ type: 'stackResolved', description: `${item.description} está resolvendo` });
         return;
@@ -2149,6 +2269,10 @@ export class Game {
           moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
           obj.exiledAs = 'rebound';
           s.delayed.push({ at: 'nextUpkeep', player: item.controller, objectId: obj.id, action: 'castFree' });
+        } else if (obj.transformed && obj.baseCard?.faceLayout === 'adventure') {
+          // Adventure: the card waits in exile; the creature may be cast from there later.
+          moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
+          obj.exiledAs = 'adventure';
         } else moveWithEvent(s, obj, item.flashback || obj.card.exileOnResolve ? 'exile' : 'graveyard', 'resolved', this.emit);
         (obj as GameObject & { reboundFromHand?: boolean }).reboundFromHand = false;
         // Haunt (spell): after resolving, exile it haunting target creature.
@@ -2184,7 +2308,50 @@ export class Game {
   // -------------------------------------------------------------- triggers
 
   /** Derive triggered abilities from events emitted since the last scan. */
+  /** State triggers ("When you control no Islands, sacrifice ~"): checked whenever triggers are scanned. */
+  private checkStateTriggers(): void {
+    const s = this.state;
+    for (const p of PLAYER_IDS) {
+      for (const id of [...s.players[p].zones.battlefield]) {
+        const o = s.objects[id];
+        if (!o || o.stateTriggerPending) continue;
+        (o.card.abilities ?? []).forEach((ab, idx) => {
+          if (ab.kind !== 'triggered' || ab.trigger.on !== 'controlsNone' || o.stateTriggerPending) return;
+          const f = ab.trigger.filter;
+          if (s.players[o.controller].zones.battlefield.some((oid) => oid !== o.id && matchFilter({ controller: o.controller, sourceId: o.id, state: s }, f, s.objects[oid]))) return;
+          o.stateTriggerPending = true;
+          this.pushTrigger(o, ab, undefined, undefined, { abilityIndex: idx });
+        });
+      }
+    }
+  }
+
+  /** Day/night: as the untap step begins, the previous turn's spell count may flip it (726.2). */
+  private checkDayNight(): void {
+    const s = this.state;
+    if (!s.dayNight || s.turn <= 1) return;
+    const last = s.activeSpellsLastTurn ?? 0;
+    if (s.dayNight === 'day' && last === 0) this.setDayNight('night');
+    else if (s.dayNight === 'night' && last >= 2) this.setDayNight('day');
+  }
+
+  private setDayNight(v: 'day' | 'night'): void {
+    const s = this.state;
+    if (s.dayNight === v) return;
+    s.dayNight = v;
+    this.emit({ type: 'dayNightChanged', value: v });
+    for (const p of PLAYER_IDS) {
+      for (const id of [...s.players[p].zones.battlefield]) {
+        const o = s.objects[id];
+        if (!o?.baseCard?.daybound || !o.baseCard.backFace) continue;
+        const wantBack = v === 'night';
+        if (!!o.transformed !== wantBack) transformObject(s, o, this.emit);
+      }
+    }
+  }
+
   private scanTriggers(): void {
+    this.checkStateTriggers();
     while (this.triggerCursor < this.buf.length) {
       const ev = this.buf[this.triggerCursor++];
       if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireZoneTriggers(ev.objectId, 'etb');
@@ -2341,6 +2508,7 @@ export class Game {
       if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireEvolve(ev.objectId);
       if (ev.type === 'tappedChanged' && ev.tapped) this.fireSelfTrigger(ev.objectId, 'becomesTapped');
       if (ev.type === 'tappedChanged' && !ev.tapped) this.fireSelfTrigger(ev.objectId, 'becomesUntapped');
+      if (ev.type === 'transformed') this.fireSelfTrigger(ev.objectId, 'transformsInto');
       if (ev.type === 'turnedFaceUp') this.fireSelfTrigger(ev.objectId, 'turnedFaceUp');
       if (ev.type === 'damageDealt') {
         if (ev.target.kind === 'object') {
@@ -2538,7 +2706,7 @@ export class Game {
 
   private fireSelfTrigger(
     objectId: number,
-    on: 'etb' | 'dies' | 'attacks' | 'blocks' | 'leaves' | 'becomesTapped' | 'becomesBlocked' | 'combatDamageToPlayer' | 'turnedFaceUp' | 'dealtDamage' | 'dealsDamage' | 'combatDamageToCreature' | 'attacksUnblocked' | 'youExertThis' | 'youCastThis' | 'becomesUntapped' | 'damagedCreatureDies',
+    on: 'etb' | 'dies' | 'attacks' | 'blocks' | 'leaves' | 'becomesTapped' | 'becomesBlocked' | 'combatDamageToPlayer' | 'turnedFaceUp' | 'dealtDamage' | 'dealsDamage' | 'combatDamageToCreature' | 'attacksUnblocked' | 'youExertThis' | 'youCastThis' | 'becomesUntapped' | 'damagedCreatureDies' | 'transformsInto',
     extra: { subjectId?: number; subjectPlayer?: PlayerId; triggerAmount?: number } = {},
   ): void {
     const obj = this.state.objects[objectId];

@@ -145,6 +145,14 @@ export function dealDamageToObject(
     emit({ type: 'countersChanged', objectId: target.id, cardName: target.card.name, counter: 'loyalty', delta: -amount, total });
     return;
   }
+  // Battles take damage as defense loss.
+  if (target.card.types.includes('Battle')) {
+    const total = Math.max(0, (target.counters['defense'] ?? 0) - amount);
+    target.counters['defense'] = total;
+    emit({ type: 'damageDealt', sourceName, sourceId: opts?.sourceId, combat: opts?.combat, target: { kind: 'object', id: target.id }, targetName: target.card.name, amount });
+    emit({ type: 'countersChanged', objectId: target.id, cardName: target.card.name, counter: 'defense', delta: -amount, total });
+    return;
+  }
   target.damage += amount;
   if (opts?.deathtouch) target.counters['__deathtouched'] = 1;
   emit({
@@ -264,6 +272,8 @@ export function moveWithEvent(
     emit({ type: 'zoneChanged', objectId: obj.id, cardName: obj.card.name, from, to: 'library', player: obj.owner, reason });
     return;
   }
+  // "If ~ would be put into a graveyard from anywhere, exile it instead." (disturb back faces).
+  if (to === 'graveyard' && obj.card.exileInsteadOfGraveyard && !obj.isToken) to = 'exile';
   // Turn bookkeeping for conditions (morbid, revolt, celebration).
   if (from === 'battlefield') {
     const ps = state.players[obj.controller];
@@ -299,6 +309,17 @@ function removeToken(state: GameState, obj: GameObject): void {
   const i = arr.indexOf(obj.id);
   if (i >= 0) arr.splice(i, 1);
   delete state.objects[obj.id];
+}
+
+/** Transform / flip a double-faced permanent (no-op when it has no back face). */
+export function transformObject(state: GameState, obj: GameObject, emit: Emit): boolean {
+  const base = obj.baseCard;
+  if (!base?.backFace || obj.zone !== 'battlefield') return false;
+  obj.transformed = !obj.transformed;
+  obj.card = obj.transformed ? base.backFace : base;
+  emit({ type: 'transformed', objectId: obj.id, cardName: obj.card.name, back: !!obj.transformed });
+  void state;
+  return true;
 }
 
 export function setTapped(state: GameState, obj: GameObject, tapped: boolean, emit: Emit): void {
