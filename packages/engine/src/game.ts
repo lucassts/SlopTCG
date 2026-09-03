@@ -11,6 +11,7 @@ import { cardMatchesFilter, isPermanentCard } from './cards/types.js';
 import { canAttack, canBlock, clearCombat, resolveCombatDamage } from './combat.js';
 import {
   applyEffectChoice,
+  condHolds,
   itemStillHasLegalWork,
   resolveAmount,
   runEffectScript,
@@ -312,6 +313,7 @@ export class Game {
           discards: action.discards,
           attackerId: action.attackerId,
           replicateTimes: action.replicateTimes,
+          modes: action.modes,
         });
       case 'turnFaceUp':
         return this.doTurnFaceUp(playerId, action.objectId);
@@ -330,7 +332,7 @@ export class Game {
       case 'cycle':
         return this.doCycle(playerId, action.objectId);
       case 'declareAttackers':
-        return this.doDeclareAttackers(playerId, action.attackers, action.defendTarget);
+        return this.doDeclareAttackers(playerId, action.attackers, action.defendTarget, action.exerted);
       case 'declareBlockers':
         return this.doDeclareBlockers(playerId, action.blocks);
       case 'chooseDiscard':
@@ -489,6 +491,7 @@ export class Game {
     }
     // Escolhas e devorar ao entrar: viram habilidade na pilha (podem pausar).
     const enterScript: import('./cards/types.js').EffectStep[] = [];
+    if (card.copyOnEnter) { obj.copyPending = true; enterScript.push({ op: 'copyOf' }); }
     if (card.chooseOnEnter) enterScript.push({ op: 'chooseValue', kind: card.chooseOnEnter });
     if (card.devour) enterScript.push({ op: 'devour', per: card.devour });
     if (enterScript.length > 0) this.pushTrigger(obj, { text: 'ao entrar', effect: enterScript });
@@ -532,7 +535,8 @@ export class Game {
     srcColors?: import('./types.js').Color[],
   ): string | null {
     const required = specs ?? [];
-    if (targets.length !== required.filter((t) => !t.optional).length && targets.length !== required.length)
+    const mandatory = required.filter((t) => !t.optional).length;
+    if (targets.length < mandatory || targets.length > required.length)
       return 'número de alvos incorreto';
     for (let i = 0; i < targets.length; i++) {
       const spec = required[i];
@@ -562,6 +566,7 @@ export class Game {
       discards?: number[];
       attackerId?: number;
       replicateTimes?: number;
+      modes?: number[];
     } = {},
   ): boolean {
     const s = this.state;
@@ -642,25 +647,28 @@ export class Game {
     if (!isInstant && !this.sorceryTiming(playerId))
       { this.fail(playerId, 'só pode ser conjurada na sua fase principal com a pilha vazia'); return false; }
 
-    // Modal spells: exactly one mode chosen at cast time (or every mode with entwine).
+    // Modal spells: exactly one mode chosen at cast time — or several ("choose one or both", entwine).
     let mode: import('./cards/types.js').SpellMode | undefined;
-    if (card.spellModes && card.spellModes.length > 0 && !extra.entwine) {
-      if (modeIndex === undefined || !card.spellModes[modeIndex])
-        { this.fail(playerId, 'escolha um modo da mágica'); return false; }
-      mode = card.spellModes[modeIndex];
-    }
-    // Entwine: all modes, targets concatenated in order, target refs shifted per mode.
-    let entwined: import('./cards/types.js').SpellMode | undefined;
-    if (extra.entwine && card.spellModes) {
+    const combineModes = (idxs: number[]): import('./cards/types.js').SpellMode => {
       const allTargets: TargetSpec[] = [];
       const allEffect: import('./cards/types.js').EffectStep[] = [];
-      for (const m of card.spellModes) {
+      for (const i of idxs) {
+        const m = card.spellModes![i];
         const offset = allTargets.length;
         allTargets.push(...(m.targets ?? []));
         allEffect.push(...(JSON.parse(JSON.stringify(m.effect).replace(/"target:(\d+)"/g, (_s, n) => `"target:${parseInt(n, 10) + offset}"`)) as import('./cards/types.js').EffectStep[]));
       }
-      entwined = { label: card.spellModes.map((m) => m.label).join(' + '), targets: allTargets, effect: allEffect };
-      mode = entwined;
+      return { label: idxs.map((i) => card.spellModes![i].label).join(' + '), targets: allTargets, effect: allEffect };
+    };
+    if (card.spellModes && card.spellModes.length > 0) {
+      const choice = card.spellModeChoice ?? { min: 1, max: 1 };
+      if (extra.entwine) mode = combineModes(card.spellModes.map((_, i) => i));
+      else {
+        const picked = extra.modes ?? (modeIndex !== undefined ? [modeIndex] : []);
+        if (picked.length < choice.min || picked.length > choice.max || new Set(picked).size !== picked.length || picked.some((i) => !card.spellModes![i]))
+          { this.fail(playerId, choice.max > 1 ? `escolha de ${choice.min} a ${choice.max} modos da mágica` : 'escolha um modo da mágica'); return false; }
+        mode = picked.length === 1 ? card.spellModes[picked[0]] : combineModes(picked);
+      }
     }
 
     // Auras derive their (mandatory) target from the enchant spec; bestow makes the card an Aura; overload has no targets.
@@ -799,6 +807,8 @@ export class Game {
         cost.generic += x * cost.xCount;
       }
       cost.generic += this.wardTax(playerId, targets);
+      // Cost modifiers: "X spells you cast cost {N} less", "~ costs {1} less for each Y", "spells your opponents cast cost more".
+      cost.generic = Math.max(0, cost.generic + this.costModifierTotal(playerId, card, obj, targets));
       // Emerge: the emerge cost is reduced by the sacrificed creature's mana value.
       if (cm?.kind === 'emerge' && sacs[0] !== undefined)
         cost.generic = Math.max(0, cost.generic - manaValueOf(s.objects[sacs[0]].card.manaCost));
@@ -913,9 +923,10 @@ export class Game {
     }
     s.passCount = 0;
     s.priority = playerId;
+    s.players[playerId].spellsCastThisTurn = (s.players[playerId].spellsCastThisTurn ?? 0) + 1;
     this.emit({ type: 'spellCast', player: playerId, objectId: obj.id, cardName: card.name, targets });
     if (copies > 0) this.emit({ type: 'copiesCreated', cardName: card.name, count: copies, reason: 'storm' });
-    this.fireCastTriggers(playerId, card);
+    this.fireCastTriggers(playerId, card, obj, targets);
     if (card.cascade && !extra.faceDown) this.doCascade(playerId, obj);
     return true;
   }
@@ -1015,6 +1026,19 @@ export class Game {
               obj.untilEot.keywords.push('haste');
           }
           break;
+        case 'effect':
+          s.stack.push({
+            id: s.nextStackId++,
+            kind: 'ability',
+            sourceId: obj.id,
+            controller: d.controller ?? obj.controller,
+            cardName: obj.card.name,
+            effect: d.effect ?? [],
+            targets: d.targets ?? [],
+            description: `${obj.card.name}: efeito atrasado`,
+          });
+          s.passCount = 0;
+          break;
       }
     }
   }
@@ -1025,9 +1049,45 @@ export class Game {
     for (const t of targets) {
       if (t.kind !== 'object') continue;
       const obj = this.state.objects[t.id];
-      if (obj && obj.zone === 'battlefield' && obj.controller !== playerId && obj.card.ward) tax += obj.card.ward;
+      if (!obj || obj.zone !== 'battlefield' || obj.controller === playerId) continue;
+      if (obj.card.ward) tax += obj.card.ward;
+      // "Enchanted creature has ward {N}".
+      for (const a of Object.values(this.state.objects)) if (a.zone === 'battlefield' && a.attachedTo === obj.id && a.card.attachEffect?.ward) tax += a.card.attachEffect.ward;
     }
     return tax;
+  }
+
+  /** Sum of generic-cost changes from cost modifiers on the battlefield and on the card itself (negative = cheaper). */
+  private costModifierTotal(playerId: PlayerId, card: CardDefinition, obj: GameObject, targets: TargetChoice[]): number {
+    const s = this.state;
+    let delta = 0;
+    const countOn = (filter: import('./cards/types.js').FilterSpec, controller: PlayerId) =>
+      PLAYER_IDS.flatMap((p) => s.players[p].zones.battlefield).map((id) => s.objects[id]).filter((o) => matchFilter({ controller, sourceId: obj.id, state: s }, filter, o)).length;
+    const countGy = (filter: import('./cards/types.js').FilterSpec, controller: PlayerId) =>
+      s.players[controller].zones.graveyard.filter((id) => cardMatchesFilter(s.objects[id].card, filter)).length;
+    // The card's own "~ costs {N} less for each X".
+    for (const m of card.costModifiers ?? []) {
+      if (!m.self) continue;
+      const scale = m.per ? countOn(m.per, playerId) : m.perGraveyard ? countGy(m.perGraveyard, playerId) : 1;
+      delta += m.amount * scale;
+    }
+    // Permanents on the battlefield.
+    for (const p of PLAYER_IDS) {
+      for (const id of s.players[p].zones.battlefield) {
+        const src = s.objects[id];
+        for (const m of src.card.costModifiers ?? []) {
+          if (m.self) continue;
+          const mineToCaster = src.controller === playerId;
+          if (m.whose === 'you' && !mineToCaster) continue;
+          if (m.whose === 'opponent' && mineToCaster) continue;
+          if (m.filter && !cardMatchesFilter(card, m.filter)) continue;
+          if (m.targetsSelf && !targets.some((t) => t.kind === 'object' && t.id === src.id)) continue;
+          const scale = m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : 1;
+          delta += m.amount * scale;
+        }
+      }
+    }
+    return delta;
   }
 
   private payWithPlan(playerId: PlayerId, plan: import('./mana.js').PaymentPlan): void {
@@ -1108,7 +1168,12 @@ export class Game {
         { this.fail(playerId, `${obj.card.name}: só se você completou uma masmorra`); return false; }
       if (c.isMonarch && s.monarch !== playerId)
         { this.fail(playerId, `${obj.card.name}: só se você for o monarca`); return false; }
+      if (c.cond && !staticConditionHolds(s, { ...obj, controller: playerId }, c.cond))
+        { this.fail(playerId, `${obj.card.name}: a condição de ativação não vale agora`); return false; }
     }
+    // "Activate only once each turn" / "no more than twice each turn".
+    if (ability.maxPerTurn !== undefined && (obj.activationsThisTurn?.[abilityIndex] ?? 0) >= ability.maxPerTurn)
+      { this.fail(playerId, `${obj.card.name}: essa habilidade só pode ser ativada ${ability.maxPerTurn === 1 ? 'uma vez' : `${ability.maxPerTurn} vezes`} por turno`); return false; }
 
     // "Add one mana of any color": the activation must carry the color.
     const choiceStep = ability.effect.find((e) => e.op === 'addManaChoice');
@@ -1176,6 +1241,7 @@ export class Game {
       this.payWithPlan(playerId, plan);
     }
     if (ability.cost.tap) setTapped(s, obj, true, this.emit);
+    obj.activationsThisTurn = { ...(obj.activationsThisTurn ?? {}), [abilityIndex]: (obj.activationsThisTurn?.[abilityIndex] ?? 0) + 1 };
     if (ability.cost.payLife)
       changeLife(s, playerId, -ability.cost.payLife, `custo de ${obj.card.name}`, this.emit);
     if (ability.cost.energy) {
@@ -1322,7 +1388,7 @@ export class Game {
     return true;
   }
 
-  private doDeclareAttackers(playerId: PlayerId, attackerIds: number[], defendTarget?: number): boolean {
+  private doDeclareAttackers(playerId: PlayerId, attackerIds: number[], defendTarget?: number, exerted: number[] = []): boolean {
     const s = this.state;
     if (s.combatAwaiting !== 'attackers' || playerId !== s.activePlayer)
       { this.fail(playerId, 'não é hora de declarar atacantes'); return false; }
@@ -1353,11 +1419,17 @@ export class Game {
       )
         { this.fail(playerId, 'alvo de ataque inválido (planeswalker do oponente)'); return false; }
     }
+    for (const id of exerted) {
+      const o = s.objects[id];
+      if (!o || !attackerIds.includes(id) || !o.card.canExert) { this.fail(playerId, 'exert: só atacantes com "you may exert"'); return false; }
+    }
     for (const obj of attackers) {
       obj.attacking = true;
       obj.pwTarget = defendTarget;
       if (!hasKeyword(s, obj, 'vigilance')) setTapped(s, obj, true, this.emit);
+      if (exerted.includes(obj.id)) obj.exertedUntilTurn = s.turn + 2;
     }
+    s.attackersPowerThisTurn = (s.attackersPowerThisTurn ?? 0) + attackers.reduce((sum, o) => sum + Math.max(0, effectivePower(s, o)), 0);
     s.combatAwaiting = null;
     this.emit({
       type: 'attackersDeclared',
@@ -1380,6 +1452,12 @@ export class Game {
 
     const seen = new Set<number>();
     const resolved: { blocker: GameObject; attacker: GameObject }[] = [];
+    // "~ must be blocked if able": if some untapped creature could block it, one must.
+    for (const atk of Object.values(s.objects).filter((o) => o.zone === 'battlefield' && o.attacking && o.card.mustBeBlocked)) {
+      const couldBlock = s.players[playerId].zones.battlefield.map((id) => s.objects[id]).filter((o) => canBlock(s, o, atk) === null);
+      if (couldBlock.length > 0 && !blocks.some((b) => b.attacker === atk.id))
+        { this.fail(playerId, `${atk.card.name} precisa ser bloqueada se possível`); return false; }
+    }
     for (const b of blocks) {
       const blocker = s.objects[b.blocker];
       const attacker = s.objects[b.attacker];
@@ -1632,7 +1710,11 @@ export class Game {
     s.activePlayer = opponentOf(s.activePlayer);
     s.spellsCastThisTurn = 0;
     s.combatDamagePrevented = false;
-    for (const obj of Object.values(s.objects)) obj.activatedLoyaltyThisTurn = false;
+    for (const obj of Object.values(s.objects)) {
+      obj.activatedLoyaltyThisTurn = false;
+      // "Until your next turn" effects of the new active player wear off.
+      if (obj.untilNextTurn?.length) obj.untilNextTurn = obj.untilNextTurn.filter((u) => u.player !== s.activePlayer);
+    }
     this.emit({ type: 'turnBegan', turn: s.turn, activePlayer: s.activePlayer });
     this.enterStep('untap');
   }
@@ -1650,6 +1732,7 @@ export class Game {
       if (!inCombat) ps.stickyPool = undefined;
     }
     this.emit({ type: 'stepChanged', step });
+    if (step === 'main1') this.fireStepTriggers('main1');
     // Sagas: a lore counter as the precombat main phase begins (714.2b).
     if (step === 'main1') {
       for (const id of [...s.players[s.activePlayer].zones.battlefield]) {
@@ -1670,16 +1753,28 @@ export class Game {
           const obj = s.objects[id];
           obj.summoningSick = false;
           if (hasKeyword(s, obj, 'doesntUntap') || attachmentForbids(s, obj, 'doesntUntap')) continue;
+          if (obj.exertedUntilTurn !== undefined && obj.exertedUntilTurn >= s.turn) { if (obj.exertedUntilTurn === s.turn) obj.exertedUntilTurn = undefined; continue; }
           if (obj.tapped) setTapped(s, obj, false, this.emit);
         }
         s.priority = null; // no one gets priority during untap
         return;
       }
       case 'draw': {
-        if (!(s.turn === 1 && s.activePlayer === s.onThePlay)) {
+        const skip = s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id].card.skipDraw);
+        if (!(s.turn === 1 && s.activePlayer === s.onThePlay) && !skip) {
           draw(s, s.activePlayer, this.emit);
           checkStateBasedActions(s, this.emit);
         }
+        s.priority = s.activePlayer;
+        return;
+      }
+      case 'combatBegin': {
+        this.fireStepTriggers('beginCombat');
+        s.priority = s.activePlayer;
+        return;
+      }
+      case 'main2': {
+        this.fireStepTriggers('main2');
         s.priority = s.activePlayer;
         return;
       }
@@ -1755,6 +1850,10 @@ export class Game {
   private finishCleanup(): void {
     const s = this.state;
     for (const obj of Object.values(s.objects)) {
+      obj.activationsThisTurn = undefined;
+      obj.triggeredThisTurn = undefined;
+      obj.preventNext = undefined;
+      obj.preventAllThisTurn = undefined;
       if (obj.zone === 'battlefield') {
         obj.damage = 0;
         obj.untilEot = { power: 0, toughness: 0, keywords: [] };
@@ -1763,10 +1862,22 @@ export class Game {
         delete obj.counters['__regen']; // regeneration shields expire
       }
     }
-    for (const p of PLAYER_IDS) { s.players[p].damagedThisTurn = false; s.players[p].drawsThisTurn = 0; }
+    for (const p of PLAYER_IDS) {
+      const ps = s.players[p];
+      ps.damagedThisTurn = false;
+      ps.drawsThisTurn = 0;
+      ps.permanentsLeftThisTurn = 0;
+      ps.nonlandEnteredThisTurn = 0;
+      ps.spellsCastThisTurn = 0;
+      ps.lifeGainedThisTurn = 0;
+      ps.preventNext = undefined;
+      ps.preventAllThisTurn = undefined;
+    }
     s.combatDamageThisTurn = false;
     s.combatDamageSubtypesThisTurn = undefined;
     s.attackersThisTurn = 0;
+    s.attackersPowerThisTurn = 0;
+    s.creaturesDiedThisTurn = 0;
     // "Until end of turn" control effects wear off (Act of Treason).
     for (const revert of s.controlReverts) {
       const obj = s.objects[revert.objectId];
@@ -1846,6 +1957,9 @@ export class Game {
             obj.attacking = true;
             this.emit({ type: 'tappedChanged', objectId: obj.id, cardName: obj.card.name, tapped: true });
             break;
+          case 'prototype':
+            obj.prototyped = true;
+            break;
         }
         // Aura: enters attached to its target (fizzle above covers a dead one). Bestow: the creature card enters as an Aura.
         const enchantTarget = obj.card.enchant || obj.castMethod === 'bestow' ? item.targets[0] : undefined;
@@ -1863,7 +1977,7 @@ export class Game {
             });
           }
         }
-        // "Enters the battlefield with N +1/+1 counters" (N may be X).
+        // "Enters the battlefield with N +1/+1 counters" (N may be X; raid-style conditions honored).
         if (obj.card.entersWithCounters) {
           const ctx = {
             state: s,
@@ -1874,7 +1988,7 @@ export class Game {
             xValue: item.xValue,
             emit: this.emit,
           };
-          const count = resolveAmount(ctx, obj.card.entersWithCounters.count);
+          const count = obj.card.entersWithCountersIf && !condHolds(ctx, obj.card.entersWithCountersIf) ? 0 : resolveAmount(ctx, obj.card.entersWithCounters.count);
           if (count > 0) {
             const counter = obj.card.entersWithCounters.counter;
             obj.counters[counter] = (obj.counters[counter] ?? 0) + count;
@@ -1957,6 +2071,8 @@ export class Game {
         targets: item.targets,
         xValue: item.xValue,
         subjectId: item.subjectId,
+        subjectPlayer: item.subjectPlayer,
+        triggerAmount: item.triggerAmount,
         emit: this.emit,
       },
       item.effect,
@@ -1973,8 +2089,13 @@ export class Game {
       if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'tokenCreated') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'landPlayed') this.fireZoneTriggers(ev.objectId, 'etb'); // landfall
+      if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.reason === 'sacrificed') {
+        const so = this.state.objects[ev.objectId];
+        this.fireControllerTriggers(ev.player, 'youSacrifice', { subjectId: ev.objectId, subjectCard: so?.card });
+      }
       if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.to === 'graveyard') {
         this.fireZoneTriggers(ev.objectId, 'dies');
+        this.fireHostTriggers(ev.objectId, 'hostDies');
         // Haunt: cards in exile haunting this creature trigger, then stop haunting.
         for (const h of Object.values(this.state.objects)) {
           if (h.zone !== 'exile' || h.haunting !== ev.objectId) continue;
@@ -1983,7 +2104,14 @@ export class Game {
             if (ability.kind === 'triggered' && ability.trigger.on === 'hauntedDies') this.pushTrigger(h, ability);
         }
       }
-      if (ev.type === 'attackersDeclared') this.state.attackersThisTurn = (this.state.attackersThisTurn ?? 0) + ev.attackers.length;
+      if (ev.type === 'attackersDeclared') {
+        this.state.attackersThisTurn = (this.state.attackersThisTurn ?? 0) + ev.attackers.length;
+        for (const a of ev.attackers) {
+          this.fireHostTriggers(a.objectId, 'hostAttacks');
+          const ao = this.state.objects[a.objectId];
+          if (ao?.exertedUntilTurn === this.state.turn + 2) this.fireSelfTrigger(a.objectId, 'youExertThis');
+        }
+      }
       if (ev.type === 'attackersDeclared') {
         for (const a of ev.attackers) this.fireSelfTrigger(a.objectId, 'attacks');
         if (ev.attackers.length > 0) this.fireControllerTriggers(ev.player, 'youAttack');
@@ -2030,8 +2158,10 @@ export class Game {
           this.emit({ type: 'pumped', objectId: o.id, cardName: o.card.name, power: n, toughness: n });
         };
         const blockedAttackers = new Set(ev.blocks.map((b) => b.attacker));
+        // "Whenever ~ attacks and isn't blocked".
+        for (const a of Object.values(s.objects)) if (a.zone === 'battlefield' && a.attacking && !blockedAttackers.has(a.id)) this.fireSelfTrigger(a.id, 'attacksUnblocked');
         for (const b of ev.blocks) {
-          this.fireSelfTrigger(b.blocker, 'blocks');
+          this.fireSelfTrigger(b.blocker, 'blocks', { subjectId: b.attacker });
           // Bushido: blocker and blocked attacker get +N/+N.
           for (const id of [b.blocker, b.attacker]) {
             const o = s.objects[id];
@@ -2061,7 +2191,8 @@ export class Game {
         }
       }
       if (ev.type === 'cardDrawn') {
-        this.fireControllerTriggers(ev.player, 'youDrawCard');
+        this.fireControllerTriggers(ev.player, 'youDrawCard', { subjectId: ev.objectId, subjectPlayer: ev.player });
+        this.fireControllerTriggers(ev.player, 'youDrawCardNth', { subjectId: ev.objectId, subjectPlayer: ev.player, nth: this.state.players[ev.player].drawsThisTurn });
         // Miracle: the first card drawn this turn may be cast for its miracle cost right now.
         const drawn = this.state.objects[ev.objectId];
         const miracle = drawn?.card.castMethods?.find((m) => m.kind === 'miracle');
@@ -2086,6 +2217,8 @@ export class Game {
       if (ev.type === 'discarded') {
         const d = this.state.objects[ev.objectId];
         if (d) d.discardedOnTurn = this.state.turn;
+        this.fireControllerTriggers(ev.player, 'youDiscard', { subjectId: ev.objectId, subjectPlayer: ev.player });
+        for (const p of PLAYER_IDS) this.fireControllerTriggers(p, 'anyPlayerDiscards', { subjectId: ev.objectId, subjectPlayer: ev.player });
         // Madness: the discarded card goes to exile and may be cast for its madness cost.
         const o = this.state.objects[ev.objectId];
         if (o?.card.madness && o.zone === 'graveyard') {
@@ -2103,9 +2236,23 @@ export class Game {
       }
       if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireEvolve(ev.objectId);
       if (ev.type === 'tappedChanged' && ev.tapped) this.fireSelfTrigger(ev.objectId, 'becomesTapped');
+      if (ev.type === 'turnedFaceUp') this.fireSelfTrigger(ev.objectId, 'turnedFaceUp');
+      if (ev.type === 'damageDealt') {
+        if (ev.target.kind === 'object') {
+          this.fireSelfTrigger(ev.target.id, 'dealtDamage', { subjectId: ev.sourceId, triggerAmount: ev.amount });
+          this.fireHostTriggers(ev.target.id, 'hostDealtDamage', { triggerAmount: ev.amount });
+          const tgt = this.state.objects[ev.target.id];
+          if (ev.sourceId !== undefined && ev.combat && tgt && isCreature(tgt))
+            this.fireSelfTrigger(ev.sourceId, 'combatDamageToCreature', { subjectId: ev.target.id, triggerAmount: ev.amount });
+        }
+        if (ev.sourceId !== undefined)
+          this.fireSelfTrigger(ev.sourceId, 'dealsDamage', { subjectId: ev.target.kind === 'object' ? ev.target.id : undefined, subjectPlayer: ev.target.kind === 'player' ? ev.target.player : undefined, triggerAmount: ev.amount });
+      }
       if (ev.type === 'combatDamageToPlayer') {
-        this.fireSelfTrigger(ev.attackerId, 'combatDamageToPlayer');
+        this.fireSelfTrigger(ev.attackerId, 'combatDamageToPlayer', { subjectPlayer: ev.player, triggerAmount: ev.amount });
+        this.fireHostTriggers(ev.attackerId, 'hostCombatDamageToPlayer', { subjectPlayer: ev.player, triggerAmount: ev.amount });
         const atk = this.state.objects[ev.attackerId];
+        if (atk) this.fireControllerTriggers(atk.controller, 'yourCreatureCombatDamageToPlayer', { subjectId: atk.id, subjectPlayer: ev.player, triggerAmount: ev.amount });
         if (atk) {
           const s3 = this.state;
           s3.combatDamageSubtypesThisTurn = [...new Set([...(s3.combatDamageSubtypesThisTurn ?? []), ...atk.card.subtypes])];
@@ -2262,52 +2409,90 @@ export class Game {
   }
 
   /** Triggers on a player's permanents keyed on the player ("whenever you attack"). */
-  private fireControllerTriggers(player: PlayerId, on: 'youAttack' | 'youDrawCard' | 'youBecomeMonarch' | 'youVenture' | 'youCompleteDungeon'): void {
+  private fireControllerTriggers(
+    player: PlayerId,
+    on: 'youAttack' | 'youDrawCard' | 'youBecomeMonarch' | 'youVenture' | 'youCompleteDungeon' | 'yourCreatureCombatDamageToPlayer' | 'youDiscard' | 'anyPlayerDiscards' | 'youSacrifice' | 'youDrawCardNth',
+    extra: { subjectId?: number; subjectPlayer?: PlayerId; triggerAmount?: number; nth?: number; subjectCard?: CardDefinition } = {},
+  ): void {
     const s = this.state;
     for (const id of [...s.players[player].zones.battlefield]) {
       const obj = s.objects[id];
-      for (const ability of obj.card.abilities ?? []) {
-        if (ability.kind !== 'triggered' || ability.trigger.on !== on) continue;
-        if (!abilityActive(obj, ability)) continue;
-        this.pushTrigger(obj, ability);
-      }
+      if (!obj) continue;
+      (obj.card.abilities ?? []).forEach((ability, idx) => {
+        if (ability.kind !== 'triggered' || ability.trigger.on !== on) return;
+        if (!abilityActive(obj, ability)) return;
+        const t = ability.trigger;
+        if (t.on === 'youDrawCardNth' && t.nth !== extra.nth) return;
+        if (t.on === 'youSacrifice' && t.filter && extra.subjectCard && !cardMatchesFilter(extra.subjectCard, t.filter)) return;
+        this.pushTrigger(obj, ability, extra.subjectId, undefined, { subjectPlayer: extra.subjectPlayer, triggerAmount: extra.triggerAmount, abilityIndex: idx });
+      });
     }
   }
 
-  private fireSelfTrigger(objectId: number, on: 'etb' | 'dies' | 'attacks' | 'blocks' | 'leaves' | 'becomesTapped' | 'becomesBlocked' | 'combatDamageToPlayer'): void {
+  private fireSelfTrigger(
+    objectId: number,
+    on: 'etb' | 'dies' | 'attacks' | 'blocks' | 'leaves' | 'becomesTapped' | 'becomesBlocked' | 'combatDamageToPlayer' | 'turnedFaceUp' | 'dealtDamage' | 'dealsDamage' | 'combatDamageToCreature' | 'attacksUnblocked' | 'youExertThis' | 'youCastThis',
+    extra: { subjectId?: number; subjectPlayer?: PlayerId; triggerAmount?: number } = {},
+  ): void {
     const obj = this.state.objects[objectId];
     if (!obj) return;
-    for (const ability of obj.card.abilities ?? []) {
-      if (ability.kind !== 'triggered') continue;
-      if (ability.trigger.on !== on || !('self' in ability.trigger)) continue;
-      if (!abilityActive(obj, ability)) continue;
-      if (ability.requiresKicked && !obj.kicked) continue;
-      this.pushTrigger(obj, ability);
+    (obj.card.abilities ?? []).forEach((ability, idx) => {
+      if (ability.kind !== 'triggered') return;
+      if (ability.trigger.on !== on) return;
+      if ('what' in ability.trigger) return; // gatilho global (filtro), não próprio
+      if (!abilityActive(obj, ability)) return;
+      if (ability.requiresKicked && !obj.kicked) return;
+      this.pushTrigger(obj, ability, extra.subjectId, undefined, { subjectPlayer: extra.subjectPlayer, triggerAmount: extra.triggerAmount, abilityIndex: idx });
+    });
+  }
+
+  /** Triggers on auras/equipment attached to `hostId` ("whenever enchanted creature attacks"). */
+  private fireHostTriggers(hostId: number, on: 'hostDies' | 'hostAttacks' | 'hostCombatDamageToPlayer' | 'hostDealtDamage', extra: { subjectPlayer?: PlayerId; triggerAmount?: number } = {}): void {
+    const s = this.state;
+    for (const a of Object.values(s.objects)) {
+      if (a.zone !== 'battlefield' || a.attachedTo !== hostId) continue;
+      (a.card.abilities ?? []).forEach((ability, idx) => {
+        if (ability.kind !== 'triggered' || ability.trigger.on !== on) return;
+        if (!abilityActive(a, ability)) return;
+        this.pushTrigger(a, ability, hostId, undefined, { ...extra, abilityIndex: idx });
+      });
     }
   }
 
-  /** Prowess-style: "whenever you cast a (noncreature) spell". */
-  private fireCastTriggers(caster: PlayerId, card: CardDefinition): void {
+  /** Prowess-style: "whenever you cast a (noncreature) spell", nth spell, spells of a kind, heroic, "when you cast ~", "whenever a player casts". */
+  private fireCastTriggers(caster: PlayerId, card: CardDefinition, spellObj?: GameObject, targets: TargetChoice[] = []): void {
     const s = this.state;
-    for (const id of s.players[caster].zones.battlefield) {
+    const nth = s.players[caster].spellsCastThisTurn ?? 1;
+    for (const id of [...s.players[caster].zones.battlefield]) {
       const obj = s.objects[id];
-      for (const ability of obj.card.abilities ?? []) {
-        if (ability.kind !== 'triggered' || ability.trigger.on !== 'youCastSpell') continue;
-        if (ability.trigger.noncreatureOnly && card.types.includes('Creature')) continue;
-        if (ability.trigger.instantSorceryOnly && !card.types.includes('Instant') && !card.types.includes('Sorcery')) continue;
-        if (!abilityActive(obj, ability)) continue;
-        this.pushTrigger(obj, ability);
-      }
+      if (!obj) continue;
+      (obj.card.abilities ?? []).forEach((ability, idx) => {
+        if (ability.kind !== 'triggered' || !abilityActive(obj, ability)) return;
+        const t = ability.trigger;
+        let fires = false;
+        if (t.on === 'youCastSpell') {
+          fires = true;
+          if (t.noncreatureOnly && card.types.includes('Creature')) fires = false;
+          if (t.instantSorceryOnly && !card.types.includes('Instant') && !card.types.includes('Sorcery')) fires = false;
+        } else if (t.on === 'youCastSpellNth') fires = nth === t.nth;
+        else if (t.on === 'youCastSpellOf') fires = cardMatchesFilter(card, t.filter);
+        else if (t.on === 'youCastSpellTargetingThis') fires = targets.some((x) => x.kind === 'object' && x.id === obj.id);
+        else if (t.on === 'anyCastsSpell') fires = true;
+        if (fires) this.pushTrigger(obj, ability, spellObj?.id, undefined, { subjectPlayer: caster, abilityIndex: idx });
+      });
     }
-    // "Whenever an opponent casts a spell" on the other player's permanents.
-    for (const id of s.players[opponentOf(caster)].zones.battlefield) {
+    // "Whenever an opponent casts a spell" / "whenever a player casts a spell" on the other player's permanents.
+    for (const id of [...s.players[opponentOf(caster)].zones.battlefield]) {
       const obj = s.objects[id];
-      for (const ability of obj.card.abilities ?? []) {
-        if (ability.kind !== 'triggered' || ability.trigger.on !== 'opponentCastsSpell') continue;
-        if (!abilityActive(obj, ability)) continue;
-        this.pushTrigger(obj, ability);
-      }
+      if (!obj) continue;
+      (obj.card.abilities ?? []).forEach((ability, idx) => {
+        if (ability.kind !== 'triggered' || !abilityActive(obj, ability)) return;
+        if (ability.trigger.on !== 'opponentCastsSpell' && ability.trigger.on !== 'anyCastsSpell') return;
+        this.pushTrigger(obj, ability, spellObj?.id, undefined, { subjectPlayer: caster, abilityIndex: idx });
+      });
     }
+    // "When you cast ~" on the spell itself.
+    if (spellObj) this.fireSelfTrigger(spellObj.id, 'youCastThis');
   }
 
   /** Echo, cumulative upkeep, vanishing, fading — as stack abilities of the active player's permanents. */
@@ -2352,31 +2537,46 @@ export class Game {
     }
   }
 
-  private fireStepTriggers(on: 'upkeep' | 'endStep'): void {
+  private fireStepTriggers(on: 'upkeep' | 'endStep' | 'beginCombat' | 'main1' | 'main2'): void {
     const s = this.state;
     for (const p of PLAYER_IDS) {
-      for (const id of s.players[p].zones.battlefield) {
+      for (const id of [...s.players[p].zones.battlefield]) {
         const obj = s.objects[id];
-        for (const ability of obj.card.abilities ?? []) {
-          if (ability.kind !== 'triggered' || ability.trigger.on !== on) continue;
-          const whose = ability.trigger.whose;
-          if (whose === 'controller' && obj.controller !== s.activePlayer) continue;
-          if (!abilityActive(obj, ability)) continue;
-          this.pushTrigger(obj, ability);
-        }
+        if (!obj) continue;
+        (obj.card.abilities ?? []).forEach((ability, idx) => {
+          if (ability.kind !== 'triggered' || ability.trigger.on !== on) return;
+          const whose = (ability.trigger as { whose?: 'controller' | 'each' | 'opponent' }).whose ?? 'controller';
+          if (whose === 'controller' && obj.controller !== s.activePlayer) return;
+          if (whose === 'opponent' && obj.controller === s.activePlayer) return;
+          if (!abilityActive(obj, ability)) return;
+          this.pushTrigger(obj, ability, undefined, undefined, { abilityIndex: idx });
+        });
       }
     }
   }
 
   private pushTrigger(
     obj: GameObject,
-    ability: { text: string; effect: StackItem['effect']; targets?: import('./cards/types.js').TargetSpec[]; modes?: import('./cards/types.js').SpellMode[]; condition?: import('./cards/types.js').StaticCondition },
+    ability: { text: string; effect: StackItem['effect']; targets?: import('./cards/types.js').TargetSpec[]; modes?: import('./cards/types.js').SpellMode[]; condition?: import('./cards/types.js').Cond; oncePerTurn?: boolean },
     subjectId?: number,
     chapter?: number,
+    extra: { subjectPlayer?: PlayerId; triggerAmount?: number; abilityIndex?: number } = {},
   ): void {
     const s = this.state;
     // Intervening "if" ("…, if you're the monarch, …"): checked as it would trigger.
-    if (ability.condition && !staticConditionHolds(s, obj, ability.condition)) return;
+    if (ability.condition) {
+      const cond = ability.condition;
+      const ok = cond.kind === 'subjectIs' || (cond.kind === 'and' && cond.conds.some((c) => c.kind === 'subjectIs'))
+        ? condHolds({ state: s, controller: obj.controller, sourceId: obj.id, sourceName: obj.card.name, targets: [], subjectId, subjectPlayer: extra.subjectPlayer, triggerAmount: extra.triggerAmount, emit: this.emit }, cond)
+        : staticConditionHolds(s, obj, cond);
+      if (!ok) return;
+    }
+    // "For the first time each turn" (valiant & friends).
+    if (ability.oncePerTurn && extra.abilityIndex !== undefined) {
+      if (obj.triggeredThisTurn?.[extra.abilityIndex]) return;
+      obj.triggeredThisTurn = { ...(obj.triggeredThisTurn ?? {}), [extra.abilityIndex]: true };
+    }
+    const { subjectPlayer, triggerAmount } = extra;
     this.emit({
       type: 'abilityTriggered',
       player: obj.controller,
@@ -2388,7 +2588,7 @@ export class Game {
     if (ability.modes && ability.modes.length > 0) {
       if (s.pendingDecision) {
         // Outra decisão em curso: enfileira como gatilho sem alvo que pede o modo depois.
-        s.triggerQueue.push({ sourceId: obj.id, controller: obj.controller, cardName: obj.card.name, text: ability.text, specs: [], effect: [], modes: ability.modes, subjectId, chapter });
+        s.triggerQueue.push({ sourceId: obj.id, controller: obj.controller, cardName: obj.card.name, text: ability.text, specs: [], effect: [], modes: ability.modes, subjectId, subjectPlayer, triggerAmount, chapter });
         return;
       }
       s.pendingDecision = {
@@ -2412,6 +2612,8 @@ export class Game {
         specs: ability.targets,
         effect: ability.effect,
         subjectId,
+        subjectPlayer,
+        triggerAmount,
         chapter,
       });
       return;
@@ -2426,6 +2628,8 @@ export class Game {
       targets: [],
       description: `${obj.card.name}: ${ability.text}`,
       subjectId,
+      subjectPlayer,
+      triggerAmount,
       chapter,
     });
     s.passCount = 0;
@@ -2439,7 +2643,7 @@ export class Game {
     if (!trig) return;
     if (trig.modes) {
       const obj = s.objects[trig.sourceId];
-      if (obj) this.pushTrigger(obj, { text: trig.text, effect: [], modes: trig.modes }, trig.subjectId, trig.chapter);
+      if (obj) this.pushTrigger(obj, { text: trig.text, effect: [], modes: trig.modes }, trig.subjectId, trig.chapter, { subjectPlayer: trig.subjectPlayer, triggerAmount: trig.triggerAmount });
       return;
     }
     const srcColors = s.objects[trig.sourceId]?.card.colors;
@@ -2457,6 +2661,8 @@ export class Game {
       specs: trig.specs,
       effect: trig.effect,
       subjectId: trig.subjectId,
+      subjectPlayer: trig.subjectPlayer,
+      triggerAmount: trig.triggerAmount,
       chapter: trig.chapter,
     };
     this.emit({ type: 'decisionRequired', player: trig.controller, decision: `targets:${trig.cardName}` });
@@ -2535,6 +2741,8 @@ export class Game {
       targets,
       description: `${pending.cardName}: ${pending.text}`,
       subjectId: pending.subjectId,
+      subjectPlayer: pending.subjectPlayer,
+      triggerAmount: pending.triggerAmount,
       chapter: pending.chapter,
     });
     s.passCount = 0;

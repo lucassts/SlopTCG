@@ -13,6 +13,8 @@
  * automation is a rules violation nobody notices.
  */
 import type { CardType, Color, Keyword } from '../types.js';
+import { BASIC_TYPES, COLOR_WORDS, KEYWORDS, NUMBER_WORDS, TYPE_WORD, keywordList, num } from './lexicon.js';
+import { filterToTargetSpec, parseCondG, parseNounG, parseSentenceG, parseStaticG, type GCtx } from './grammar.js';
 import type {
   AbilityDef,
   CardDefinition,
@@ -20,10 +22,13 @@ import type {
   EffectScript,
   EffectStep,
   FilterSpec,
+  Cond,
   SpellMode,
   StaticCondition,
+  SubjectRef,
   TargetSpec,
   TriggerSpec,
+  WhoSel,
 } from './types.js';
 
 export interface OracleInput {
@@ -40,58 +45,9 @@ export interface OracleInput {
   scryfallId?: string;
 }
 
-const BASIC_TYPES = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
-
 const KNOWN_TYPES: CardType[] = ['Land', 'Creature', 'Artifact', 'Enchantment', 'Instant', 'Sorcery', 'Planeswalker', 'Battle'];
 
-const KEYWORDS: Record<string, Keyword> = {
-  flying: 'flying',
-  reach: 'reach',
-  haste: 'haste',
-  vigilance: 'vigilance',
-  trample: 'trample',
-  lifelink: 'lifelink',
-  deathtouch: 'deathtouch',
-  defender: 'defender',
-  menace: 'menace',
-  'first strike': 'firstStrike',
-  'double strike': 'doubleStrike',
-  indestructible: 'indestructible',
-  hexproof: 'hexproof',
-  shroud: 'shroud',
-  flash: 'flash',
-  fear: 'fear',
-  intimidate: 'intimidate',
-  shadow: 'shadow',
-  plainswalk: 'plainswalk',
-  islandwalk: 'islandwalk',
-  swampwalk: 'swampwalk',
-  mountainwalk: 'mountainwalk',
-  forestwalk: 'forestwalk',
-  changeling: 'changeling',
-  partner: 'partner',
-  horsemanship: 'horsemanship',
-};
-
-const COLOR_WORDS: Record<string, Color> = {
-  white: 'W',
-  blue: 'U',
-  black: 'B',
-  red: 'R',
-  green: 'G',
-};
-
 const COLOR_PT: Record<string, string> = { white: 'branca', blue: 'azul', black: 'preta', red: 'vermelha', green: 'verde' };
-
-const NUMBER_WORDS: Record<string, number> = {
-  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
-  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-};
-
-function num(word: string): number | null {
-  if (/^\d+$/.test(word)) return parseInt(word, 10);
-  return NUMBER_WORDS[word.toLowerCase()] ?? null;
-}
 
 function parseTypeLine(typeLine: string): { supertypes: string[]; types: CardType[]; subtypes: string[] } {
   const [left, right] = typeLine.split(/\s+—\s+/);
@@ -103,21 +59,6 @@ function parseTypeLine(typeLine: string): { supertypes: string[]; types: CardTyp
 }
 
 /** "flying and lifelink" / "flying, lifelink" → keywords, or null if any is unknown. */
-function keywordList(text: string): Keyword[] | null {
-  const parts = text.split(/,\s*|\s+and\s+/).map((p) => p.trim().toLowerCase()).filter(Boolean);
-  const out: Keyword[] = [];
-  for (const p of parts) {
-    const kw = KEYWORDS[p];
-    if (!kw) return null;
-    out.push(kw);
-  }
-  return out.length > 0 ? out : null;
-}
-
-const TYPE_WORD: Record<string, FilterSpec['what']> = {
-  creature: 'creature', land: 'land', artifact: 'artifact', enchantment: 'enchantment', permanent: 'permanent',
-};
-
 /** "creature" / "artifact" / "nonland permanent"… → filter, or null. */
 function filterFromNoun(noun: string): FilterSpec | null {
   const n = noun.toLowerCase().trim();
@@ -591,7 +532,10 @@ function parsePronounEffect(clause: string, spec: TargetSpec): EffectStep[] | nu
  * target. Sentences are split on ". "; " and " compounds are tried whole
  * first, then piecewise.
  */
-function parseEffectText(text: string): { steps: EffectStep[]; spec?: TargetSpec; specs?: TargetSpec[]; selfExile?: boolean; kickerSteps?: EffectStep[] } | null {
+function parseEffectText(
+  text: string,
+  gctx: { pronoun: SubjectRef; pronounPlayer: WhoSel } = { pronoun: 'self', pronounPlayer: 'controller' },
+): { steps: EffectStep[]; spec?: TargetSpec; specs?: TargetSpec[]; selfExile?: boolean; kickerSteps?: EffectStep[] } | null {
   let m: RegExpMatchArray | null;
   const steps: EffectStep[] = [];
   const kickerSteps: EffectStep[] = [];
@@ -613,6 +557,16 @@ function parseEffectText(text: string): { steps: EffectStep[]; spec?: TargetSpec
     spec = { what: 'player' };
     text = m[3];
     if (!text.trim()) return { steps, spec };
+  }
+  // "Look at the top N cards of your library. Put one of them into your hand and the rest…" — as duas frases formam uma só instrução (gramática).
+  text = text.replace(/^(Look at the top \w+ cards? of your library)\. ((?:You may )?[Pp]ut (?:one of them|up to \w+ of them|(?:a|an) [\w\s-]+? card from among them) [^.]*\.)/i, '$1 $2');
+  // "Reveal the top card of your library. If it's a X card, put it into your hand. Otherwise, put it on the bottom/into your graveyard."
+  if ((m = text.match(/^Reveal the top card of your library\. If it's (?:a|an) ([\w\s-]+?) card, put it into your hand\. Otherwise, put it (on the bottom of your library|into your graveyard)\.?\s*(.*)$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    steps.push({ op: 'digTop', count: 1, pick: 1, filter: info.filter, rest: /graveyard/i.test(m[2]) ? 'graveyard' : 'bottom' });
+    text = m[3];
+    if (!text.trim()) return { steps };
   }
   // Impulso: "Exile the top card of your library. You may play that card this turn." (duas frases acopladas).
   if ((m = text.match(/^Exile the top (card|\w+ cards) of your library\. (?:You may play (?:that card|it|them|those cards) this turn|Until end of turn, you may play (?:that card|it|them|those cards))\.?\s*(.*)$/i))) {
@@ -668,23 +622,50 @@ function parseEffectText(text: string): { steps: EffectStep[]; spec?: TargetSpec
     if (!parsed) {
       // "X and Y" / "X, then Y": cada parte simples, no máximo um alvo no todo.
       const parts = sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b|it\b)/i).map((p) => p.trim());
-      if (parts.length < 2) return null;
-      const acc: EffectStep[] = [];
-      let partSpec: TargetSpec | undefined;
-      for (const p of parts) {
-        let pp = parseTargetedEffect(p);
-        if (!pp && (partSpec ?? spec)) {
-          const pron = parsePronounEffect(p, (partSpec ?? spec)!);
-          if (pron) pp = { steps: pron };
+      if (parts.length >= 2) {
+        const acc: EffectStep[] = [];
+        let partSpec: TargetSpec | undefined;
+        let ok = true;
+        for (const p of parts) {
+          let pp = parseTargetedEffect(p);
+          if (!pp && (partSpec ?? spec)) {
+            const pron = parsePronounEffect(p, (partSpec ?? spec)!);
+            if (pron) pp = { steps: pron };
+          }
+          if (!pp) { ok = false; break; }
+          if (pp.spec) {
+            if (partSpec || spec) { ok = false; break; }
+            partSpec = pp.spec;
+          }
+          acc.push(...pp.steps);
         }
-        if (!pp) return null;
-        if (pp.spec) {
-          if (partSpec || spec) return null;
-          partSpec = pp.spec;
-        }
-        acc.push(...pp.steps);
+        if (ok) parsed = { steps: acc, spec: partSpec };
       }
-      parsed = { steps: acc, spec: partSpec };
+    }
+    if (!parsed) {
+      // Leva 4: gramática composicional (sujeito × verbo × quantidade × condição × duração; vários alvos).
+      const prior = specs ?? (spec ? [spec] : []);
+      const tryG = (s: string) => parseSentenceG(s, { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length, priorSpecs: prior });
+      let g = tryG(sentence);
+      if (!g) {
+        // Compostos "X and Y" / "X, then Y" pela gramática, parte a parte (alvos acumulam).
+        const parts = sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b|it\b)/i).map((p) => p.trim());
+        if (parts.length >= 2) {
+          const acc: EffectStep[] = [];
+          const accSpecs: TargetSpec[] = [];
+          let ok = true;
+          for (const p of parts) {
+            const pg = parseSentenceG(p, { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length + accSpecs.length, priorSpecs: [...prior, ...accSpecs] });
+            if (!pg) { ok = false; break; }
+            acc.push(...pg.steps);
+            accSpecs.push(...pg.specs);
+          }
+          if (ok) g = { steps: acc, specs: accSpecs };
+        }
+      }
+      if (!g) return null;
+      if (g.specs.length > 0) { specs = [...prior, ...g.specs]; spec = undefined; }
+      parsed = { steps: g.steps };
     }
     if (parsed.spec) {
       if (spec || specs) return null; // multi-alvo: fora do escopo
@@ -777,6 +758,10 @@ interface ParseState {
   classLevel?: number;
   /** Leva 3 (fechamento): dredge, replicate, cipher, haunt, hideaway. */
   flags4: Partial<Pick<CardDefinition, 'dredge' | 'replicate' | 'cipher' | 'haunt' | 'hideaway'>>;
+  /** Leva 4: substituição, custos, estáticas diversas. */
+  flags5: Partial<Pick<CardDefinition, 'exileInsteadOfDying' | 'exileDyingCreatures' | 'preventAllDamageToSelf' | 'lifeGainModifier' | 'tokenDoubling' | 'attackRequiresDefenderSubtype' | 'mustBeBlocked' | 'skipDraw' | 'cantBeBlockedBy' | 'evasionPowerLessThanSelf' | 'prototype' | 'canExert' | 'entersWithCountersIf' | 'copyOnEnter'>>;
+  costModifiers?: NonNullable<CardDefinition['costModifiers']>;
+  spellModeChoice?: { min: number; max: number };
   tributeCount?: number;
   tributeEffect?: EffectStep[];
   giftEffect?: EffectStep[];
@@ -789,6 +774,13 @@ interface ParseState {
 }
 
 const ROMAN: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
+
+/** Mana value of a cost string ("{1}{R}" → 2). */
+function manaValueOfCost(cost: string): number {
+  let mv = 0;
+  for (const mm of cost.matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(mm[1]) ? parseInt(mm[1], 10) : mm[1] === 'X' ? 0 : 1;
+  return mv;
+}
 
 /** Hideaway play conditions ("if a library has twenty or fewer cards in it"…). */
 function parseHideawayCondition(text: string): NonNullable<Extract<AbilityDef, { kind: 'activated' }>['condition']> | null {
@@ -879,7 +871,7 @@ function parseActivationCost(text: string): Extract<AbilityDef, { kind: 'activat
 }
 
 /** Trigger header → TriggerSpec (self triggers, filters, steps, casts). */
-function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: TriggerSpec } | null {
+function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: TriggerSpec; oncePerTurn?: boolean; condition?: Cond } | null {
   let m: RegExpMatchArray | null;
   if (/^(?:When|Whenever) ~ enters(?: the battlefield)?$/i.test(head)) return { trigger: { on: 'etb', self: true } };
   if (/^(?:When|Whenever) ~ dies$/i.test(head)) return { trigger: { on: 'dies', self: true } };
@@ -898,6 +890,61 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever you attack$/i.test(head)) return { trigger: { on: 'youAttack' } };
   if (/^Whenever ~ deals combat damage to a player$/i.test(head)) return { trigger: { on: 'combatDamageToPlayer', self: true } };
   if (/^When ~ exploits a creature$/i.test(head)) return { trigger: { on: 'exploits', self: true } };
+  // ---- Leva 4
+  if (/^At the beginning of combat on your turn$/i.test(head)) return { trigger: { on: 'beginCombat', whose: 'controller' } };
+  if (/^At the beginning of (?:each combat|combat on each player's turn)$/i.test(head)) return { trigger: { on: 'beginCombat', whose: 'each' } };
+  if (/^At the beginning of your (?:first main phase|precombat main phase)$/i.test(head)) return { trigger: { on: 'main1', whose: 'controller' } };
+  if (/^At the beginning of your (?:second main phase|postcombat main phase)$/i.test(head)) return { trigger: { on: 'main2', whose: 'controller' } };
+  if (/^At the beginning of each opponent's (upkeep|end step)$/i.test(head)) return { trigger: (/upkeep/i.test(head) ? { on: 'upkeep', whose: 'opponent' } : { on: 'endStep', whose: 'opponent' }) as unknown as TriggerSpec };
+  if (/^When ~ is turned face up$/i.test(head)) return { trigger: { on: 'turnedFaceUp', self: true } };
+  if (/^(?:Enrage — )?Whenever ~ is dealt damage$/i.test(head)) return { trigger: { on: 'dealtDamage', self: true } };
+  if (/^Whenever ~ deals damage(?: to a creature| to a player| to an opponent)?$/i.test(head)) return { trigger: { on: 'dealsDamage', self: true } };
+  if (/^Whenever ~ deals combat damage to a creature$/i.test(head)) return { trigger: { on: 'combatDamageToCreature', self: true } };
+  if (/^Whenever ~ deals combat damage to a player or planeswalker$/i.test(head)) return { trigger: { on: 'combatDamageToPlayer', self: true } };
+  if (/^Whenever ~ attacks and isn't blocked$/i.test(head)) return { trigger: { on: 'attacksUnblocked', self: true } };
+  if (/^When you cast (?:~|this spell)$/i.test(head)) return { trigger: { on: 'youCastThis' } };
+  if (/^When (?:enchanted|equipped) creature dies$/i.test(head)) return { trigger: { on: 'hostDies' } };
+  if (/^Whenever (?:enchanted|equipped) creature attacks$/i.test(head)) return { trigger: { on: 'hostAttacks' } };
+  if (/^Whenever (?:enchanted|equipped) creature deals combat damage to a player$/i.test(head)) return { trigger: { on: 'hostCombatDamageToPlayer' } };
+  if (/^Whenever (?:enchanted|equipped) creature is dealt damage$/i.test(head)) return { trigger: { on: 'hostDealtDamage' } };
+  if (/^Whenever a player casts a spell$/i.test(head)) return { trigger: { on: 'anyCastsSpell' } };
+  if (/^Whenever (?:a|one or more) creatures? you control deals? combat damage to a player$/i.test(head)) return { trigger: { on: 'yourCreatureCombatDamageToPlayer' } };
+  if (/^Whenever you exert ~$/i.test(head)) return { trigger: { on: 'youExertThis' } };
+  if ((m = head.match(/^Whenever you draw your (second|third) card each turn$/i))) return { trigger: { on: 'youDrawCardNth', nth: m[1].toLowerCase() === 'second' ? 2 : 3 } };
+  if ((m = head.match(/^Whenever you cast your (second|third) spell each turn$/i))) return { trigger: { on: 'youCastSpellNth', nth: m[1].toLowerCase() === 'second' ? 2 : 3 } };
+  if (/^Whenever you cast a creature spell$/i.test(head)) return { trigger: { on: 'youCastSpellOf', filter: { what: 'creature' } } };
+  if (/^Whenever you cast or copy an instant or sorcery spell$/i.test(head)) return { trigger: { on: 'youCastSpell', instantSorceryOnly: true } };
+  if ((m = head.match(/^Whenever you cast (?:a|an) ([A-Z][a-z]+(?: or [A-Z][a-z]+)*|artifact|enchantment|instant|sorcery|noncreature) spell$/))) {
+    const w = m[1];
+    if (/^(artifact|enchantment|instant|sorcery)$/i.test(w)) return { trigger: { on: 'youCastSpellOf', filter: { what: w.toLowerCase() as 'artifact' } } };
+    if (/^noncreature$/i.test(w)) return { trigger: { on: 'youCastSpell', noncreatureOnly: true } };
+    const subs = w.split(' or ');
+    return { trigger: { on: 'youCastSpellOf', filter: subs.length > 1 ? { subtypeAnyOf: subs } : { subtype: subs[0] } } };
+  }
+  if (/^(?:Heroic — )?Whenever you cast a spell that targets ~$/i.test(head)) return { trigger: { on: 'youCastSpellTargetingThis' } };
+  if ((m = head.match(/^Whenever you sacrifice (?:a|an|another) (.+)$/i))) {
+    const info = parseNounG(m[1]);
+    return info && !info.player ? { trigger: { on: 'youSacrifice', filter: Object.keys(info.filter).length ? info.filter : undefined } } : null;
+  }
+  if (/^Whenever (?:a player|an opponent) discards a card$/i.test(head)) return { trigger: { on: 'anyPlayerDiscards' } };
+  if (/^Whenever you discard a card$/i.test(head)) return { trigger: { on: 'youDiscard' } };
+  if ((m = head.match(/^Whenever ~ or another ([A-Z][a-z]+) you control enters$/))) return { trigger: { on: 'etb', what: { what: 'creature', subtype: m[1], controlledBy: 'you', other: true } }, extraSelf: { on: 'etb', self: true } };
+  if ((m = head.match(/^Whenever (?:another|a|an) (.+?) (enters|dies)(?: the battlefield)?(?: under your control)?$/i))) {
+    const info = parseNounG(m[1]);
+    if (info && !info.player && !info.zone) {
+      const on = m[2].toLowerCase() === 'enters' ? 'etb' : 'dies';
+      const filter: FilterSpec = { ...info.filter, other: true, controlledBy: /under your control$/i.test(head) ? 'you' : info.filter.controlledBy ?? 'any' };
+      const another = /^Whenever another/i.test(head);
+      const self = on === 'etb' ? { on: 'etb' as const, self: true as const } : { on: 'dies' as const, self: true as const };
+      return { trigger: on === 'etb' ? { on: 'etb', what: filter } : { on: 'dies', what: filter }, extraSelf: another || filter.controlledBy === 'opponent' ? undefined : self };
+    }
+  }
+  if (/^(?:Valiant — )?Whenever ~ becomes the target of a spell or ability you control for the first time each turn$/i.test(head)) return { trigger: { on: 'becomesTargeted', self: true }, oncePerTurn: true };
+  if ((m = head.match(/^Whenever ~ blocks (?:a|an) (.+)$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    return { trigger: { on: 'blocks', self: true }, condition: { kind: 'subjectIs', ref: 'triggering', filter: info.filter } };
+  }
   if (/^When ~ enters or the creature it haunts dies$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'hauntedDies', self: true } };
   if (/^When the creature (?:this card|~) haunts dies$/i.test(head)) return { trigger: { on: 'hauntedDies', self: true } };
   if (/^Whenever you become the monarch$/i.test(head)) return { trigger: { on: 'youBecomeMonarch' } };
@@ -940,18 +987,38 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // Palavra de habilidade ("Metalcraft — ", "Landfall — ") é rótulo, não regra.
   const line = rawLine.replace(/^(?!Landfall)[A-Z][a-z]+(?: [a-z]+)* — (?=\{|When|Whenever|At |~)/, '');
 
-  // ---- modal spells: "Choose one —" + "• …" lines
-  if (isSpell && /^Choose one —$/i.test(line)) { st.modalOpen = true; return true; }
+  // ---- modal spells: "Choose one —" (or "one or both", "two", "up to one/two", "any number") + "• …" lines
+  if (isSpell && (m = line.match(/^Choose (one|two|three|one or both|one or more|up to one|up to two|up to three|any number) —$/i))) {
+    st.modalOpen = true;
+    const k = m[1].toLowerCase();
+    st.spellModeChoice =
+      k === 'one' ? undefined
+      : k === 'two' ? { min: 2, max: 2 }
+      : k === 'three' ? { min: 3, max: 3 }
+      : k === 'one or both' ? { min: 1, max: 2 }
+      : k === 'one or more' ? { min: 1, max: 99 }
+      : k === 'up to one' ? { min: 0, max: 1 }
+      : k === 'up to two' ? { min: 0, max: 2 }
+      : k === 'up to three' ? { min: 0, max: 3 }
+      : { min: 0, max: 99 };
+    return true;
+  }
   if (st.modalOpen && line.startsWith('• ')) {
     const parsed = parseEffectText(line.slice(2).trim().replace(/\.?$/, '.'));
     if (!parsed) return false;
     st.spellModes.push({ label: line.slice(2).trim(), targets: specsOf(parsed), effect: parsed.steps });
     return true;
   }
-  // ETB modal de permanente: "When ~ enters, choose one —" + bullets.
-  if (/^When ~ enters, choose one —$/i.test(line)) { st.modalTrigger = { on: 'etb', self: true }; st.modalTriggerModes = []; return true; }
+  // Gatilho modal de permanente: "When ~ enters/dies / Whenever ~ attacks, choose one —" + bullets.
+  if ((m = line.match(/^((?:When|Whenever|At the beginning of)[^,]+), choose (?:one|up to one) —$/i))) {
+    const header = parseTriggerHeader(m[1].trim());
+    if (!header) return false;
+    st.modalTrigger = header.trigger;
+    st.modalTriggerModes = [];
+    return true;
+  }
   if (st.modalTrigger && line.startsWith('• ')) {
-    const parsed = parseEffectText(line.slice(2).trim().replace(/\.?$/, '.'));
+    const parsed = parseEffectText(line.slice(2).trim().replace(/\.?$/, '.'), { pronoun: 'what' in st.modalTrigger ? 'triggering' : 'self', pronounPlayer: 'controller' });
     if (!parsed) return false;
     st.modalTriggerModes!.push({ label: line.slice(2).trim(), targets: specsOf(parsed), effect: parsed.steps });
     return true;
@@ -1109,11 +1176,10 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     st.abilities.push({ kind: 'activated', cost: { mana: m[1], tap: true }, condition: cond, effect: [{ op: 'playHideaway' }], text: `${m[1]}, {T}: jogar a carta escondida de graça (se ${m[2]})` });
     return true;
   }
-  // "<estática> as long as you're the monarch / you have the initiative / you've completed a dungeon."
-  if ((m = line.match(/^(?:As long as (you're the monarch|you have the initiative|you've completed a dungeon), (.+)|(.+) as long as (you're the monarch|you have the initiative|you've completed a dungeon))\.$/i))) {
-    const condText = (m[1] ?? m[4]).toLowerCase();
+  // "<estática> as long as <condição>." / "As long as <condição>, <estática>." (gramática de condições).
+  if ((m = line.match(/^(?:As long as (.+?), (.+)|(.+) as long as (.+))\.$/i)) && parseCondG(m[1] ?? m[4])) {
     const inner = (m[2] ?? m[3]).trim();
-    const cond: StaticCondition = condText.includes('monarch') ? { kind: 'isMonarch' } : condText.includes('initiative') ? { kind: 'hasInitiative' } : { kind: 'completedDungeon' };
+    const cond: Cond = parseCondG(m[1] ?? m[4])!;
     let sm: RegExpMatchArray | null;
     // "~ gets +N/+N (and has X)" / "~ has X" sobre a própria carta.
     if ((sm = inner.match(/^(?:~|it) gets ([+-]\d+)\/([+-]\d+)(?: and has (\w[\w\s,]*?))?$/i)) || (sm = inner.match(/^(?:~|it) has (\w[\w\s,]*?)$/i))) {
@@ -1128,10 +1194,89 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     const innerLine = inner.replace(/\.$/, '') + '.';
     if (!parseLine(innerLine.charAt(0).toUpperCase() + innerLine.slice(1), st, isSpell, subtypes)) return false;
     const added = st.abilities.slice(before);
-    if (added.length === 0 || added.some((a) => a.kind !== 'static')) return false;
+    if (added.length === 0 || added.some((a) => a.kind !== 'static')) { st.abilities.length = before; return false; }
     for (const a of added) if (a.kind === 'static') a.condition = cond;
     return true;
   }
+  // ---- Leva 4: custos de mágicas, substituição, estáticas diversas
+  if ((m = line.match(/^(?:(Creature|Noncreature|Instant and sorcery|Artifact|Enchantment|Instant|Sorcery|Planeswalker|[A-Z][a-z]+) )?spells? (you cast|your opponents cast|that target ~)? ?cost ((?:\{[^}]+\})+) (less|more) to cast\.$/i))) {
+    const kind = (m[1] ?? '').toLowerCase();
+    const filter: FilterSpec | undefined =
+      !kind ? undefined
+      : kind === 'noncreature' ? { noncreature: true }
+      : kind === 'instant and sorcery' ? { typeAnyOf: ['Instant', 'Sorcery'] }
+      : TYPE_WORD[kind] ? { what: TYPE_WORD[kind] }
+      : { subtype: m[1] };
+    const amount = manaValueOfCost(m[3]) * (m[4].toLowerCase() === 'less' ? -1 : 1);
+    const who = (m[2] ?? '').toLowerCase();
+    (st.costModifiers ??= []).push({ amount, filter, whose: who === 'you cast' ? 'you' : who === 'your opponents cast' ? 'opponent' : 'any' });
+    return true;
+  }
+  if ((m = line.match(/^Spells your opponents cast that target ~ cost ((?:\{[^}]+\})+) more to cast\.$/i))) {
+    (st.costModifiers ??= []).push({ amount: manaValueOfCost(m[1]), whose: 'opponent', targetsSelf: true });
+    return true;
+  }
+  if ((m = line.match(/^~ costs ((?:\{[^}]+\})+) less to cast for each (.+)\.$/i))) {
+    const gy = m[2].match(/^(.+?) card in your graveyard$/i);
+    const info = parseNounG(gy ? gy[1] : m[2].replace(/ you control$/i, ''));
+    if (!info || info.player) return false;
+    const mod: NonNullable<CardDefinition['costModifiers']>[number] = { amount: -manaValueOfCost(m[1]), whose: 'you', self: true };
+    if (gy) mod.perGraveyard = info.filter; else mod.per = { ...info.filter, controlledBy: 'you' };
+    (st.costModifiers ??= []).push(mod);
+    return true;
+  }
+  if (/^If ~ would die, exile it instead\.$/i.test(line)) { st.flags5.exileInsteadOfDying = true; return true; }
+  if (/^If a creature an opponent controls would die, exile it instead\.$/i.test(line)) { st.flags5.exileDyingCreatures = 'opponents'; return true; }
+  if (/^If a creature would die, exile it instead\.$/i.test(line)) { st.flags5.exileDyingCreatures = 'all'; return true; }
+  if (/^(?:Prevent all damage that would be dealt to ~\.|If damage would be dealt to ~, prevent that damage\.|Prevent all combat damage that would be dealt to ~\.)$/i.test(line)) { st.flags5.preventAllDamageToSelf = true; return true; }
+  if ((m = line.match(/^If you would gain life, you gain that much life plus (\d+) instead\.$/i))) { st.flags5.lifeGainModifier = { plus: parseInt(m[1], 10) }; return true; }
+  if (/^If you would gain life, you gain twice that much life instead\.$/i.test(line)) { st.flags5.lifeGainModifier = { times: 2 }; return true; }
+  if (/^If one or more tokens would be created under your control, twice that many of those tokens are created instead\.$/i.test(line)) { st.flags5.tokenDoubling = true; return true; }
+  if ((m = line.match(/^~ can't attack unless defending player controls (?:a|an) ([A-Z][a-z]+)\.$/))) { st.flags5.attackRequiresDefenderSubtype = m[1]; return true; }
+  if (/^(?:~ must be blocked if able\.|All creatures able to block ~ do so\.)$/i.test(line)) { st.flags5.mustBeBlocked = true; return true; }
+  if (/^Skip your draw step\.$/i.test(line)) { st.flags5.skipDraw = true; return true; }
+  if ((m = line.match(/^~ can't be blocked by (artifact|black|white|blue|red|green) creatures\.$/i))) {
+    const w = m[1].toLowerCase();
+    st.flags5.cantBeBlockedBy = w === 'artifact' ? { types: ['Artifact'] } : { colors: [COLOR_WORDS[w]] };
+    return true;
+  }
+  if ((m = line.match(/^~ can't be blocked by ([A-Z][a-z]+)s\.$/))) { st.flags5.cantBeBlockedBy = { subtypes: [m[1]] }; return true; }
+  if (/^Creatures with power less than ~'s power can't block it\.$/i.test(line)) { st.flags5.evasionPowerLessThanSelf = true; return true; }
+  if (/^You may choose not to untap ~ during your untap step\.$/i.test(line)) return true; // escolha do jogador: desvirar é o padrão
+  if (/^You may cast ~ as though it had flash\.$/i.test(line)) { st.keywords.push('flash'); return true; }
+  if (/^You may exert ~ as it attacks\.$/i.test(line)) { st.flags5.canExert = true; return true; }
+  if (/^You may have ~ enter (?:the battlefield )?as a copy of (?:any|a) creature on the battlefield(?:, except .+)?\.$/i.test(line)) { st.flags5.copyOnEnter = true; return true; }
+  if ((m = line.match(/^Prototype ((?:\{[^}]+\})+) — (\d+)\/(\d+)$/i))) {
+    st.flags5.prototype = { cost: m[1], power: parseInt(m[2], 10), toughness: parseInt(m[3], 10) };
+    st.castMethods.push({ kind: 'prototype', cost: m[1], label: `protótipo ${m[1]} (${m[2]}/${m[3]})` });
+    return true;
+  }
+  if ((m = line.match(/^Reinforce (\d+)—((?:\{[^}]+\})+)$/i))) {
+    st.abilities.push({ kind: 'activated', zone: 'hand', cost: { mana: m[2], discardSelf: true }, targets: [{ what: 'creature' }], effect: [{ op: 'putCounters', what: 'target:0', counter: '+1/+1', count: parseInt(m[1], 10) }], text: `Reforçar ${m[1]} — ${m[2]}` });
+    return true;
+  }
+  if ((m = line.match(/^(?:Raid — )?~ enters with (a|an|\w+) ([\w+/-]+) counters? on it if (.+)\.$/i))) {
+    const cond = parseCondG(m[3]);
+    const n = num(m[1]) ?? 1;
+    if (!cond) return false;
+    st.entersWithCounters = { counter: m[2], count: n };
+    st.flags5.entersWithCountersIf = cond;
+    return true;
+  }
+  if ((m = line.match(/^~ enters with (?:a|an) ([\w+/-]+) counter on it for each time it was kicked\.$/i))) { st.kickerEnters = { counter: m[1], count: 1 }; return true; }
+  if (/^(?:Converge — )?~ enters with (?:a|an) [\w+/-]+ counter on it for each color of mana spent to cast it\.$/i.test(line)) { st.flags3.sunburst = true; return true; }
+  if (/^Enchanted creature gets ([+-]\d+)\/([+-]\d+) for each (.+)\.$/i.test(line)) {
+    const sg = parseStaticG(line);
+    if (!sg) return false;
+    st.attachEffect = { ...(st.attachEffect ?? {}), powerPer: sg.powerPer, toughnessPer: sg.toughnessPer };
+    return true;
+  }
+  if ((m = line.match(/^(?:Enchanted|Equipped) creature gets ([+-]\d+)\/([+-]\d+) and has ward ((?:\{[^}]+\})+)\.$/i))) {
+    st.attachEffect = { ...(st.attachEffect ?? {}), power: parseInt(m[1], 10), toughness: parseInt(m[2], 10), ward: manaValueOfCost(m[3]) };
+    return true;
+  }
+  if (/^Enchanted creature can't attack or block, and its activated abilities can't be activated\.$/i.test(line)) { st.attachEffect = { ...(st.attachEffect ?? {}), cantAttack: true, cantBlock: true }; return true; }
+  if (/^You control enchanted permanent\.$/i.test(line)) { st.attachEffect = { ...(st.attachEffect ?? {}), controlHost: true }; return true; }
   if (/^You may look at the top card of your library any time\.$/i.test(line)) { st.revealTop = true; return true; }
   if (/^~ enters tapped unless you have two or more opponents\.$/i.test(line)) { st.entersTapped = true; return true; }
   if (/^You may play an additional land on each of your turns\.$/i.test(line)) { st.extraLands = 1; return true; }
@@ -1555,17 +1700,20 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     const header = parseTriggerHeader(m[1].trim());
     if (!header) return false;
     let body = m[2].trim();
-    // "If" interveniente: "…, if you're the monarch, …" → condição checada ao disparar.
-    let condition: StaticCondition | undefined;
-    const iv = body.match(/^if (you're the monarch|you have the initiative|you've completed a dungeon), (.+)$/i);
+    // "If" interveniente: "…, if <condição>, …" → condição checada ao disparar (gramática de condições).
+    let condition: Cond | undefined = header.condition;
+    const iv = body.match(/^if (.+?), (.+)$/i);
     if (iv) {
-      const c = iv[1].toLowerCase();
-      condition = c.includes('monarch') ? { kind: 'isMonarch' } : c.includes('initiative') ? { kind: 'hasInitiative' } : { kind: 'completedDungeon' };
-      body = iv[2];
+      const c = parseCondG(iv[1]);
+      if (c) { condition = condition ? { kind: 'and', conds: [condition, c] } : c; body = iv[2]; }
     }
-    // Pronomes referindo a própria permanente: "it deals/gets/gains" → "~ …".
-    body = body.replace(/^it (deals|gets|gains) /i, '~ $1 ');
-    const parsed = parseEffectText(body + '.');
+    // Pronomes: em gatilhos próprios "it" é a própria carta; em gatilhos de filtro/hospedeiro é o objeto que disparou.
+    const trig = header.trigger;
+    const aboutOther = 'what' in trig || /^(host|youSacrifice|youDiscard|anyPlayerDiscards|youDrawCard|youCastSpellOf|youCastSpellNth|anyCastsSpell|blocks|combatDamageToCreature|dealtDamage)/.test(trig.on);
+    const pronoun: SubjectRef = aboutOther ? 'triggering' : 'self';
+    const pronounPlayer: WhoSel = /combatDamageToPlayer|yourCreatureCombatDamageToPlayer|anyPlayerDiscards|anyCastsSpell|dealsDamage/.test(trig.on) ? 'triggerPlayer' : 'controller';
+    if (!aboutOther) body = body.replace(/^it (deals|gets|gains) /i, '~ $1 ');
+    const parsed = parseEffectText(body + '.', { pronoun, pronounPlayer });
     if (!parsed || parsed.selfExile) return false;
     const ability: AbilityDef = {
       kind: 'triggered',
@@ -1574,13 +1722,21 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
       targets: specsOf(parsed),
       effect: parsed.steps,
       text: m[2].trim(),
+      oncePerTurn: header.oncePerTurn || undefined,
     };
     st.abilities.push(ability);
     if (header.extraSelf) st.abilities.push({ ...ability, trigger: header.extraSelf });
     return true;
   }
 
-  // ---- static anthems / lords
+  // ---- static anthems / lords (gramática composicional: "<substantivo> get +N/+N (and have KW)", "~ gets +1/+1 for each X")
+  {
+    const sg = parseStaticG(line);
+    if (sg && (sg.power !== undefined || sg.toughness !== undefined || sg.keywords || sg.powerPer || sg.toughnessPer)) {
+      st.abilities.push({ kind: 'static', filter: sg.filter, selfOnly: sg.selfOnly, hostOnly: sg.hostOnly, power: sg.power, toughness: sg.toughness, keywords: sg.keywords, powerPer: sg.powerPer, toughnessPer: sg.toughnessPer, text: line.replace(/\.$/, '') });
+      return true;
+    }
+  }
   if ((m = line.match(/^(Other )?(?:([A-Z]\w+) )?creatures you control (?:get ([+-]\d+)\/([+-]\d+))?(?: and )?(?:have (\w[\w\s,]*?))?\.$/i)) && (m[3] || m[5])) {
     const kws = m[5] ? keywordList(m[5]) : undefined;
     if (m[5] && !kws) return false;
@@ -1602,7 +1758,26 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     if (!cost) return false;
     let body = m[2].trim();
     let sorceryOnly = false;
-    if (/ Activate only as a sorcery\.$/i.test(body)) { sorceryOnly = true; body = body.replace(/ Activate only as a sorcery\.$/i, '.'); }
+    let maxPerTurn: number | undefined;
+    let actCond: Cond | undefined;
+    // Restrições de ativação no fim do texto (podem combinar).
+    let rest = true;
+    while (rest) {
+      rest = false;
+      let am: RegExpMatchArray | null;
+      if (/ Activate only as a sorcery\.$/i.test(body)) { sorceryOnly = true; body = body.replace(/ Activate only as a sorcery\.$/i, '.'); rest = true; }
+      else if (/ Activate only once each turn\.$/i.test(body)) { maxPerTurn = 1; body = body.replace(/ Activate only once each turn\.$/i, '.'); rest = true; }
+      else if ((am = body.match(/ Activate no more than (\w+) times? each turn\.$/i))) { maxPerTurn = num(am[1]) ?? undefined; body = body.replace(/ Activate no more than \w+ times? each turn\.$/i, '.'); rest = true; }
+      else if (/ Activate only during your turn\.$/i.test(body)) { actCond = { kind: 'yourTurn' }; body = body.replace(/ Activate only during your turn\.$/i, '.'); rest = true; }
+      else if (/ Activate only during combat\.$/i.test(body)) { body = body.replace(/ Activate only during combat\.$/i, '.'); rest = true; }
+      else if ((am = body.match(/ Activate only if (.+?)\.$/i))) {
+        const c = parseCondG(am[1]);
+        if (!c) return false;
+        actCond = actCond ? { kind: 'and', conds: [actCond, c] } : c;
+        body = body.replace(/ Activate only if .+?\.$/i, '.');
+        rest = true;
+      }
+    }
     if (/Activate only/i.test(body)) return false;
     const parsed = parseEffectText(body);
     if (!parsed || parsed.selfExile) return false;
@@ -1614,6 +1789,8 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
       effect: parsed.steps,
       text: m[2].trim().replace(/\.$/, ''),
       sorceryOnly: sorceryOnly || undefined,
+      maxPerTurn,
+      condition: actCond ? { cond: actCond } : undefined,
     });
     return true;
   }
@@ -1695,6 +1872,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     flags2: {},
     flags3: {},
     flags4: {},
+    flags5: {},
     levels: [],
     softNotes: [],
   };
@@ -1830,6 +2008,9 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags2,
     ...st.flags3,
     ...st.flags4,
+    ...st.flags5,
+    costModifiers: st.costModifiers,
+    spellModeChoice: st.spellModeChoice,
     saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
     isClass: subtypes.includes('Class') || undefined,
     levels: st.levels.length > 0 ? st.levels : undefined,

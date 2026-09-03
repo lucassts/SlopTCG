@@ -57,6 +57,16 @@ export function changeLife(state: GameState, playerId: PlayerId, delta: number, 
       }
     }
   }
+  // "If you would gain life, you gain that much plus N / twice that much instead."
+  if (delta > 0) {
+    for (const id of player.zones.battlefield) {
+      const mod = state.objects[id]?.card.lifeGainModifier;
+      if (!mod) continue;
+      if (mod.times) delta *= mod.times;
+      if (mod.plus) delta += mod.plus;
+    }
+    player.lifeGainedThisTurn = (player.lifeGainedThisTurn ?? 0) + delta;
+  }
   player.life += delta;
   emit({ type: 'lifeChanged', player: playerId, delta, total: player.life, reason });
 }
@@ -74,7 +84,7 @@ export function dealDamageToObject(
   amount: number,
   sourceName: string,
   emit: Emit,
-  opts?: { deathtouch?: boolean; sourceColors?: import('./types.js').Color[]; infect?: boolean; wither?: boolean },
+  opts?: { deathtouch?: boolean; sourceColors?: import('./types.js').Color[]; infect?: boolean; wither?: boolean; sourceId?: number; combat?: boolean },
 ): void {
   if (amount <= 0) return;
   // Protection from [color]: all damage from sources of that color is prevented.
@@ -82,6 +92,18 @@ export function dealDamageToObject(
   if (prot && opts?.sourceColors?.some((c) => prot.includes(c))) {
     emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
     return;
+  }
+  // Prevention: "prevent all damage that would be dealt to ~" / shields for this turn / "the next N damage".
+  if (target.card.preventAllDamageToSelf || target.preventAllThisTurn) {
+    emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
+    return;
+  }
+  if ((target.preventNext ?? 0) > 0) {
+    const prevented = Math.min(amount, target.preventNext!);
+    target.preventNext! -= prevented;
+    amount -= prevented;
+    emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount: prevented });
+    if (amount <= 0) return;
   }
   // Infect / wither: damage to creatures becomes -1/-1 counters.
   if ((opts?.infect || opts?.wither) && (target.card.types.includes('Creature') || target.crewedUntilEot)) {
@@ -97,6 +119,8 @@ export function dealDamageToObject(
     emit({
       type: 'damageDealt',
       sourceName,
+      sourceId: opts?.sourceId,
+      combat: opts?.combat,
       target: { kind: 'object', id: target.id },
       targetName: target.card.name,
       amount,
@@ -109,6 +133,8 @@ export function dealDamageToObject(
   emit({
     type: 'damageDealt',
     sourceName,
+    sourceId: opts?.sourceId,
+    combat: opts?.combat,
     target: { kind: 'object', id: target.id },
     targetName: target.card.name,
     amount,
@@ -151,12 +177,26 @@ export function dealDamageToPlayer(
   amount: number,
   sourceName: string,
   emit: Emit,
-  opts?: { infect?: boolean; toxic?: number },
+  opts?: { infect?: boolean; toxic?: number; sourceId?: number; combat?: boolean },
 ): void {
   if (amount <= 0) return;
+  const ps = state.players[playerId];
+  if (ps.preventAllThisTurn) {
+    emit({ type: 'damagePrevented', sourceName, targetName: ps.name, amount });
+    return;
+  }
+  if ((ps.preventNext ?? 0) > 0) {
+    const prevented = Math.min(amount, ps.preventNext!);
+    ps.preventNext! -= prevented;
+    amount -= prevented;
+    emit({ type: 'damagePrevented', sourceName, targetName: ps.name, amount: prevented });
+    if (amount <= 0) return;
+  }
   emit({
     type: 'damageDealt',
     sourceName,
+    sourceId: opts?.sourceId,
+    combat: opts?.combat,
     target: { kind: 'player', player: playerId },
     targetName: state.players[playerId].name,
     amount,
@@ -182,6 +222,27 @@ export function moveWithEvent(
   const from = obj.zone;
   // Unearth: if it would leave the battlefield, exile it instead.
   if (obj.unearthed && from === 'battlefield' && to !== 'exile') to = 'exile';
+  // "If ~ would die, exile it instead" / "If a creature (an opponent controls) would die, exile it instead."
+  if (from === 'battlefield' && to === 'graveyard' && !obj.isToken) {
+    const dyingCreature = obj.card.types.includes('Creature');
+    const staticExile = dyingCreature && (['p1', 'p2'] as PlayerId[]).some((p) =>
+      state.players[p].zones.battlefield.some((id) => {
+        const mode = state.objects[id]?.card.exileDyingCreatures;
+        return mode === 'all' || (mode === 'opponents' && p !== obj.controller);
+      }),
+    );
+    if (obj.card.exileInsteadOfDying || staticExile) to = 'exile';
+  }
+  // Turn bookkeeping for conditions (morbid, revolt, celebration).
+  if (from === 'battlefield') {
+    const ps = state.players[obj.controller];
+    ps.permanentsLeftThisTurn = (ps.permanentsLeftThisTurn ?? 0) + 1;
+    if (to === 'graveyard' && (obj.card.types.includes('Creature') || obj.crewedUntilEot)) state.creaturesDiedThisTurn = (state.creaturesDiedThisTurn ?? 0) + 1;
+  }
+  if (to === 'battlefield' && !obj.card.types.includes('Land')) {
+    const ps = state.players[obj.controller];
+    ps.nonlandEnteredThisTurn = (ps.nonlandEnteredThisTurn ?? 0) + 1;
+  }
   const hidden = to === 'hand' || to === 'library';
   if (obj.isToken && to !== 'battlefield') {
     // Tokens cease to exist when they leave the battlefield.

@@ -33,7 +33,7 @@ export type GameEvent =
   | { type: 'manaAdded'; player: PlayerId; mana: ManaSymbol[]; sourceName: string }
   | { type: 'manaPoolEmptied'; player: PlayerId }
   | { type: 'lifeChanged'; player: PlayerId; delta: number; total: number; reason: string }
-  | { type: 'damageDealt'; sourceName: string; target: TargetChoice; targetName: string; amount: number }
+  | { type: 'damageDealt'; sourceName: string; target: TargetChoice; targetName: string; amount: number; sourceId?: number; combat?: boolean }
   | { type: 'pumped'; objectId: number; cardName: string; power: number; toughness: number }
   | { type: 'countersChanged'; objectId: number; cardName: string; counter: string; delta: number; total: number }
   | { type: 'tokenCreated'; player: PlayerId; objectId: number; name: string }

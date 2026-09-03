@@ -36,7 +36,7 @@ export type PlayerAction =
       /** Alternative casting method (evoke, dash, blitz, escape, foretold…, or 'suspend' to exile with time counters). */
       method?:
         | 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp' | 'suspend'
-        | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak' | 'miracle';
+        | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak' | 'miracle' | 'prototype';
       /** Escape: graveyard cards exiled as part of the cost. */
       escapeExile?: number[];
       /** Morph/Disguise: cast face down as a 2/2 for {3}. */
@@ -53,6 +53,8 @@ export type PlayerAction =
       attackerId?: number;
       /** Replicate: how many extra times the replicate cost is paid (one copy each). */
       replicateTimes?: number;
+      /** Modal spells that allow several modes ("choose one or both", "choose two"). */
+      modes?: number[];
     }
   /** Morph: turn a face-down permanent face up by paying its morph cost. */
   | { type: 'turnFaceUp'; objectId: number }
@@ -85,6 +87,8 @@ export type PlayerAction =
       attackers: number[];
       /** Planeswalker (of the defender) these attackers attack instead of the player. */
       defendTarget?: number;
+      /** Attackers exerted as they attack (won't untap next untap step). */
+      exerted?: number[];
     }
   | { type: 'declareBlockers'; blocks: { blocker: number; attacker: number }[] }
   | { type: 'chooseDiscard'; objectIds: number[] }

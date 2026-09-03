@@ -54,6 +54,7 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
     }
 
     for (const obj of battlefield(state)) {
+      if (obj.copyPending) continue; // clone escolhendo o que copiar: ainda não é o 0/0 impresso
       if (isCreature(obj)) {
         const toughness = effectiveToughness(state, obj);
         const deathtouched = (obj.counters['__deathtouched'] ?? 0) > 0 && obj.damage > 0;

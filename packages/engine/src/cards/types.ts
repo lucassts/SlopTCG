@@ -16,8 +16,58 @@ export type PlayerSel = 'controller' | 'opponent' | 'each';
  * - 'self'        → the source object itself
  * - a PlayerSel   → player(s)
  */
-/** 'triggering' = the object that caused the trigger ("whenever another creature enters, … it"). */
-export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | PlayerSel;
+/** 'triggering' = the object that caused the trigger ("whenever another creature enters, … it"); 'iter' = the current object of a forEach. */
+export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | 'iter' | PlayerSel;
+
+/**
+ * Conditions ("if …", "as long as …"). Evaluated relative to the source's
+ * controller; `subjectIs` needs the effect context (target / triggering object).
+ */
+export type Cond =
+  | { kind: 'yourTurn' }
+  | { kind: 'attacking' }
+  | { kind: 'untapped' }
+  | { kind: 'tapped' }
+  /** Threshold: ≥ N cards in your graveyard (optionally matching a filter — spell mastery, undergrowth). */
+  | { kind: 'graveyardAtLeast'; count: number; filter?: FilterSpec }
+  /** Delirium: ≥ 4 card types among cards in your graveyard. */
+  | { kind: 'delirium' }
+  /** Metalcraft & friends: you control ≥ count permanents matching the filter. */
+  | { kind: 'controlsAtLeast'; count: number; filter: FilterSpec }
+  /** "You control no X" / "an opponent controls a X". */
+  | { kind: 'controlsAtMost'; count: number; filter: FilterSpec }
+  | { kind: 'opponentControlsAtLeast'; count: number; filter: FilterSpec }
+  /** Has a counter of this kind. */
+  | { kind: 'hasCounter'; counter: string }
+  | { kind: 'isMonarch' }
+  | { kind: 'hasInitiative' }
+  | { kind: 'completedDungeon' }
+  | { kind: 'lifeAtMost'; who: PlayerSel; amount: number }
+  | { kind: 'lifeAtLeast'; who: PlayerSel; amount: number }
+  | { kind: 'moreLifeThanOpponent' }
+  | { kind: 'handSizeAtMost'; who: PlayerSel; amount: number }
+  | { kind: 'handSizeAtLeast'; who: PlayerSel; amount: number }
+  /** Morbid / raid / revolt / celebration / "cast another spell this turn" / "gained life this turn". */
+  | { kind: 'creatureDiedThisTurn' }
+  | { kind: 'attackedThisTurn' }
+  | { kind: 'permanentLeftThisTurn' }
+  | { kind: 'nonlandEnteredThisTurn'; count: number }
+  | { kind: 'spellsCastThisTurnAtLeast'; count: number }
+  | { kind: 'gainedLifeThisTurn' }
+  | { kind: 'dealtCombatDamageThisTurn' }
+  /** Pack tactics / formidable: total power of creatures you control (or attacked with) ≥ N. */
+  | { kind: 'attackedWithPowerAtLeast'; amount: number }
+  | { kind: 'totalPowerAtLeast'; amount: number }
+  /** Coven: three or more creatures with different powers. */
+  | { kind: 'coven' }
+  /** Corrupted: an opponent has three or more poison counters. */
+  | { kind: 'opponentPoisonAtLeast'; count: number }
+  | { kind: 'isMainPhase' }
+  /** The target / triggering object matches the filter ("if it's a creature card"). */
+  | { kind: 'subjectIs'; ref: SubjectRef; filter: FilterSpec }
+  | { kind: 'not'; cond: Cond }
+  | { kind: 'and'; conds: Cond[] }
+  | { kind: 'or'; conds: Cond[] };
 
 /**
  * Object filter, evaluated relative to the effect's controller/source.
@@ -52,6 +102,25 @@ export interface FilterSpec {
   attacking?: boolean;
   /** Mana value exactly N (transmute). */
   cmcEquals?: number;
+  cmcAtMost?: number;
+  cmcAtLeast?: number;
+  /** Power / toughness bounds ("creatures with power 2 or less"). */
+  powerAtLeast?: number;
+  powerAtMost?: number;
+  toughnessAtMost?: number;
+  /** Has a counter of this kind ("each creature you control with a +1/+1 counter on it"). */
+  withCounter?: string;
+  /** Tokens only / nontoken only. */
+  token?: boolean;
+  nontoken?: boolean;
+  /** "nonblack creature" / "non-Zombie creature". */
+  notColor?: Color;
+  notSubtype?: string;
+  tapped?: boolean;
+  untapped?: boolean;
+  legendary?: boolean;
+  /** "creature that's attacking or blocking". */
+  inCombat?: boolean;
 }
 
 /**
@@ -65,7 +134,19 @@ export type DynAmount =
   /** Power of the creature sacrificed as an additional cost (Fling). */
   | 'sacrificedPower'
   /** Power of a referenced creature ("damage equal to its power" — bites). */
-  | { powerOf: SubjectRef };
+  | { powerOf: SubjectRef }
+  | { toughnessOf: SubjectRef }
+  | { cmcOf: SubjectRef }
+  | { countersOn: SubjectRef; counter: string }
+  | { handSize: PlayerSel }
+  | { graveyardCount: PlayerSel; filter?: FilterSpec }
+  | { lifeOf: PlayerSel }
+  /** Amount carried by the trigger ("that much" — damage dealt, life gained). */
+  | 'triggerAmount'
+  /** Domain: basic land types among lands you control. */
+  | 'domain'
+  | { times: number; of: DynAmount }
+  | { plus: number; of: DynAmount };
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
@@ -98,7 +179,18 @@ export interface TargetSpec {
   optional?: boolean;
   /** Soulshift: "Spirit permanent card with mana value N or less". */
   subtype?: string;
+  subtypeAnyOf?: string[];
+  notSubtype?: string;
   cmcAtMost?: number;
+  cmcAtLeast?: number;
+  toughnessAtMost?: number;
+  color?: Color;
+  notColor?: Color;
+  nontoken?: boolean;
+  token?: boolean;
+  untapped?: boolean;
+  legendary?: boolean;
+  /** "target creature you don't control" is the same as opponent in two players; 'any' is the default. */
 }
 
 /**
@@ -108,8 +200,8 @@ export interface TargetSpec {
  * Steps marked (choice) pause resolution and ask a player to pick — the
  * engine resumes the script automatically after the pick.
  */
-/** Who an effect applies to, including targeted players ("target player draws…"). */
-export type WhoSel = PlayerSel | `target:${number}`;
+/** Who an effect applies to, including targeted players ("target player draws…"), the player a trigger is about, and controllers of objects. */
+export type WhoSel = PlayerSel | `target:${number}` | 'triggerPlayer' | `controllerOf:${number}` | 'controllerOfTriggering' | 'controllerOfIter';
 
 export type EffectStep =
   | { op: 'draw'; who: WhoSel; count: DynAmount }
@@ -137,7 +229,7 @@ export type EffectStep =
   /** Put the object on top of its owner's library. */
   | { op: 'putOnLibraryTop'; what: SubjectRef }
   /** Predefined artifact tokens with their own abilities. */
-  | { op: 'namedToken'; who: PlayerSel; kind: 'Treasure' | 'Food' | 'Clue'; count: number }
+  | { op: 'namedToken'; who: PlayerSel; kind: 'Treasure' | 'Food' | 'Clue' | 'Blood' | 'Powerstone' | 'Map' | 'Gold'; count: DynAmount; tapped?: boolean }
   /** (choice) "You may <effect>" — yes runs `effect`, no runs `else` (if any). */
   | { op: 'mayDo'; prompt?: string; effect: EffectScript; else?: EffectScript; who?: 'opponent' }
   /** Energy: "you get {E}{E}" (negative = pay). */
@@ -174,12 +266,43 @@ export type EffectStep =
   | { op: 'impulse'; count: number }
   /** Goad: must attack (a player other than you) until your next turn. */
   | { op: 'goad'; what: SubjectRef }
+  // ---- Leva 4: gramática composicional
+  /** "If <cond>, <then>[. Otherwise, <else>]". */
+  | { op: 'if'; cond: Cond; then: EffectScript; else?: EffectScript }
+  /** "Each <filter> <verb>": run the effect once per matching battlefield object, with 'iter' as the subject. */
+  | { op: 'forEach'; filter: FilterSpec; effect: EffectScript }
+  /** Prevention shield: the next N damage to the subject this turn is prevented. */
+  | { op: 'preventNext'; what: SubjectRef; amount: DynAmount }
+  /** Prevent all damage that would be dealt to the subject this turn. */
+  | { op: 'preventAllTo'; what: SubjectRef }
+  /** Delayed trigger with an arbitrary effect (targets captured now). */
+  | { op: 'delayedEffect'; at: 'endStep' | 'nextUpkeep'; effect: EffectScript }
+  /** (choice) Clone: the source enters as a copy of a creature on the battlefield. */
+  | { op: 'copyOf' }
+  /** (choice) Populate: create a copy of a creature token you control. */
+  | { op: 'populate' }
+  /** Proliferate: one more of each kind of counter on each permanent you control that has counters. */
+  | { op: 'proliferate' }
+  /** Bolster N: N +1/+1 counters on your creature with the least toughness. */
+  | { op: 'bolster'; count: number }
+  /** (choice) Support N: a +1/+1 counter on each of up to N other creatures. */
+  | { op: 'support'; count: number }
+  /** Amass N: N +1/+1 counters on your Army (created 0/0 if none). */
+  | { op: 'amass'; count: number; subtype?: string }
+  /** (choice) Connive: draw, then discard; a nonland discard gives a +1/+1 counter. */
+  | { op: 'connive'; what: SubjectRef }
+  /** Flicker: exile the subject and return it to the battlefield under its owner's control. */
+  | { op: 'blink'; what: SubjectRef }
+  /** (choice) "Look at the top N cards. Put up to `pick` of them (matching filter) into your hand; the rest on the bottom / into your graveyard." */
+  | { op: 'digTop'; count: number; pick: number; filter?: FilterSpec; rest: 'bottom' | 'graveyard' | 'top'; to?: 'hand' | 'battlefield' }
+  /** "Exile the top N cards of your library" (no play permission). */
+  | { op: 'exileTopSelf'; count: number }
   /**
    * (choice) "Sacrifice ~ unless you pay {N}" / echo / cumulative upkeep:
    * the controller may pay the cost (per age counter when `perCounter`);
    * otherwise `else` runs.
    */
-  | { op: 'payOrElse'; cost: string; perCounter?: string; else: EffectScript; /** Runs only if paid (extort). */ then?: EffectScript; /** Pay energy instead of mana. */ energy?: number }
+  | { op: 'payOrElse'; cost: string; perCounter?: string; else: EffectScript; /** Runs only if paid (extort). */ then?: EffectScript; /** Pay energy instead of mana. */ energy?: number; /** Who decides/pays (default the controller). */ payer?: 'opponent' }
   /** Poison counters (infect/toxic). */
   | { op: 'poison'; who: WhoSel; count: number }
   /** Sacrifice the source itself. */
@@ -198,6 +321,8 @@ export type EffectStep =
   | {
       op: 'tokenCopy';
       count?: number;
+      /** What to copy (default: the source). */
+      what?: SubjectRef;
       /** Overrides: Embalm → white Zombie; Eternalize → 4/4 black Zombie; Offspring → 1/1. */
       colors?: Color[];
       addSubtype?: string;
@@ -220,7 +345,7 @@ export type EffectStep =
   /** Madness: pay the cost and cast the source (in exile) for free; otherwise it goes to the graveyard. */
   | { op: 'castSelfForCost'; cost: string }
   | { op: 'selfToGraveyard' }
-  | { op: 'pump'; what: SubjectRef; power: number; toughness: number; keywords?: Keyword[] }
+  | { op: 'pump'; what: SubjectRef; power: number; toughness: number; keywords?: Keyword[]; /** Default until end of turn; 'yourNextTurn' lasts until the controller's next turn begins. */ duration?: 'eot' | 'yourNextTurn'; /** Dynamic bonus ("gets +X/+X where X is …"). */ powerDyn?: DynAmount; toughnessDyn?: DynAmount }
   /** Permanent +1/+1 or -1/-1 (or named) counters. */
   | { op: 'putCounters'; what: SubjectRef; counter: string; count: DynAmount }
   | { op: 'putCountersEach'; filter: FilterSpec; counter: string; count: number }
@@ -274,7 +399,7 @@ export type EffectStep =
   | {
       op: 'token';
       who: PlayerSel;
-      count: number;
+      count: DynAmount;
       name: string;
       power: number;
       toughness: number;
@@ -331,7 +456,41 @@ export type TriggerSpec =
   | { on: 'hauntedDies'; self: true }
   | { on: 'youBecomeMonarch' }
   | { on: 'youVenture' }
-  | { on: 'youCompleteDungeon' };
+  | { on: 'youCompleteDungeon' }
+  // ---- Leva 4
+  | { on: 'beginCombat'; whose: 'controller' | 'each' }
+  | { on: 'main1'; whose: 'controller' }
+  | { on: 'main2'; whose: 'controller' }
+  | { on: 'turnedFaceUp'; self: true }
+  /** Enrage: this creature is dealt damage (triggerAmount = damage). */
+  | { on: 'dealtDamage'; self: true }
+  /** This creature deals damage (any) / combat damage to a creature (triggerAmount). */
+  | { on: 'dealsDamage'; self: true }
+  | { on: 'combatDamageToCreature'; self: true }
+  /** Attacks and isn't blocked (fires after blockers are declared). */
+  | { on: 'attacksUnblocked'; self: true }
+  /** "When you cast ~" (fires when it's put on the stack). */
+  | { on: 'youCastThis' }
+  /** Aura/Equipment host triggers. */
+  | { on: 'hostDies' }
+  | { on: 'hostAttacks' }
+  | { on: 'hostCombatDamageToPlayer' }
+  | { on: 'hostDealtDamage' }
+  /** Any player casts a spell. */
+  | { on: 'anyCastsSpell' }
+  /** A creature you control deals combat damage to a player (triggerPlayer = the damaged player). */
+  | { on: 'yourCreatureCombatDamageToPlayer' }
+  | { on: 'youExertThis' }
+  /** A creature you control dies / a permanent you control leaves … are covered by dies/leaves filters. */
+  | { on: 'youDrawCardNth'; nth: number }
+  | { on: 'youCastSpellNth'; nth: number }
+  | { on: 'youCastSpellOf'; filter: FilterSpec }
+  /** Heroic: you cast a spell that targets this permanent. */
+  | { on: 'youCastSpellTargetingThis' }
+  /** Landfall-style etb for the host's controller is covered by etb filters. */
+  | { on: 'youSacrifice'; filter?: FilterSpec }
+  | { on: 'anyPlayerDiscards' }
+  | { on: 'youDiscard' };
 
 /** Level up / Class: the ability works only within this level range. */
 export interface LevelGate {
@@ -345,7 +504,9 @@ export interface TriggeredAbility extends LevelGate {
   /** "When ~ enters, if it was kicked / the gift was promised / tribute wasn't paid, …". */
   requiresKicked?: boolean;
   /** Intervening "if": "…, if you're the monarch, …" — checked when it would trigger. */
-  condition?: StaticCondition;
+  condition?: Cond;
+  /** Valiant-style: triggers only the first time each turn. */
+  oncePerTurn?: boolean;
   /**
    * Targets chosen by the controller when the trigger goes on the stack
    * (Flametongue Kavu-style). If no legal target exists, the trigger is
@@ -400,9 +561,13 @@ export interface ActivatedAbility extends LevelGate {
     attackedWithAtLeast?: number;
     completedDungeon?: boolean;
     isMonarch?: boolean;
+    /** Any other condition ("Activate only if you attacked this turn" — boast). */
+    cond?: Cond;
   };
   /** Resolves immediately, like a mana ability (dredge arming). */
   immediate?: boolean;
+  /** "Activate only once each turn" / "no more than twice each turn". */
+  maxPerTurn?: number;
 }
 
 /** Planeswalker loyalty ability: sorcery speed, once per turn per walker. */
@@ -416,23 +581,8 @@ export interface LoyaltyAbility {
 }
 
 /** Continuous effect from a permanent (anthems, lords). */
-/** "As long as …" conditions for static abilities. */
-export type StaticCondition =
-  | { kind: 'yourTurn' }
-  | { kind: 'attacking' }
-  | { kind: 'untapped' }
-  | { kind: 'tapped' }
-  /** Threshold: ≥ N cards in your graveyard. */
-  | { kind: 'graveyardAtLeast'; count: number }
-  /** Delirium: ≥ 4 card types among cards in your graveyard. */
-  | { kind: 'delirium' }
-  /** Metalcraft & friends: you control ≥ count permanents matching the filter. */
-  | { kind: 'controlsAtLeast'; count: number; filter: FilterSpec }
-  /** Has a counter of this kind. */
-  | { kind: 'hasCounter'; counter: string }
-  | { kind: 'isMonarch' }
-  | { kind: 'hasInitiative' }
-  | { kind: 'completedDungeon' };
+/** "As long as …" conditions for static abilities (same vocabulary as effect conditions). */
+export type StaticCondition = Cond;
 
 export interface StaticAbility extends LevelGate {
   kind: 'static';
@@ -440,8 +590,10 @@ export interface StaticAbility extends LevelGate {
   filter: FilterSpec;
   /** Applies only to the source itself ("~ gets +1/+1 for each…"). */
   selfOnly?: boolean;
+  /** Applies to the attached host ("enchanted creature gets +1/+1 as long as…"). */
+  hostOnly?: boolean;
   /** Only while the condition holds. */
-  condition?: StaticCondition;
+  condition?: Cond;
   power?: number;
   toughness?: number;
   /** Dynamic bonus: +1 per battlefield object matching the filter. */
@@ -461,7 +613,9 @@ export interface CastMethod {
      *  retrace (from graveyard discarding a land), freerunning, overload ("target" → "each"), sneak (ninjutsu for spells). */
     | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak'
     /** Miracle: castable for this cost the moment it's the first card drawn this turn. */
-    | 'miracle';
+    | 'miracle'
+    /** Prototype: cast for a smaller cost as a smaller creature. */
+    | 'prototype';
   /** Mana cost of this method ('' = free). */
   cost: string;
   /** Escape: exile this many other cards from your graveyard. */
@@ -574,6 +728,54 @@ export interface CardDefinition {
   haunt?: boolean;
   /** Hideaway N. */
   hideaway?: number;
+  // ---- Leva 4
+  /** "X spells you cast cost {N} less" / "~ costs {1} less for each Y" / "spells your opponents cast cost more". */
+  costModifiers?: {
+    amount: number;
+    /** Which cards it applies to (card filter); undefined = all spells. */
+    filter?: FilterSpec;
+    whose: 'you' | 'opponent' | 'any';
+    /** Applies to this card only ("~ costs {1} less to cast for each…"). */
+    self?: boolean;
+    /** Scale by battlefield objects / graveyard cards matching the filter. */
+    per?: FilterSpec;
+    perGraveyard?: FilterSpec;
+    /** "Spells your opponents cast that target ~ cost {N} more". */
+    targetsSelf?: boolean;
+  }[];
+  /** "If ~ would die, exile it instead." */
+  exileInsteadOfDying?: boolean;
+  /** "If a creature (an opponent controls) would die, exile it instead." */
+  exileDyingCreatures?: 'all' | 'opponents';
+  /** "Prevent all damage that would be dealt to ~." */
+  preventAllDamageToSelf?: boolean;
+  /** "If you would gain life, you gain that much plus N / twice that much instead." */
+  lifeGainModifier?: { plus?: number; times?: number };
+  /** "If one or more tokens would be created under your control, twice that many are created instead." */
+  tokenDoubling?: boolean;
+  /** "~ can't attack unless defending player controls an Island." */
+  attackRequiresDefenderSubtype?: string;
+  /** "~ must be blocked if able." / "All creatures able to block ~ do so." */
+  mustBeBlocked?: boolean;
+  /** "Skip your draw step." */
+  skipDraw?: boolean;
+  /** "~ can't be blocked by artifact creatures / Walls / creatures with power N or less". */
+  cantBeBlockedBy?: { types?: CardType[]; subtypes?: string[]; colors?: Color[] };
+  /** "Creatures with power less than ~'s power can't block it." */
+  evasionPowerLessThanSelf?: boolean;
+  /** Prototype {cost} — N/N: may be cast smaller. */
+  prototype?: { cost: string; power: number; toughness: number };
+  /** Modal spells: how many modes may be chosen ("choose one or both", "choose two"). Default exactly one. */
+  spellModeChoice?: { min: number; max: number };
+  /** "You may exert ~ as it attacks." */
+  canExert?: boolean;
+  /** Clone: "You may have ~ enter as a copy of any creature on the battlefield." */
+  copyOnEnter?: boolean;
+  /** "Raid — ~ enters with a +1/+1 counter if you attacked this turn" (counters conditioned). */
+  entersWithCountersIf?: Cond;
+  /** "~ enters with a +1/+1 counter on it for each time it was kicked" handled by kicker.entersWithCounters × times. */
+  /** Reinforce N—{cost}: from hand, discard to put N +1/+1 counters on target creature (compiled as a hand ability). */
+  /** "You may cast ~ as though it had flash." → keyword flash. */
   /** Blocking restrictions ("can't be blocked by more than one creature" / "except by three or more"). */
   maxBlockers?: number;
   minBlockers?: number;
@@ -691,6 +893,11 @@ export interface CardDefinition {
     doesntUntap?: boolean;
     /** Control Magic: the aura's controller controls the host while attached. */
     controlHost?: boolean;
+    /** "Enchanted creature has ward {N}". */
+    ward?: number;
+    /** "Enchanted creature gets +1/+1 for each X" (dynamic). */
+    powerPer?: FilterSpec;
+    toughnessPer?: FilterSpec;
   };
   /** Ward N: opponents' spells/abilities targeting this permanent cost {N} more. */
   ward?: number;
@@ -755,11 +962,16 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.withKeyword && !card.keywords?.includes(filter.withKeyword)) return false;
   if (filter.withoutKeyword && card.keywords?.includes(filter.withoutKeyword)) return false;
   if (filter.typeAnyOf && !filter.typeAnyOf.some((t) => card.types.includes(t))) return false;
-  if (filter.cmcEquals !== undefined) {
+  if (filter.cmcEquals !== undefined || filter.cmcAtMost !== undefined || filter.cmcAtLeast !== undefined) {
     let mv = 0;
     for (const m of (card.manaCost ?? '').matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : m[1] === 'X' ? 0 : 1;
-    if (mv !== filter.cmcEquals) return false;
+    if (filter.cmcEquals !== undefined && mv !== filter.cmcEquals) return false;
+    if (filter.cmcAtMost !== undefined && mv > filter.cmcAtMost) return false;
+    if (filter.cmcAtLeast !== undefined && mv < filter.cmcAtLeast) return false;
   }
+  if (filter.notColor && card.colors.includes(filter.notColor)) return false;
+  if (filter.notSubtype && card.subtypes.includes(filter.notSubtype)) return false;
+  if (filter.legendary && !card.supertypes?.includes('Legendary')) return false;
   return true;
 }
 

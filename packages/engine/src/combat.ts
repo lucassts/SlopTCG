@@ -26,7 +26,13 @@ export function canAttack(state: GameState, obj: GameObject): string | null {
   if (obj.tapped) return 'está virada';
   if (obj.summoningSick && !hasKeyword(state, obj, 'haste')) return 'tem enjoo de invocação';
   if (hasKeyword(state, obj, 'defender')) return 'tem defensor';
+  if (hasKeyword(state, obj, 'cantAttack')) return 'não pode atacar';
   if ((obj.cantAttackUntilTurn ?? -1) >= state.turn) return 'não pode atacar até o próximo turno do controlador';
+  if (obj.card.attackRequiresDefenderSubtype) {
+    const sub = obj.card.attackRequiresDefenderSubtype;
+    const defender = state.players[opponentOf(obj.controller)];
+    if (!defender.zones.battlefield.some((id) => state.objects[id].card.subtypes.includes(sub))) return `só pode atacar se o defensor controlar ${sub}`;
+  }
   if (attachmentForbids(state, obj, 'cantAttack')) return 'não pode atacar (encantamento)';
   return null;
 }
@@ -48,6 +54,14 @@ export function canBlock(state: GameState, blocker: GameObject, attacker: GameOb
     return `o atacante não pode ser bloqueado por criaturas com poder ${attacker.card.evasionPowerAtLeast} ou mais`;
   if (attacker.card.skulk && effectivePower(state, blocker) > effectivePower(state, attacker))
     return 'esgueirar: não pode ser bloqueado por criaturas com poder maior';
+  if (attacker.card.evasionPowerLessThanSelf && effectivePower(state, blocker) < effectivePower(state, attacker))
+    return 'não pode ser bloqueado por criaturas com poder menor';
+  const cbb = attacker.card.cantBeBlockedBy;
+  if (cbb) {
+    if (cbb.types?.some((t) => blocker.card.types.includes(t))) return `não pode ser bloqueado por ${cbb.types.join('/')}`;
+    if (cbb.subtypes?.some((t) => blocker.card.subtypes.includes(t))) return `não pode ser bloqueado por ${cbb.subtypes.join('/')}`;
+    if (cbb.colors?.some((c) => blocker.card.colors.includes(c))) return 'não pode ser bloqueado por criaturas dessa cor';
+  }
   if (hasKeyword(state, blocker, 'cantBlock')) return 'não pode bloquear';
   if (attachmentForbids(state, blocker, 'cantBlock')) return 'não pode bloquear (encantamento)';
   if (hasKeyword(state, attacker, 'unblockable')) return 'o atacante não pode ser bloqueado';
@@ -125,16 +139,16 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
     const lifelink = hasKeyword(state, atk, 'lifelink');
     const deathtouch = hasKeyword(state, atk, 'deathtouch');
     const trample = hasKeyword(state, atk, 'trample');
-    const atkOpts = { deathtouch, sourceColors: atk.card.colors, infect: atk.card.infect, wither: atk.card.wither };
+    const atkOpts = { deathtouch, sourceColors: atk.card.colors, infect: atk.card.infect, wither: atk.card.wither, sourceId: atk.id, combat: true };
 
     // Unblocked damage goes to the attacked planeswalker, if one was chosen
     // and is still around; otherwise to the defending player.
     const pw = atk.pwTarget !== undefined ? state.objects[atk.pwTarget] : undefined;
     const hitFace = () => {
       if (pw && pw.zone === 'battlefield') {
-        dealDamageToObject(state, pw, power, atk.card.name, emit, { sourceColors: atk.card.colors });
+        dealDamageToObject(state, pw, power, atk.card.name, emit, { sourceColors: atk.card.colors, sourceId: atk.id, combat: true });
       } else {
-        dealDamageToPlayer(state, defender, power, atk.card.name, emit, { infect: atk.card.infect, toxic: atk.card.toxic });
+        dealDamageToPlayer(state, defender, power, atk.card.name, emit, { infect: atk.card.infect, toxic: atk.card.toxic, sourceId: atk.id, combat: true });
         emit({ type: 'combatDamageToPlayer', attackerId: atk.id, player: defender, amount: power });
       }
       if (lifelink) changeLife(state, atk.controller, power, `vínculo com a vida de ${atk.card.name}`, emit);
@@ -159,9 +173,9 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
         }
         if (remaining > 0 && trample) {
           if (pw && pw.zone === 'battlefield')
-            dealDamageToObject(state, pw, remaining, atk.card.name, emit, { sourceColors: atk.card.colors });
+            dealDamageToObject(state, pw, remaining, atk.card.name, emit, { sourceColors: atk.card.colors, sourceId: atk.id, combat: true });
           else {
-            dealDamageToPlayer(state, defender, remaining, atk.card.name, emit, { infect: atk.card.infect, toxic: atk.card.toxic });
+            dealDamageToPlayer(state, defender, remaining, atk.card.name, emit, { infect: atk.card.infect, toxic: atk.card.toxic, sourceId: atk.id, combat: true });
             emit({ type: 'combatDamageToPlayer', attackerId: atk.id, player: defender, amount: remaining });
           }
         }

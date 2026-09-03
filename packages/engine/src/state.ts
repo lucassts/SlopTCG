@@ -8,6 +8,7 @@ import { cardMatchesFilter } from './cards/types.js';
 import { shuffle } from './rng.js';
 import {
   emptyManaPool,
+  opponentOf,
   type ManaPool,
   type ManaSymbol,
   type PlayerId,
@@ -82,6 +83,24 @@ export interface GameObject {
   goadedUntilTurn?: number;
   /** "Can't attack until your next turn" (Twisted Caverns). */
   cantAttackUntilTurn?: number;
+  // ---- Leva 4
+  /** "Until your next turn" modifications, cleared when that player's turn begins. */
+  untilNextTurn?: { player: PlayerId; power: number; toughness: number; keywords: import('./types.js').Keyword[] }[];
+  /** Cast for its prototype cost: smaller P/T. */
+  prototyped?: boolean;
+  /** Exerted: skips the controller's next untap step. */
+  exertedUntilTurn?: number;
+  /** Activations per ability index this turn ("activate only once each turn"). */
+  activationsThisTurn?: Record<number, number>;
+  /** Triggers that already fired this turn (oncePerTurn). */
+  triggeredThisTurn?: Record<number, boolean>;
+  /** Damage prevention shields (this turn). */
+  preventNext?: number;
+  preventAllThisTurn?: boolean;
+  /** Clone: the printed card before it became a copy. */
+  originalCard?: CardDefinition;
+  /** Clone: entering as a copy — state-based actions wait for the choice. */
+  copyPending?: boolean;
   /** Turn it was foretold/plotted (can't be cast the same turn / only as sorcery). */
   exiledOnTurn?: number;
   /** Bestow: on the battlefield as an Aura (not a creature while attached). */
@@ -101,7 +120,11 @@ export interface DelayedAction {
   /** For 'nextUpkeep': whose upkeep. */
   player?: PlayerId;
   objectId: number;
-  action: 'exile' | 'sacrifice' | 'returnToHand' | 'castFree';
+  action: 'exile' | 'sacrifice' | 'returnToHand' | 'castFree' | 'effect';
+  /** action 'effect': an arbitrary script run as an ability of `objectId` for `controller`, with the targets captured when scheduled. */
+  effect?: import('./cards/types.js').EffectScript;
+  controller?: PlayerId;
+  targets?: TargetChoice[];
 }
 
 /** Creature on the battlefield — printed type, a crewed vehicle, or a face-down 2/2. */
@@ -165,6 +188,9 @@ export interface StackItem {
   flashback?: boolean;
   /** Triggered abilities: the object that caused the trigger ("it"). */
   subjectId?: number;
+  /** Triggered abilities: the player it's about ("that player") and the amount ("that much"). */
+  subjectPlayer?: PlayerId;
+  triggerAmount?: number;
   /** Saga chapter ability (keeps the saga alive until it resolves). */
   chapter?: number;
 }
@@ -189,6 +215,14 @@ export interface PlayerState {
   /** Dungeon the player is currently in, and the room index. */
   dungeon?: { name: string; room: number };
   completedDungeons: number;
+  /** Turn bookkeeping for conditions (revolt, celebration, "cast another spell", "gained life"). */
+  permanentsLeftThisTurn?: number;
+  nonlandEnteredThisTurn?: number;
+  spellsCastThisTurn?: number;
+  lifeGainedThisTurn?: number;
+  /** Damage prevention shields on the player (this turn). */
+  preventNext?: number;
+  preventAllThisTurn?: boolean;
   landsPlayedThisTurn: number;
   zones: Record<Exclude<ZoneName, 'stack'>, number[]>;
 }
@@ -201,6 +235,8 @@ export interface EffectResume {
   targets: TargetChoice[];
   xValue?: number;
   subjectId?: number;
+  subjectPlayer?: PlayerId;
+  triggerAmount?: number;
   /** The step that asked for the choice. */
   current: EffectStep;
   /** Steps still to run after the current one. */
@@ -222,6 +258,8 @@ export interface QueuedTrigger {
   specs: import('./cards/types.js').TargetSpec[];
   effect: EffectStep[];
   subjectId?: number;
+  subjectPlayer?: PlayerId;
+  triggerAmount?: number;
   chapter?: number;
 }
 
@@ -236,6 +274,8 @@ export type PendingDecision =
       specs: import('./cards/types.js').TargetSpec[];
       effect: EffectStep[];
       subjectId?: number;
+      subjectPlayer?: PlayerId;
+      triggerAmount?: number;
       chapter?: number;
     }
   | {
@@ -314,6 +354,10 @@ export interface GameState {
   combatDamageSubtypesThisTurn?: string[];
   /** Creatures declared as attackers this turn (Windbrisk Heights). */
   attackersThisTurn?: number;
+  /** Total power of creatures declared as attackers this turn (pack tactics). */
+  attackersPowerThisTurn?: number;
+  /** Morbid. */
+  creaturesDiedThisTurn?: number;
   monarch?: PlayerId;
   initiative?: PlayerId;
   status: 'playing' | 'finished';
@@ -479,6 +523,21 @@ export function matchFilter(
   if (filter.controlledBy === 'opponent' && obj.controller === ctx.controller) return false;
   if (filter.other && obj.id === ctx.sourceId) return false;
   if (filter.attacking && !obj.attacking) return false;
+  if (filter.inCombat && !obj.attacking && obj.blocking === undefined) return false;
+  if (filter.token && !obj.isToken) return false;
+  if (filter.nontoken && obj.isToken) return false;
+  if (filter.tapped && !obj.tapped) return false;
+  if (filter.untapped && obj.tapped) return false;
+  if (filter.withCounter && (obj.counters[filter.withCounter] ?? 0) <= 0) return false;
+  if (ctx.state) {
+    if (filter.powerAtLeast !== undefined && effectivePower(ctx.state, obj) < filter.powerAtLeast) return false;
+    if (filter.powerAtMost !== undefined && effectivePower(ctx.state, obj) > filter.powerAtMost) return false;
+    if (filter.toughnessAtMost !== undefined && effectiveToughness(ctx.state, obj) > filter.toughnessAtMost) return false;
+  } else {
+    if (filter.powerAtLeast !== undefined && (obj.card.power ?? 0) < filter.powerAtLeast) return false;
+    if (filter.powerAtMost !== undefined && (obj.card.power ?? 0) > filter.powerAtMost) return false;
+    if (filter.toughnessAtMost !== undefined && (obj.card.toughness ?? 0) > filter.toughnessAtMost) return false;
+  }
   if (filter.chosenSubtype) {
     const chosen = ctx.state?.objects[ctx.sourceId]?.chosenType;
     if (!chosen || !obj.card.subtypes.includes(chosen)) return false;
@@ -486,24 +545,51 @@ export function matchFilter(
   return true;
 }
 
-/** Evaluate an "as long as" condition for a static ability of `source`. */
-export function staticConditionHolds(state: GameState, source: GameObject, cond: import('./cards/types.js').StaticCondition): boolean {
-  const gy = state.players[source.controller].zones.graveyard.map((id) => state.objects[id]);
+/** Evaluate an "as long as" / "if" condition for `source` (its controller is "you"). `subjectIs` needs the effect context: use condHolds in effects.ts. */
+export function staticConditionHolds(state: GameState, source: GameObject, cond: import('./cards/types.js').Cond): boolean {
+  const me = source.controller;
+  const opp = opponentOf(me);
+  const gy = state.players[me].zones.graveyard.map((id) => state.objects[id]);
+  const mine = () => state.players[me].zones.battlefield.map((id) => state.objects[id]);
+  const theirs = () => state.players[opp].zones.battlefield.map((id) => state.objects[id]);
+  const count = (objs: GameObject[], filter: import('./cards/types.js').FilterSpec) =>
+    objs.filter((o) => matchFilter({ controller: me, sourceId: source.id, state }, { ...filter, controlledBy: undefined }, o)).length;
+  const who = (sel: import('./cards/types.js').PlayerSel) => (sel === 'opponent' ? [opp] : sel === 'each' ? [me, opp] : [me]);
   switch (cond.kind) {
-    case 'yourTurn': return state.activePlayer === source.controller;
+    case 'yourTurn': return state.activePlayer === me;
     case 'attacking': return source.attacking;
     case 'untapped': return !source.tapped;
     case 'tapped': return source.tapped;
-    case 'graveyardAtLeast': return gy.length >= cond.count;
+    case 'graveyardAtLeast': return (cond.filter ? gy.filter((o) => cardMatchesFilter(o.card, cond.filter)).length : gy.length) >= cond.count;
     case 'delirium': return new Set(gy.flatMap((o) => o.card.types)).size >= 4;
-    case 'controlsAtLeast':
-      return state.players[source.controller].zones.battlefield
-        .map((id) => state.objects[id])
-        .filter((o) => matchFilter({ controller: source.controller, sourceId: source.id, state }, cond.filter, o)).length >= cond.count;
+    case 'controlsAtLeast': return count(mine(), cond.filter) >= cond.count;
+    case 'controlsAtMost': return count(mine(), cond.filter) <= cond.count;
+    case 'opponentControlsAtLeast': return count(theirs(), cond.filter) >= cond.count;
     case 'hasCounter': return (source.counters[cond.counter] ?? 0) > 0;
-    case 'isMonarch': return state.monarch === source.controller;
-    case 'hasInitiative': return state.initiative === source.controller;
-    case 'completedDungeon': return state.players[source.controller].completedDungeons > 0;
+    case 'isMonarch': return state.monarch === me;
+    case 'hasInitiative': return state.initiative === me;
+    case 'completedDungeon': return state.players[me].completedDungeons > 0;
+    case 'lifeAtMost': return who(cond.who).some((p) => state.players[p].life <= cond.amount);
+    case 'lifeAtLeast': return who(cond.who).some((p) => state.players[p].life >= cond.amount);
+    case 'moreLifeThanOpponent': return state.players[me].life > state.players[opp].life;
+    case 'handSizeAtMost': return who(cond.who).some((p) => state.players[p].zones.hand.length <= cond.amount);
+    case 'handSizeAtLeast': return who(cond.who).some((p) => state.players[p].zones.hand.length >= cond.amount);
+    case 'creatureDiedThisTurn': return (state.creaturesDiedThisTurn ?? 0) > 0;
+    case 'attackedThisTurn': return state.activePlayer === me && (state.attackersThisTurn ?? 0) > 0;
+    case 'permanentLeftThisTurn': return (state.players[me].permanentsLeftThisTurn ?? 0) > 0;
+    case 'nonlandEnteredThisTurn': return (state.players[me].nonlandEnteredThisTurn ?? 0) >= cond.count;
+    case 'spellsCastThisTurnAtLeast': return (state.players[me].spellsCastThisTurn ?? 0) >= cond.count;
+    case 'gainedLifeThisTurn': return (state.players[me].lifeGainedThisTurn ?? 0) > 0;
+    case 'dealtCombatDamageThisTurn': return state.combatDamageThisTurn;
+    case 'attackedWithPowerAtLeast': return state.activePlayer === me && (state.attackersPowerThisTurn ?? 0) >= cond.amount;
+    case 'totalPowerAtLeast': return mine().filter(isCreature).reduce((s, o) => s + Math.max(0, effectivePower(state, o)), 0) >= cond.amount;
+    case 'coven': return new Set(mine().filter(isCreature).map((o) => effectivePower(state, o))).size >= 3;
+    case 'opponentPoisonAtLeast': return state.players[opp].poison >= cond.count;
+    case 'isMainPhase': return state.step === 'main1' || state.step === 'main2';
+    case 'subjectIs': return false; // precisa do contexto do efeito (condHolds)
+    case 'not': return !staticConditionHolds(state, source, cond.cond);
+    case 'and': return cond.conds.every((c) => staticConditionHolds(state, source, c));
+    case 'or': return cond.conds.some((c) => staticConditionHolds(state, source, c));
   }
 }
 
@@ -515,7 +601,8 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
     for (const ability of source.card.abilities ?? []) {
       if (ability.kind !== 'static') continue;
       if (!abilityActive(source, ability)) continue;
-      if (ability.selfOnly ? source.id !== obj.id : !matchFilter({ controller: source.controller, sourceId: source.id, state }, ability.filter, obj)) continue;
+      if (ability.hostOnly) { if (source.attachedTo !== obj.id) continue; }
+      else if (ability.selfOnly ? source.id !== obj.id : !matchFilter({ controller: source.controller, sourceId: source.id, state }, ability.filter, obj)) continue;
       if (ability.condition && !staticConditionHolds(state, source, ability.condition)) continue;
       total.power += ability.power ?? 0;
       total.toughness += ability.toughness ?? 0;
@@ -528,31 +615,44 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
   return total;
 }
 
+/** Bonus from attachments, including dynamic "+1/+1 for each X". */
+function attachmentBonus(state: GameState, obj: GameObject): { power: number; toughness: number } {
+  let power = 0;
+  let toughness = 0;
+  for (const a of attachmentsOf(state, obj)) {
+    const e = a.card.attachEffect;
+    if (!e) continue;
+    power += e.power ?? 0;
+    toughness += e.toughness ?? 0;
+    const ctx = { controller: a.controller, sourceId: a.id, state };
+    if (e.powerPer) power += battlefield(state).filter((o) => matchFilter(ctx, e.powerPer!, o)).length;
+    if (e.toughnessPer) toughness += battlefield(state).filter((o) => matchFilter(ctx, e.toughnessPer!, o)).length;
+  }
+  return { power, toughness };
+}
+
 export function effectivePower(state: GameState, obj: GameObject): number {
-  const fromAttachments = attachmentsOf(state, obj).reduce(
-    (sum, a) => sum + (a.card.attachEffect?.power ?? 0),
-    0,
-  );
+  const fromAttachments = attachmentBonus(state, obj).power;
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
-  const base = obj.faceDown ? 2 : band?.power ?? obj.card.power ?? 0; // virada para baixo: 2/2
-  return base + obj.untilEot.power + counters + fromAttachments + staticsFor(state, obj).power;
+  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? obj.card.power ?? 0; // virada para baixo: 2/2
+  const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.power, 0);
+  return base + obj.untilEot.power + untilNext + counters + fromAttachments + staticsFor(state, obj).power;
 }
 
 export function effectiveToughness(state: GameState, obj: GameObject): number {
-  const fromAttachments = attachmentsOf(state, obj).reduce(
-    (sum, a) => sum + (a.card.attachEffect?.toughness ?? 0),
-    0,
-  );
+  const fromAttachments = attachmentBonus(state, obj).toughness;
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
-  const base = obj.faceDown ? 2 : band?.toughness ?? obj.card.toughness ?? 0;
-  return base + obj.untilEot.toughness + counters + fromAttachments + staticsFor(state, obj).toughness;
+  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? obj.card.toughness ?? 0;
+  const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.toughness, 0);
+  return base + obj.untilEot.toughness + untilNext + counters + fromAttachments + staticsFor(state, obj).toughness;
 }
 
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
   // Virada para baixo: sem habilidades impressas (disguise dá ward {2}, tratado no custo).
   if (!obj.faceDown && obj.card.keywords?.includes(kw)) return true;
+  if (obj.untilNextTurn?.some((u) => u.keywords.includes(kw))) return true;
   if (!obj.faceDown && currentBand(obj)?.keywords?.includes(kw)) return true;
   if (!obj.faceDown && obj.card.station && (obj.counters['charge'] ?? 0) >= obj.card.station.threshold && obj.card.station.keywords?.includes(kw)) return true;
   if (obj.untilEot.keywords.includes(kw)) return true;

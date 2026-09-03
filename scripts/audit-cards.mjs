@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileOracleCard, DEMO_CARDS, Game, parseCost } from '../packages/engine/dist/index.js';
+import { targetMatchesSpec } from '../packages/engine/dist/effects.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -158,35 +159,15 @@ const matchesFilter = (obj, filter) => {
 /** Pick a legal target for a spec, preferring the opponent's stuff. */
 function pickTarget(game, me, opp, spec) {
   const s = game.state;
-  const objs = (pid, zone) => s.players[pid].zones[zone].map((id) => s.objects[id]);
-  const byType = (t) => [...objs(opp, 'battlefield'), ...objs(me, 'battlefield')].filter((o) => o.card.types.includes(t));
-  const pool = spec.controlledBy === 'you' ? objs(me, 'battlefield') : spec.controlledBy === 'opponent' ? objs(opp, 'battlefield') : null;
-  // Qualificadores do alvo: sem candidato no cenário → sem alvo (pulado, não é falha).
-  const qualifies = (o) =>
-    (!spec.tapped || o.tapped) &&
-    (!spec.combat || o.attacking || o.blocking !== undefined) &&
-    (spec.powerAtLeast === undefined || (o.card.power ?? 0) >= spec.powerAtLeast) &&
-    (spec.powerAtMost === undefined || (o.card.power ?? 0) <= spec.powerAtMost) &&
-    (!spec.withKeyword || o.card.keywords?.includes(spec.withKeyword)) &&
-    (!spec.withoutKeyword || !o.card.keywords?.includes(spec.withoutKeyword)) &&
-    (!spec.typeAnyOf || spec.typeAnyOf.some((t) => o.card.types.includes(t)));
-  const from = (list) => (pool ? list.filter((o) => pool.includes(o)) : list).filter(qualifies);
-  if (spec.zone === 'graveyard') {
-    const g = spec.ownedBy === 'you' ? objs(me, 'graveyard') : [...objs(opp, 'graveyard'), ...objs(me, 'graveyard')];
-    const cand = spec.what === 'creature' ? g.filter((o) => o.card.types.includes('Creature')) : g;
-    return cand[0] ? { kind: 'object', id: cand[0].id } : null;
+  if (spec.what === 'spell') return null;
+  if (spec.what === 'player' || spec.what === 'any') {
+    const p = spec.controlledBy === 'opponent' ? opp : opp;
+    return { kind: 'player', player: p };
   }
-  switch (spec.what) {
-    case 'player': return { kind: 'player', player: opp };
-    case 'any': return { kind: 'player', player: opp };
-    case 'spell': return null;
-    case 'creature': { const c = from(byType('Creature'))[0]; return c ? { kind: 'object', id: c.id } : null; }
-    case 'land': { const c = from(byType('Land'))[0]; return c ? { kind: 'object', id: c.id } : null; }
-    case 'artifact': { const c = from(byType('Artifact'))[0]; return c ? { kind: 'object', id: c.id } : null; }
-    case 'enchantment': { const c = from(byType('Enchantment'))[0]; return c ? { kind: 'object', id: c.id } : null; }
-    case 'permanent': { const c = from([...objs(opp, 'battlefield'), ...objs(me, 'battlefield')])[0]; return c ? { kind: 'object', id: c.id } : null; }
-    default: return null;
-  }
+  // Usa a validação de alvos da própria engine: qualquer objeto legal serve (oponente primeiro).
+  const order = [...s.players[opp].zones.battlefield, ...s.players[me].zones.battlefield, ...s.players[me].zones.graveyard, ...s.players[opp].zones.graveyard];
+  for (const id of order) if (targetMatchesSpec(s, me, spec, { kind: 'object', id })) return { kind: 'object', id };
+  return null;
 }
 
 /** Answer whatever the engine is waiting on, with minimal legal choices. */
@@ -313,7 +294,7 @@ function simulate(def) {
         log.push(`sem alvo legal para conjurar (${specs.map((x) => x.what).join(',')}) — pulado`);
       } else {
         const action = { type: 'castSpell', objectId: cardId, targets };
-        if (def.spellModes?.length) action.mode = 0;
+        if (def.spellModes?.length) { if (def.spellModeChoice) action.modes = def.spellModes.map((_, i) => i).slice(0, Math.max(1, def.spellModeChoice.min)); else action.mode = 0; }
         if (def.manaCost?.includes('{X}')) action.x = 1;
         if (def.additionalCost) {
           const sacs = s.players[me].zones.battlefield.map((id) => s.objects[id]).filter((o) => o.id !== cardId && matchesFilter(o, def.additionalCost.sacrifice)).slice(0, def.additionalCost.count ?? 1).map((o) => o.id);
@@ -407,7 +388,9 @@ function simulate(def) {
 // ------------------------------------------------------------------ run
 const report = { total: corpus.length, bySource: {}, structural: [], simulation: [], compilerCrashes: [], unparsedLines: new Map(), partialLines: new Map(), registryDiff: [] };
 let done = 0;
+const TRACE = !!process.env.AUDIT_TRACE;
 for (const card of corpus) {
+  if (TRACE) fs.appendFileSync('data/audit-trace.log', card.name + String.fromCharCode(10));
   let mapped;
   try { mapped = toDefinition(card); } catch (err) {
     report.compilerCrashes.push({ name: card.name, error: String(err?.message ?? err) });

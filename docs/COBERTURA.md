@@ -19,14 +19,17 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-02, v0.11.0)
+## Estado (2026-09-03, v0.12.0)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (Leva 1) | v0.9 (Leva 2) | v0.10 (Leva 3) | **v0.11 (Leva 3 completa)** |
-|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | **7.136** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | **19.400** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | **6.487** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | **55** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | **v0.12 (Leva 4)** |
+|---|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | **10.296** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | **16.960** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | **5.769** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | **55** |
+
+A Leva 4 foi a que virou a curva, como previsto: +3.160 full numa leva só,
+e as frases pendentes distintas caíram de 20.669 para 17.855.
 
 A Leva 2 rendeu +421 full (menos que as ≈1.000 estimadas): a keyword deixou
 de bloquear, mas boa parte dessas cartas ainda tem outra frase pendente — que
@@ -121,7 +124,70 @@ Ficou de fora de verdade (rules-heavy ou Alchemy): Soulbond, Mutate,
 Phasing, Banding, Provoke, Enlist, Batalhas, Daybound, Double team /
 Specialize / Starting intensity. Voltam na Leva 5 como script por carta.
 
-### Leva 4 — gramática composicional (o grosso: ≈17.000 cartas)
+### Leva 4 — feita (v0.12.0): gramática composicional
+Feito, tudo de uma vez (4a+4b+4c), em `packages/engine/src/cards/grammar.ts`,
+usada como fallback de cada frase depois dos padrões escritos à mão:
+- **sujeitos**: `~`, `it`/`that X`, `target X` com qualificadores compostos
+  (nontoken, cor, non-cor, non-Subtipo, subtipo, "artifact or enchantment",
+  poder/resistência/valor de mana N ou mais/menos, com/sem keyword, com
+  marcador, virada, atacante, lendária), `up to N target X` (alvos opcionais,
+  verbo aplicado a cada um), `each/all X` (forEach), `another X you control`,
+  `enchanted/equipped creature`, jogadores (`you`, `each opponent`, `each
+  player`, `target player`, `that player`, `its controller`, `defending
+  player`);
+- **verbos**: destruir, exilar, virar/desvirar, devolver à mão/ao campo,
+  marcadores (N, X, "for each"), +N/+N com keywords, +X/+X "where X is",
+  "for each" dinâmico, não pode atacar/bloquear/ser bloqueada, luta, dano
+  (inclusive "N ao alvo e M a outro"), ganho de controle, anexar, anular,
+  blink, regenerar, goad, explorar, conspirar, comprar/descartar/moer/
+  sacrificar/perder e ganhar vida/energia/veneno, fichas (P/T, cores,
+  subtipos, keywords, viradas e atacando, "for each"), vidência, vigiar,
+  proliferar, bolster, support, amass, investigar, povoar, "olhe as N do
+  topo … uma para a mão e o resto para o fundo/cemitério", "revele o topo …
+  se for X, para a mão", "exile o topo, pode jogar neste turno";
+- **quantidades**: N, X, "that much", "equal to its power/toughness/mana
+  value", "the number of X you control", cartas na mão/cemitério, total de
+  vida, domínio, marcadores, "twice", "for each";
+- **condições** (efeitos, gatilhos com "if" interveniente, estáticas "as
+  long as", "Activate only if"): você controla N ou mais/nenhum X, oponente
+  controla, vida ≤/≥, mão vazia/N cartas, cemitério N+ (com filtro), delirium,
+  morbid, raid, revolt, celebration, "cast another spell", ganhou vida,
+  pack tactics, formidable, coven, corrupted, "it's your turn", monarca,
+  iniciativa, masmorra, "if it's a creature card", and/or/not;
+- **durações**: até o fim do turno, "this turn", "until your next turn";
+- **"unless"**: "unless you/they pay {custo}", "unless you discard/sacrifice";
+- **gatilhos atrasados** genéricos ("at the beginning of the next end step /
+  your next upkeep, X") e flicker;
+- **substituição e prevenção**: "prevent the next N damage", "prevent all
+  damage to X this turn", "If ~ would die, exile it instead", "creatures an
+  opponent controls would die → exile", "you gain twice/plus N life", fichas
+  em dobro;
+- **custos**: "X spells you cast cost {N} less/more", "spells your opponents
+  cast (that target ~) cost more", "~ costs {N} less for each X";
+- **cópias**: Clone ("enter as a copy of any creature"), "token that's a
+  copy of target creature", povoar;
+- **modais**: "choose one or both / two / up to N / any number" (cliente com
+  seleção múltipla), gatilhos modais em qualquer cabeçalho;
+- **gatilhos novos**: início de combate, primeira/segunda fase principal,
+  manutenção/fim de turno do oponente, virada para cima, "is dealt damage",
+  "deals damage", "deals combat damage to a creature", "attacks and isn't
+  blocked", "when you cast ~", hospedeiro de aura/equipamento (morre,
+  ataca, dano de combate, é ferido), "a player casts a spell", "a creature
+  you control deals combat damage to a player", exert, segunda compra/
+  segundo feitiço por turno, "cast a <Subtipo> spell", heroic, "you
+  sacrifice", "a player discards", "~ blocks a creature with flying",
+  valiant (uma vez por turno);
+- **estáticas**: anthems por subtipo/qualificador ("Other Elves you control
+  get +1/+1", "creature tokens you control have…"), "~ gets +1/+1 for each
+  X" (campo, cemitério, mão), "enchanted creature gets +1/+1 for each X",
+  ward em equipamento, "must be blocked", "can't attack unless defending
+  player controls an Island", "can't be blocked by artifact creatures/
+  Walls/black creatures", "creatures with power less than ~'s can't block
+  it", skip draw, "Activate only once/twice each turn", Prototype,
+  Reinforce, "you may exert", "as though it had flash", raid/converge ao
+  entrar.
+
+O plano original desta leva, para referência:
 Reescrever `parseEffectText` como gramática recursiva:
 - sujeitos: `~`, `it`/`that X`, `target X` (com **até N alvos** e
   qualificadores compostos), `each X`, `all X`, `another X you control`,

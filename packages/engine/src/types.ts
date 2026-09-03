@@ -82,6 +82,7 @@ export type Keyword =
   /** May be cast any time you could cast an instant. */
   | 'flash'
   | 'cantBlock'
+  | 'cantAttack'
   | 'unblockable'
   /** Attacks each combat if able. */
   | 'mustAttack'

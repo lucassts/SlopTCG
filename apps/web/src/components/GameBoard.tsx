@@ -99,6 +99,8 @@ interface Targeting {
   tapPick?: boolean;
   /** Entwine: every mode. */
   entwine?: boolean;
+  /** "Choose one or both": several modes. */
+  modes?: number[];
   replicateTimes?: number;
 }
 
@@ -139,6 +141,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const [bottomSel, setBottomSel] = useState<Set<number>>(new Set());
   const [choiceSel, setChoiceSel] = useState<Set<number>>(new Set());
   const [modalPick, setModalPick] = useState<CardView | null>(null);
+  const [modalSel, setModalSel] = useState<Set<number>>(new Set());
   const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
   const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -361,6 +364,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           buyback: t.buyback,
           kickerTimes: t.kickerTimes,
           entwine: t.entwine,
+          modes: t.modes,
           replicateTimes: t.replicateTimes,
         });
       } else {
@@ -530,7 +534,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     cv: CardView,
     mode: number | undefined,
     fromGraveyard = false,
-    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean } = {},
+    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[] } = {},
   ) => {
     const def = cv.card;
     let x: number | undefined;
@@ -572,7 +576,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     const handSpecs = handPickCount > 0 ? [{ what: 'carta de terreno da sua mão para descartar' }] : [];
     const targetSpecs = extra.entwine
       ? (def.spellModes ?? []).flatMap((m) => m.targets ?? [])
-      : mode !== undefined
+      : extra.modes
+        ? extra.modes.flatMap((i) => def.spellModes?.[i]?.targets ?? [])
+        : mode !== undefined
         ? def.spellModes?.[mode]?.targets ?? []
         : extra.method === 'bestow'
           ? [{ what: 'creature' }]
@@ -583,11 +589,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
               : def.spellTargets ?? [];
     const specs = [...handSpecs, ...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes });
     } else {
-      const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : def.name;
+      const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : extra.modes ? `${def.name} — ${extra.modes.map((i) => def.spellModes?.[i]?.label).join(' + ')}` : def.name;
       const label = handPickCount > 0 ? `${base} (escolha o terreno a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: handPickCount > 0 || undefined, replicateTimes });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: handPickCount > 0 || undefined, replicateTimes });
     }
   };
 
@@ -760,7 +766,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       if (confirm(`Atacar ${pw.card.name} em vez do jogador? (OK = planeswalker, Cancelar = jogador)`))
         defendTarget = pw.objectId;
     }
-    onAction({ type: 'declareAttackers', attackers: [...attackSel], defendTarget });
+    // Exert: pergunta por atacante que permite ("you may exert ~ as it attacks").
+    const exerted: number[] = [];
+    for (const id of attackSel) {
+      const c = me.battlefield.find((x) => x.objectId === id);
+      if (c?.card.canExert && confirm(`Exert ${c.card.name}? (não desvira no seu próximo turno)`)) exerted.push(id);
+    }
+    onAction({ type: 'declareAttackers', attackers: [...attackSel], defendTarget, exerted: exerted.length > 0 ? exerted : undefined });
   };
   const confirmBlocks = () =>
     onAction({ type: 'declareBlockers', blocks: [...blockSel.entries()].map(([blocker, attacker]) => ({ blocker, attacker })) });
@@ -1423,23 +1435,60 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
 
       {/* -------- escolha de modo (mágicas modais) -------- */}
       {modalPick && (
-        <div className="mulligan-overlay" onClick={() => setModalPick(null)}>
+        <div className="mulligan-overlay" onClick={() => { setModalPick(null); setModalSel(new Set()); }}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>{modalPick.card.name}</h2>
-            <div className="muted">Escolha um modo:</div>
-            {(modalPick.card.spellModes ?? []).map((m, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  const cv = modalPick;
-                  setModalPick(null);
-                  beginCast(cv, i);
-                }}
-              >
-                {m.label}
-              </button>
-            ))}
-            <button className="danger" onClick={() => setModalPick(null)}>Cancelar</button>
+            {modalPick.card.spellModeChoice ? (
+              <>
+                <div className="muted">
+                  Escolha {modalPick.card.spellModeChoice.min === modalPick.card.spellModeChoice.max ? modalPick.card.spellModeChoice.min : `de ${modalPick.card.spellModeChoice.min} a ${Math.min(modalPick.card.spellModeChoice.max, modalPick.card.spellModes?.length ?? 0)}`} modo(s):
+                </div>
+                {(modalPick.card.spellModes ?? []).map((m, i) => (
+                  <button
+                    key={i}
+                    className={modalSel.has(i) ? 'primary' : ''}
+                    onClick={() => {
+                      const next = new Set(modalSel);
+                      if (next.has(i)) next.delete(i);
+                      else if (next.size < (modalPick.card.spellModeChoice?.max ?? 1)) next.add(i);
+                      setModalSel(next);
+                    }}
+                  >
+                    {modalSel.has(i) ? '☑ ' : '☐ '}{m.label}
+                  </button>
+                ))}
+                <button
+                  className="primary"
+                  disabled={modalSel.size < modalPick.card.spellModeChoice.min}
+                  onClick={() => {
+                    const cv = modalPick;
+                    const modes = [...modalSel].sort((a, b) => a - b);
+                    setModalPick(null);
+                    setModalSel(new Set());
+                    beginCast(cv, undefined, false, { modes });
+                  }}
+                >
+                  Conjurar com {modalSel.size} modo(s)
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="muted">Escolha um modo:</div>
+                {(modalPick.card.spellModes ?? []).map((m, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      const cv = modalPick;
+                      setModalPick(null);
+                      beginCast(cv, i);
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </>
+            )}
+            <button className="danger" onClick={() => { setModalPick(null); setModalSel(new Set()); }}>Cancelar</button>
           </div>
         </div>
       )}
