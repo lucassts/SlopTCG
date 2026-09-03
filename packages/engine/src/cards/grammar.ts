@@ -48,6 +48,8 @@ export interface NounInfo {
   spell?: { spellType?: TargetSpec['spellType'] };
   /** "any target". */
   any?: boolean;
+  /** Abilities on the stack (Stifle, Consign to Memory). */
+  stackItem?: { abilityKinds?: ('activated' | 'triggered')[]; allowSpell?: { colorless?: boolean } };
 }
 
 const SUBTYPE_RE = /^[A-Z][a-z]+(?:-[A-Z][a-z]+)?$/;
@@ -66,6 +68,10 @@ export function parseNounG(raw: string): NounInfo | null {
   if (lower === 'any target') return { filter: {}, any: true };
   if (lower === 'player or planeswalker' || lower === 'opponent or planeswalker') return { filter: {}, player: lower.startsWith('opponent') ? 'targetOpponent' : 'target' };
 
+  // Abilities on the stack.
+  if (/^(?:activated or triggered|triggered or activated) abilit(?:y|ies)$/i.test(n)) return { filter: {}, stackItem: { abilityKinds: ['activated', 'triggered'] } };
+  if ((m = n.match(/^(activated|triggered) ability$/i))) return { filter: {}, stackItem: { abilityKinds: [m[1].toLowerCase() as 'activated'] } };
+  if ((m = n.match(/^(activated|triggered) ability or (colorless )?spell$/i))) return { filter: {}, stackItem: { abilityKinds: [m[1].toLowerCase() as 'activated'], allowSpell: { colorless: !!m[2] || undefined } } };
   // Spells.
   if ((m = n.match(/^(creature |noncreature |instant or sorcery |instant |sorcery |artifact |enchantment |planeswalker )?spell$/i))) {
     const t = (m[1] ?? '').trim().toLowerCase();
@@ -82,6 +88,8 @@ export function parseNounG(raw: string): NounInfo | null {
     else if (/your/i.test(raw)) filter.controlledBy = 'you';
   }
   n = n.replace(/ cards?$/i, '');
+  // "nonartifact, nonland card" → prefixes without the comma.
+  n = n.replace(/\b(non\w+),\s+(?=non\w+)/gi, '$1 ');
   // "creature card with mana value 3 or less" → "creature with…" (the word "card" is not a type).
   n = n.replace(/ cards? (with|without|that)\b/i, ' $1');
   if (/^multicolored /i.test(n)) { n = n.replace(/^multicolored /i, ''); filter.multicolored = true; }
@@ -140,20 +148,24 @@ export function parseNounG(raw: string): NounInfo | null {
     [/^(white|blue|black|red|green) /i, (mm) => { filter.color = COLOR_WORDS[mm[1].toLowerCase()]; return true; }],
     [/^non-([A-Z][a-z]+) /, (mm) => { filter.notSubtype = mm[1]; return true; }],
     [/^nonland /i, () => { filter.nonland = true; return true; }],
+    [/^non(artifact|enchantment|planeswalker) /i, (mm) => { filter.notTypes = [...(filter.notTypes ?? []), (mm[1].charAt(0).toUpperCase() + mm[1].slice(1).toLowerCase()) as CardType]; return true; }],
     [/^nonbasic /i, () => { filter.nonbasic = true; return true; }],
     [/^noncreature /i, () => { filter.noncreature = true; return true; }],
     [/^basic /i, () => { filter.basic = true; return true; }],
   ];
   changed = true;
+  n = n + ' '; // a prefix may be the whole noun ("nonartifact, nonland card" → filters only)
   while (changed) {
     changed = false;
     for (const [re, apply] of prefixes) {
       const mm = n.match(re);
-      if (mm && n.length > mm[0].length) { n = n.slice(mm[0].length); apply(mm); changed = true; }
+      if (mm && n.length >= mm[0].length) { n = n.slice(mm[0].length); apply(mm); changed = true; }
     }
   }
+  n = n.trim();
   // Core noun: types / subtypes / alternatives.
   const core = n.trim();
+  if (core === '' && Object.keys(filter).length > 0) return { filter, zone };
   const words = core.split(' ');
   const typeWord = (w: string) => CARD_TYPE_WORD[w.toLowerCase().replace(/s$/, '')];
   const alts = core.split(/,?\s+or\s+|,\s*/).map((s) => s.trim()).filter(Boolean);
@@ -170,6 +182,7 @@ export function parseNounG(raw: string): NounInfo | null {
     if (alts.length === 2 && typeWord(alts[0]) === 'Creature' && /planeswalker/i.test(alts[1])) return { filter: { ...filter, what: 'creature' }, zone };
     return null;
   }
+  if (words.length === 1 && COLOR_WORDS[words[0].toLowerCase()] && !filter.color) return { filter: { ...filter, color: COLOR_WORDS[words[0].toLowerCase()] }, zone };
   if (words.length === 1) {
     const w = words[0];
     if (typeWord(w)) {
@@ -210,6 +223,7 @@ export function parseNounG(raw: string): NounInfo | null {
 /** Filter → target spec (targets are mostly battlefield permanents; graveyard cards keep zone). */
 export function filterToTargetSpec(info: NounInfo): TargetSpec | null {
   if (info.any) return { what: 'any' };
+  if (info.stackItem) return { what: 'stackItem', abilityKinds: info.stackItem.abilityKinds, allowSpell: info.stackItem.allowSpell };
   if (info.player) {
     return info.player === 'opponent' || info.player === 'targetOpponent' ? { what: 'player', controlledBy: 'opponent' } : { what: 'player' };
   }
@@ -230,6 +244,7 @@ export function filterToTargetSpec(info: NounInfo): TargetSpec | null {
   if (f.toughnessAtMost !== undefined) spec.toughnessAtMost = f.toughnessAtMost;
   if (f.cmcAtMost !== undefined) spec.cmcAtMost = f.cmcAtMost;
   if (f.cmcAtLeast !== undefined) spec.cmcAtLeast = f.cmcAtLeast;
+  if (f.cmcAtMostX) spec.cmcAtMostX = true;
   if (f.subtype) spec.subtype = f.subtype;
   if (f.subtypeAnyOf) spec.subtypeAnyOf = f.subtypeAnyOf;
   if (f.notSubtype) spec.notSubtype = f.notSubtype;
@@ -278,6 +293,7 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
   if (t === 'your life total') return { lifeOf: 'controller' };
   if (t === 'the number of basic land types among lands you control') return 'domain';
   if ((m = t.match(/^the number of ([\w+/-]+) counters? on (?:it|~|this creature|that creature)$/))) return { countersOn: subject, counter: m[1] };
+  if ((m = t.match(/^half the number of cards in your library, rounded (up|down)$/))) return { halfLibraryOf: 'controller', round: m[1] as 'up' | 'down' };
   if (t === 'that number') return null;
   if ((m = t.match(/^twice (.+)$/))) { const inner = parseAmountG(m[1], subject); return inner === null ? null : { times: 2, of: inner }; }
   return null;
@@ -430,7 +446,7 @@ type Subj =
   | { kind: 'each'; filter: FilterSpec }
   | { kind: 'player'; who: WhoSel };
 
-const PRONOUN_RE = /^(it|that creature|that permanent|that land|that artifact|that enchantment|that card|that token|this creature|~|enchanted creature|enchanted permanent|enchanted land|equipped creature)$/i;
+const PRONOUN_RE = /^(it|that creature|that permanent|that land|that artifact|that enchantment|that card|that token|that spell|this creature|~|enchanted creature|enchanted permanent|enchanted land|equipped creature)$/i;
 const PLURAL_PRONOUN_RE = /^(those creatures|those permanents|those cards|those tokens|them)$/i;
 
 /** Resolve a subject noun phrase (already isolated). */
@@ -470,6 +486,12 @@ function parseSubject(text: string, ctx: GCtx, specs: TargetSpec[], baseIdx: num
     const spec = filterToTargetSpec(info);
     if (!spec) return null;
     if (/^(?:another|other) target/i.test(t) && spec.what !== 'player') (spec as TargetSpec & { other?: boolean }).other = true;
+    if (m[1] === 'X') {
+      // "up to X target cards": a handful of optional slots, limited to X when cast.
+      const refs: SubjectRef[] = [];
+      for (let i = 0; i < 6; i++) { specs.push({ ...spec, optional: true, upToX: true }); refs.push(`target:${baseIdx + specs.length - 1}`); }
+      return { kind: 'multi', refs };
+    }
     const n = m[1] ? num(m[1]) : 1;
     if (n === null || n === 0) return null;
     if (n > 1) {
@@ -497,7 +519,7 @@ function parseSubject(text: string, ctx: GCtx, specs: TargetSpec[], baseIdx: num
 const TOKEN_NAMED = /^(?:a|an|\w+|X) (tapped )?(Treasure|Food|Clue|Blood|Powerstone|Map|Gold) tokens?$/i;
 
 /** "create …" token phrase (without the verb). */
-export function parseTokenG(text: string, who: PlayerSel = 'controller'): EffectStep[] | null {
+export function parseTokenG(text: string, who: WhoSel = 'controller'): EffectStep[] | null {
   let m: RegExpMatchArray | null;
   let t = text.trim();
   let tappedAttacking = false;
@@ -541,7 +563,7 @@ export function parseTokenG(text: string, who: PlayerSel = 'controller'): Effect
 // ------------------------------------------------------------ sentences
 
 const OBJECT_VERBS = /\b(gets|gains|has|have|can't|fights|deals|explores|connives|becomes|doesn't|loses|attacks|blocks|phases|is|are|ventures)\b/i;
-const PLAYER_VERBS = /\b(draws?|discards?|loses?|gains?|mills?|sacrifices?|creates?|gets?|exiles?|reveals?|puts?|searches?|scry|surveil|takes?|becomes?|ventures?|may|adds?|shuffles?)\b/i;
+const PLAYER_VERBS = /\b(draws?|discards?|loses?|gains?|mills?|sacrifices?|creates?|gets?|exiles?|reveals?|puts?|searches?|scr(?:y|ies)|surveil|takes?|becomes?|ventures?|may|adds?|shuffles?)\b/i;
 
 function keywordsOf(text: string): Keyword[] | null {
   const t = text.trim().replace(/^(?:and )?(?:gains?|has|have) /i, '');
@@ -753,6 +775,11 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     return apply(subj, (r) => [{ op: 'preventAllTo', what: r }]);
   }
   // Leva 5b: dupla-face.
+  if ((m = clause.match(/^exile (?:a|an) (.+?) from your hand$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player || info.zone) return null;
+    return [{ op: 'imprintFromHand', filter: info.filter }];
+  }
   if ((m = clause.match(/^exile (.+?), then return (?:it|that card|her|him|them) to the battlefield transformed under (?:your|its owner's|her owner's|his owner's|their owner's) control$/i))) {
     const subj = subjOf(m[1]);
     if (!subj || subj.kind === 'player') return null;
@@ -784,12 +811,19 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     if (!subj || subj.kind === 'player') return null;
     return apply(subj, (r) => [{ op: 'returnToHand', what: r }]);
   }
-  if ((m = clause.match(/^return (.+?) to the battlefield(?: under (?:your|its owner's) control)?( tapped)?$/i))) {
+  if ((m = clause.match(/^return (.+?) to the battlefield(?: under (your|its owner's) control)?( tapped)?$/i))) {
     const subj = subjOf(m[1]);
     if (!subj || subj.kind === 'player') return null;
-    const tapped = !!m[2];
-    return apply(subj, (r) => [{ op: 'returnToBattlefield', what: r, tapped: tapped || undefined }]);
+    const tapped = !!m[3];
+    const owner = /owner/i.test(m[2] ?? '');
+    return apply(subj, (r) => [{ op: 'returnToBattlefield', what: r, tapped: tapped || undefined, owner: owner || undefined }]);
   }
+  if ((m = clause.match(/^(?:until your next turn, )?(.+?) becomes an artifact creature with power and toughness each equal to its mana value(?: until your next turn)?$/i))) {
+    const subj = subjOf(m[1]);
+    if (!subj || subj.kind === 'player') return null;
+    return apply(subj, (r) => [{ op: 'animateArtifactUntilNextTurn', what: r }]);
+  }
+  if (/^choose a (?:land |nonland )?card name$/i.test(clause)) return [{ op: 'chooseValue', kind: 'cardName' }];
   if ((m = clause.match(/^put (.+?) onto the battlefield(?: under your control)?( tapped)?$/i)) && !/from your hand/i.test(m[1])) {
     const subj = subjOf(m[1]);
     if (!subj || subj.kind === 'player') return null;
@@ -854,6 +888,7 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
   const suffix = forEachSuffix(v);
   const body = suffix ? suffix.rest : v;
   const scale = (a: DynAmount): DynAmount => (suffix ? scaled(a, suffix.per) : a);
+  if ((m = body.match(/^draws? cards equal to (.+)$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'draw', who, count: a }]; }
   if ((m = body.match(/^draws? (.+?) cards?$/i)) || (m = body.match(/^draws? (?:a|an) card$/i) && ['', 'a'])) {
     const a = m[1] ? parseAmountG(m[1], subjRef) : 1;
     return a === null ? null : [{ op: 'draw', who, count: scale(a) }];
@@ -872,6 +907,7 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
   if (/^discards? (?:their|your|his or her) hand$/i.test(body)) return [{ op: 'discardHand', who }];
   if (/^reveals? (?:their|your) hand$/i.test(body)) return [{ op: 'revealHand', who }];
   if ((m = body.match(/^mills? (\w+|X) cards?$/i))) { const n = m[1] === 'X' ? null : num(m[1]); return n === null ? null : [{ op: 'mill', who, count: n }]; }
+  if ((m = body.match(/^scries (\d+|X)$/i)) && who !== 'controller') return [{ op: 'scry', count: m[1] === 'X' ? 'X' : parseInt(m[1], 10), who }];
   if ((m = body.match(/^sacrifices? (?:a|an) (.+?)(?: of (?:their|your) choice)?$/i))) {
     const info = parseNounG(m[1]);
     if (!info || info.player) return null;
@@ -887,17 +923,21 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
   if ((m = body.match(/^gets? ((?:\{E\})+)$/i))) return [{ op: 'energy', who, amount: m[1].split('{E}').length - 1 }];
   if ((m = body.match(/^gets? (\w+) poison counters?$/i))) { const n = num(m[1]); return n === null || (who !== 'controller' && who !== 'opponent' && who !== 'each' && !who.startsWith('target:')) ? null : [{ op: 'poison', who, count: n }]; }
   if ((m = body.match(/^creates? (.+)$/i))) {
-    const psel: PlayerSel = who === 'opponent' ? 'opponent' : who === 'each' ? 'each' : 'controller';
-    if (who !== 'controller' && who !== 'opponent' && who !== 'each') return null;
-    const tok = parseTokenG(m[1], psel);
+    const tok = parseTokenG(m[1], who);
     if (!tok) return null;
     if (suffix) for (const s of tok) if ((s.op === 'token' || s.op === 'namedToken') && typeof s.count !== 'undefined') s.count = scaled(s.count, suffix.per);
     return tok;
   }
   if (who === 'controller') {
-    if ((m = body.match(/^scry (\d+)$/i))) return [{ op: 'scry', count: parseInt(m[1], 10) }];
+    if ((m = body.match(/^scry (\d+|X)$/i))) return [{ op: 'scry', count: m[1] === 'X' ? 'X' : parseInt(m[1], 10) }];
     if (/^learn$/i.test(body)) return [{ op: 'learn' }];
     if (/^take an extra turn after this one$/i.test(body)) return [{ op: 'extraTurn', who: 'controller' }];
+    if ((m = body.match(/^may cast an? (.+?) spell from your graveyard$/i))) {
+      const info = parseNounG(m[1]);
+      if (!info || info.player) return null;
+      return [{ op: 'castFromGraveyardThisTurn', filter: info.filter }];
+    }
+    if (/^get an emblem with "you have no maximum hand size\."$/i.test(body)) return [{ op: 'noMaxHandSizeEmblem', who: 'controller' }];
     if (/^gains? protection from everything until your next turn$/i.test(body)) return [{ op: 'playerProtection', who: 'controller' }];
     if ((m = body.match(/^add (\w+) mana of any one color$/i))) { const n = num(m[1]); return n === null ? null : [{ op: 'addManaChoice', who: 'controller', count: n }]; }
     if ((m = body.match(/^puts? (?:a|an) (.+?) from your hand onto the battlefield( tapped)?$/i))) {
@@ -1053,6 +1093,16 @@ export function parseSentenceG(sentence: string, ctx: GCtx): GResult | null {
       const r = playerEffect(subj.who, verb, ctx, specs);
       if (r) return { steps: r, specs };
       continue;
+    }
+    // "Target player draws / scries / creates …": the target is a player.
+    if (subj.kind === 'ref' && subj.ref.startsWith('target:')) {
+      const sp = [...ctx.priorSpecs, ...specs][parseInt(subj.ref.slice('target:'.length), 10)];
+      if (sp?.what === 'player') {
+        const r = playerEffect(subj.ref as WhoSel, verb, ctx, specs);
+        if (r) return { steps: r, specs };
+        specs.length = 0;
+        continue;
+      }
     }
     const r = objectEffect(subj, verb, ctx, specs);
     if (r) return { steps: r, specs };

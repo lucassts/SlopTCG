@@ -349,7 +349,7 @@ function simulate(def) {
         if (!r.ok) {
           const m = errMsg(r);
           // esperados no cenário: enjoo, mana já gasta por outra habilidade, custo de vida alto
-          if (/enjoo|mana insuficiente|pontos de vida para pagar|lealdade insuficiente|energia para pagar|estacionar|não está ativa neste nível|só no nível|precisa exilar|precisa devolver|não satisfaz o custo/.test(m)) log.push(`habilidade ${i}: ${m}`);
+          if (/enjoo|mana insuficiente|pontos de vida para pagar|lealdade insuficiente|energia para pagar|estacionar|não está ativa neste nível|só no nível|precisa exilar|precisa devolver|não satisfaz o custo|a carta exilada não tem essa cor/.test(m)) log.push(`habilidade ${i}: ${m}`);
           else problems.push(`habilidade ${i} recusada: ${m}`);
         } else settle(game, log);
       });

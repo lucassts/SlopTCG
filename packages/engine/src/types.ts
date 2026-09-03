@@ -110,7 +110,9 @@ export type Keyword =
 /** A chosen target, stored on stack items and validated on resolution. */
 export type TargetChoice =
   | { kind: 'object'; id: number }
-  | { kind: 'player'; player: PlayerId };
+  | { kind: 'player'; player: PlayerId }
+  /** An ability on the stack (Stifle, Consign to Memory). */
+  | { kind: 'stack'; id: number };
 
 export type ManaPool = Record<ManaSymbol, number>;
 

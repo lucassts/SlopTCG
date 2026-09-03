@@ -586,15 +586,18 @@ export class Game {
     specs: TargetSpec[] | undefined,
     targets: TargetChoice[],
     srcColors?: import('./types.js').Color[],
+    xValue?: number,
   ): string | null {
     const required = specs ?? [];
     const mandatory = required.filter((t) => !t.optional).length;
     if (targets.length < mandatory || targets.length > required.length)
       return 'número de alvos incorreto';
+    const upToX = required.filter((t) => t.upToX).length;
+    if (upToX > 0 && targets.length > (xValue ?? 0)) return `no máximo X = ${xValue ?? 0} alvo(s)`;
     for (let i = 0; i < targets.length; i++) {
       const spec = required[i];
       if (!spec) return 'alvo em excesso';
-      if (!targetMatchesSpec(this.state, playerId, spec, targets[i], srcColors)) return 'alvo ilegal';
+      if (!targetMatchesSpec(this.state, playerId, spec, targets[i], srcColors, xValue)) return 'alvo ilegal';
     }
     return null;
   }
@@ -710,6 +713,8 @@ export class Game {
     // Adventure: the creature half is castable from exile after the adventure resolved; aftermath: the back half only from the graveyard.
     const viaAdventure = obj.zone === 'exile' && obj.exiledAs === 'adventure' && !method && !obj.transformed;
     const viaAftermath = !!card.aftermath && obj.transformed === true && obj.zone === 'graveyard';
+    const gyPerm = s.players[playerId].graveyardCastPermission;
+    const viaGraveyardPermission = !!gyPerm && gyPerm.untilTurn === s.turn && obj.zone === 'graveyard' && !method && cardMatchesFilter(card, gyPerm.filter);
     if (card.aftermath && obj.transformed && obj.zone !== 'graveyard') { this.fail(playerId, 'aftermath: essa metade só pode ser conjurada do cemitério'); return false; }
     const replicateTimes = Math.max(0, extra.replicateTimes ?? 0);
     if (replicateTimes > 0 && !card.replicate) { this.fail(playerId, 'essa mágica não tem replicar'); return false; }
@@ -718,7 +723,7 @@ export class Game {
         { this.fail(playerId, 'essa carta não está exilada para isso'); return false; }
       if (obj.exiledOnTurn === s.turn && method !== 'warp')
         { this.fail(playerId, 'não pode ser conjurada no mesmo turno em que foi exilada'); return false; }
-    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse && !viaLibraryTop && !viaAdventure && !viaAftermath) {
+    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse && !viaLibraryTop && !viaAdventure && !viaAftermath && !viaGraveyardPermission) {
       { this.fail(playerId, 'carta inválida'); return false; }
     }
     if (kicked && !card.kicker)
@@ -791,9 +796,9 @@ export class Game {
         : cm?.kind === 'overload'
           ? []
           : card.enchant
-            ? [{ what: card.enchant.what, controlledBy: card.enchant.controlledBy, typeAnyOf: card.enchant.typeAnyOf }]
+            ? [{ what: card.enchant.what, controlledBy: card.enchant.controlledBy, typeAnyOf: card.enchant.typeAnyOf, zone: card.enchant.zone }]
             : card.spellTargets;
-    const targetErr = this.validateTargets(playerId, specs, targets, card.colors);
+    const targetErr = this.validateTargets(playerId, specs, targets, card.colors, x);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
     for (const t of targets) if (t.kind === 'object') this.emit({ type: 'targeted', objectId: t.id, by: playerId });
     // Ward — Pay N life: paid up front when targeting an opponent's warded permanent.
@@ -888,7 +893,11 @@ export class Game {
     const escapeIds = extra.escapeExile ?? [];
     if (viaEscape && cm) {
       const need = cm.exileFromGraveyard ?? 0;
-      if (escapeIds.length !== need || new Set(escapeIds).size !== escapeIds.length)
+      if (cm.escapeTypes !== undefined) {
+        const types = new Set(escapeIds.flatMap((id) => s.objects[id]?.card.types ?? []));
+        if (types.size < cm.escapeTypes || new Set(escapeIds).size !== escapeIds.length)
+          { this.fail(playerId, `escapar: exile outras cartas do seu cemitério com ${cm.escapeTypes} ou mais tipos de carta entre elas`); return false; }
+      } else if (escapeIds.length !== need || new Set(escapeIds).size !== escapeIds.length)
         { this.fail(playerId, `escapar: exile ${need} outras cartas do seu cemitério`); return false; }
       for (const id of escapeIds) {
         const g = s.objects[id];
@@ -968,7 +977,7 @@ export class Game {
       }
       cost.generic += this.wardTax(playerId, targets);
       // Cost modifiers: "X spells you cast cost {N} less", "~ costs {1} less for each Y", "spells your opponents cast cost more".
-      cost.generic = Math.max(0, cost.generic + this.costModifierTotal(playerId, card, obj, targets));
+      cost.generic = Math.max(0, cost.generic + this.costModifierTotal(playerId, card, obj, targets, obj.zone !== 'hand'));
       // Emerge: the emerge cost is reduced by the sacrificed creature's mana value.
       if (cm?.kind === 'emerge' && sacs[0] !== undefined)
         cost.generic = Math.max(0, cost.generic - manaValueOf(s.objects[sacs[0]].card.manaCost));
@@ -1047,6 +1056,10 @@ export class Game {
     obj.miracleAvailable = undefined;
     obj.castX = xValue;
     obj.wasCast = true;
+    if (viaGraveyardPermission && gyPerm) {
+      s.players[playerId].graveyardCastPermission = undefined;
+      if (gyPerm.exileInstantSorcery && (card.types.includes('Instant') || card.types.includes('Sorcery'))) obj.exileOnResolveOnce = true;
+    }
     if (fromHand && card.rebound) obj.castMethod = obj.castMethod ?? undefined, (obj as GameObject & { reboundFromHand?: boolean }).reboundFromHand = true;
     const description =
       (mode ? `${card.name} — ${mode.label}` : card.name) +
@@ -1229,7 +1242,7 @@ export class Game {
   }
 
   /** Sum of generic-cost changes from cost modifiers on the battlefield and on the card itself (negative = cheaper). */
-  private costModifierTotal(playerId: PlayerId, card: CardDefinition, obj: GameObject, targets: TargetChoice[]): number {
+  private costModifierTotal(playerId: PlayerId, card: CardDefinition, obj: GameObject, targets: TargetChoice[], notFromHand = false): number {
     const s = this.state;
     let delta = 0;
     const countOn = (filter: import('./cards/types.js').FilterSpec, controller: PlayerId) =>
@@ -1252,6 +1265,7 @@ export class Game {
           if (m.whose === 'you' && !mineToCaster) continue;
           if (m.whose === 'opponent' && mineToCaster) continue;
           if (m.filter && !cardMatchesFilter(card, m.filter)) continue;
+          if (m.notFromHand && !notFromHand) continue;
           if (m.targetsSelf && !targets.some((t) => t.kind === 'object' && t.id === src.id)) continue;
           const scale = m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : 1;
           delta += m.amount * scale;
@@ -1357,6 +1371,10 @@ export class Game {
       if (!manaColor || manaColor === 'C') { this.fail(playerId, 'escolha a cor da mana'); return false; }
       if (choiceStep.colors && !choiceStep.colors.includes(manaColor))
         { this.fail(playerId, `${obj.card.name} não produz {${manaColor}}`); return false; }
+      if (choiceStep.colorsOfImprint) {
+        const imp = obj.imprintedId !== undefined ? s.objects[obj.imprintedId] : undefined;
+        if (!imp || !imp.card.colors.includes(manaColor)) { this.fail(playerId, `${obj.card.name}: a carta exilada não tem essa cor`); return false; }
+      }
     }
     if (choiceStep && choiceStep.op === 'addManaOptions') {
       if (!manaColor) { this.fail(playerId, 'escolha a mana'); return false; }
@@ -1498,6 +1516,7 @@ export class Game {
       kind: 'ability',
       sourceId: obj.id,
       controller: playerId,
+      activated: true,
       cardName: obj.card.name,
       effect: ability.effect,
       targets,
@@ -1651,6 +1670,8 @@ export class Game {
       if (!hasKeyword(s, obj, 'vigilance')) setTapped(s, obj, true, this.emit);
       if (exerted.includes(obj.id)) obj.exertedUntilTurn = s.turn + 2;
     }
+    const penalty = s.players[opponentOf(playerId)].attackersPenalty;
+    if (penalty && penalty.untilTurn > s.turn) for (const obj of attackers) obj.untilEot.power -= penalty.power;
     for (const e of enlist) {
       const c = s.objects[e.creature];
       const atk = s.objects[e.attacker];
@@ -2073,7 +2094,7 @@ export class Game {
       }
       case 'cleanup': {
         const player = s.players[s.activePlayer];
-        const unlimited = player.zones.battlefield.some((id) => s.objects[id].card.noMaxHandSize);
+        const unlimited = player.noMaxHandSize || player.zones.battlefield.some((id) => s.objects[id].card.noMaxHandSize);
         const over = unlimited ? 0 : player.zones.hand.length - MAX_HAND_SIZE;
         s.priority = null;
         if (over > 0) {
@@ -2217,6 +2238,10 @@ export class Game {
         if (obj.castMethod === 'bestow') obj.bestowed = true;
         if (enchantTarget && enchantTarget.kind === 'object') {
           const host = s.objects[enchantTarget.id];
+          if (obj.card.reanimateAura && host && host.zone === 'graveyard') {
+            host.controller = item.controller;
+            moveWithEvent(s, host, 'battlefield', 'returned', this.emit);
+          }
           if (host && host.zone === 'battlefield') {
             obj.attachedTo = host.id;
             this.emit({
@@ -2228,6 +2253,7 @@ export class Game {
             });
           }
         }
+        if (obj.card.entersUnlessDiscard) this.pushTrigger(obj, { text: 'descarte um terreno ou vai para o cemitério', effect: [{ op: 'discardOrDie', filter: obj.card.entersUnlessDiscard }] });
         // "Enters the battlefield with N +1/+1 counters" (N may be X; raid-style conditions honored).
         if (obj.card.entersWithCounters) {
           const ctx = {
@@ -2304,7 +2330,8 @@ export class Game {
           // Adventure: the card waits in exile; the creature may be cast from there later.
           moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
           obj.exiledAs = 'adventure';
-        } else moveWithEvent(s, obj, item.flashback || obj.card.exileOnResolve ? 'exile' : 'graveyard', 'resolved', this.emit);
+        } else moveWithEvent(s, obj, item.flashback || obj.card.exileOnResolve || obj.exileOnResolveOnce ? 'exile' : 'graveyard', 'resolved', this.emit);
+        obj.exileOnResolveOnce = undefined;
         (obj as GameObject & { reboundFromHand?: boolean }).reboundFromHand = false;
         // Haunt (spell): after resolving, exile it haunting target creature.
         if (obj.card.haunt && (obj.zone as string) === 'graveyard')
@@ -2342,6 +2369,20 @@ export class Game {
   /** State triggers ("When you control no Islands, sacrifice ~"): checked whenever triggers are scanned. */
   private checkStateTriggers(): void {
     const s = this.state;
+    // Petrified Hamlet: lands with the chosen name gain the granted abilities.
+    for (const p of PLAYER_IDS) {
+      for (const id of s.players[p].zones.battlefield) {
+        const src = s.objects[id];
+        if (!src?.card.grantToNamed || !src.chosenName) continue;
+        for (const q of PLAYER_IDS) for (const lid of s.players[q].zones.battlefield) {
+          const land = s.objects[lid];
+          if (!land || land.card.name !== src.chosenName || land.grantedFrom?.includes(src.id)) continue;
+          (land.grantedFrom ??= []).push(src.id);
+          if (!land.printedCard) land.printedCard = land.card;
+          land.card = { ...land.card, abilities: [...(land.card.abilities ?? []), ...src.card.grantToNamed] };
+        }
+      }
+    }
     for (const p of PLAYER_IDS) {
       for (const id of [...s.players[p].zones.battlefield]) {
         const o = s.objects[id];
@@ -2383,8 +2424,24 @@ export class Game {
 
   private scanTriggers(): void {
     this.checkStateTriggers();
+    const gyBatch = new Set<number>(); // "one or more cards put into your graveyard": once per scan
     while (this.triggerCursor < this.buf.length) {
       const ev = this.buf[this.triggerCursor++];
+      if (ev.type === 'zoneChanged' && ev.to === 'graveyard') {
+        const moved = this.state.objects[ev.objectId];
+        if (moved && !moved.isToken) {
+          for (const id of [...this.state.players[ev.player].zones.battlefield]) {
+            const o = this.state.objects[id];
+            (o?.card.abilities ?? []).forEach((ab, idx) => {
+              if (ab.kind !== 'triggered' || ab.trigger.on !== 'cardsToYourGraveyard' || gyBatch.has(o.id * 100 + idx)) return;
+              if (ab.trigger.filter && !cardMatchesFilter(moved.card, ab.trigger.filter)) return;
+              if (ab.condition && !staticConditionHolds(this.state, o, ab.condition)) return;
+              gyBatch.add(o.id * 100 + idx);
+              this.pushTrigger(o, ab, ev.objectId, undefined, { abilityIndex: idx });
+            });
+          }
+        }
+      }
       if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'tokenCreated') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'landPlayed') this.fireZoneTriggers(ev.objectId, 'etb'); // landfall
@@ -2793,7 +2850,7 @@ export class Game {
         } else if (t.on === 'youCastSpellNth') fires = nth === t.nth;
         else if (t.on === 'youCastSpellOf') fires = cardMatchesFilter(card, t.filter);
         else if (t.on === 'youCastSpellTargetingThis') fires = targets.some((x) => x.kind === 'object' && x.id === obj.id);
-        else if (t.on === 'anyCastsSpell') fires = true;
+        else if (t.on === 'anyCastsSpell') fires = !t.filter || cardMatchesFilter(card, t.filter.cmcEqualsCountersOn ? { ...t.filter, cmcEqualsCountersOn: undefined, cmcEquals: obj.counters[t.filter.cmcEqualsCountersOn] ?? 0 } : t.filter);
         if (fires) this.pushTrigger(obj, ability, spellObj?.id, undefined, { subjectPlayer: caster, abilityIndex: idx });
       });
     }
@@ -2804,6 +2861,7 @@ export class Game {
       (obj.card.abilities ?? []).forEach((ability, idx) => {
         if (ability.kind !== 'triggered' || !abilityActive(obj, ability)) return;
         if (ability.trigger.on !== 'opponentCastsSpell' && ability.trigger.on !== 'anyCastsSpell') return;
+        if (ability.trigger.on === 'anyCastsSpell' && ability.trigger.filter && !cardMatchesFilter(card, ability.trigger.filter.cmcEqualsCountersOn ? { ...ability.trigger.filter, cmcEqualsCountersOn: undefined, cmcEquals: obj.counters[ability.trigger.filter.cmcEqualsCountersOn] ?? 0 } : ability.trigger.filter)) return;
         this.pushTrigger(obj, ability, spellObj?.id, undefined, { subjectPlayer: caster, abilityIndex: idx });
       });
     }

@@ -591,6 +591,30 @@ function parseEffectText(
     text = m[4];
     if (!text.trim()) return { steps };
   }
+  // Atraxa: "Reveal the top N cards of your library. For each card type, you may put a card of that type from among the revealed cards into your hand. Put the rest on the bottom of your library in a random order."
+  if ((m = text.match(/^Reveal the top (\w+) cards? of your library\. For each card type, you may put a card of that type from among (?:them|the revealed cards) into your hand\. Put the rest on the bottom of your library in a random order\.\s*(.*)$/i))) {
+    const n = num(m[1]);
+    if (n === null) return null;
+    steps.push({ op: 'revealTopByType', count: n });
+    text = m[2];
+    if (!text.trim()) return { steps };
+  }
+  // Shallow Grave.
+  if (/^Return the top creature card of your graveyard to the battlefield\. That creature gains haste until end of turn\. Exile it at the beginning of the next end step\.$/i.test(text)) return { steps: [{ op: 'shallowGrave' }] };
+  // Bilbo: "you may cast an artifact, instant, or sorcery spell from your graveyard. If an instant or sorcery spell cast this way would be put into your graveyard, exile it instead."
+  if ((m = text.match(/^You may cast an? (.+?) spell from your graveyard\. If an instant or sorcery spell cast this way would be put into your graveyard, exile it instead\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    return { steps: [{ op: 'castFromGraveyardThisTurn', filter: info.filter, exileInstantSorcery: true }] };
+  }
+  // Tamiyo +2.
+  if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Karn −2.
+  if ((m = text.match(/^You may reveal an? (.+?) card you own from outside the game or choose a face-up (.+?) card you own in exile\. Put that card into your hand\.$/i))) {
+    const info = parseNounG(m[2]);
+    if (!info || info.player) return null;
+    return { steps: [{ op: 'returnFromExileToHand', filter: info.filter }] };
+  }
   // Doomsday: duas frases acopladas viram uma escolha só.
   if ((m = text.match(/^Search your library and graveyard for (\w+) cards? and exile the rest\. Put the chosen cards on top of your library in any order\.\s*(.*)$/i))) {
     const n = num(m[1]);
@@ -606,6 +630,14 @@ function parseEffectText(
     let sentence = rawSentence;
     if (/^exile ~$/i.test(sentence)) { selfExile = true; continue; }
     sentence = sentence.replace(/^Then (?=[a-z~])/i, '');
+    if ((m = sentence.match(/^If it entered under your control, (.+)$/i))) {
+      const last = steps[steps.length - 1];
+      const prior = specs ?? (spec ? [spec] : [...(gctx.priorSpecs ?? [])]);
+      const inner = parseSentenceG(m[1], { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length, priorSpecs: prior });
+      if (!last || last.op !== 'delayedEffect' || !inner || inner.specs.length > 0 || prior.length === 0) return null;
+      last.effect.push({ op: 'if', cond: { kind: 'subjectIs', ref: `target:${prior.length - 1}`, filter: { controlledBy: 'you' } }, then: inner.steps });
+      continue;
+    }
     if (/^If that spell is countered this way, exile it instead of putting it into its owner's graveyard$/i.test(sentence)) {
       const last = steps[steps.length - 1];
       if (last && last.op === 'counterSpell') { last.exile = true; continue; }
@@ -690,7 +722,10 @@ function parseEffectText(
           const acc: EffectStep[] = [];
           const accSpecs: TargetSpec[] = [];
           let ok = true;
-          for (const p of parts) {
+          for (let p of parts) {
+            // "Target player scries 2, then draws a card": a verb-first tail after a player target keeps that player as subject.
+            const lastSpec = [...prior, ...accSpecs].slice(-1)[0];
+            if (acc.length > 0 && lastSpec?.what === 'player' && /^(draws?|discards?|loses?|gains?|scries|mills?|sacrifices?|creates?|exiles?|reveals?)\b/i.test(p)) p = 'that player ' + p;
             const pg = parseSentenceG(p, { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length + accSpecs.length, priorSpecs: [...prior, ...accSpecs] });
             if (!pg) { ok = false; break; }
             acc.push(...pg.steps);
@@ -805,6 +840,8 @@ interface ParseState {
   flags6: Partial<Pick<CardDefinition, 'entersTappedUnlessCond' | 'entersTappedIf' | 'assignAsUnblocked' | 'playLandsFromGraveyard' | 'castFromLibraryTop' | 'preventDamageRemoveCounter' | 'cantAttackAlone' | 'autoRegenerate' | 'shuffleInsteadOfGraveyard' | 'opponentsCreaturesEnterTapped' | 'preventsOwnDamage' | 'oneSpellPerTurn' | 'cyclingTrigger'>>;
   /** Spree: modal spell whose modes carry their own costs. */
   spree?: boolean;
+  /** Leva 6a (Legacy, parte 2). */
+  flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
   /** Leva 6a (Legacy): travas, substituições, uma mágica não-criatura por turno. */
   flags8: Partial<Pick<CardDefinition, 'oneSpellPerTurn' | 'artifactAbilitiesLocked' | 'lockChosenName' | 'exileInsteadOfGraveyardFor' | 'opponentsCantCastOnYourTurn'>>;
   /** Leva 5b: faces, P/T variável, mecânicas rules-heavy. */
@@ -850,7 +887,7 @@ const ROMAN_RE = '(?:VIII|VII|VI|IV|IX|X|V|III|II|I)';
 function overloadOf(targets: TargetSpec[] | undefined, effect: EffectStep[]): EffectStep[] | null {
   if (!targets || targets.length !== 1) return null;
   const t = targets[0];
-  if (t.what === 'player' || t.what === 'any' || t.what === 'spell' || t.zone === 'graveyard') return null;
+  if (t.what === 'player' || t.what === 'any' || t.what === 'spell' || t.what === 'stackItem' || t.zone === 'graveyard') return null;
   const filter: FilterSpec = {
     what: t.what,
     controlledBy: t.controlledBy,
@@ -1056,6 +1093,12 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever ~ becomes untapped$/i.test(head)) return { trigger: { on: 'becomesUntapped', self: true } };
   if (/^When ~ enters and whenever an opponent draws a card except the first one they draw in each of their draw steps$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'opponentDrawsExtra' } };
   if (/^When you play another land$/i.test(head)) return { trigger: { on: 'etb', what: { what: 'land', controlledBy: 'you', other: true } } };
+  if ((m = head.match(/^Whenever one or more (.+?) cards? are put into your graveyard from anywhere(?: while ~ has (?:a|an) ([\w+/-]+) counter on it)?$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    return { trigger: { on: 'cardsToYourGraveyard', filter: Object.keys(info.filter).length ? info.filter : undefined }, condition: m[2] ? { kind: 'hasCounter', counter: m[2] } : undefined };
+  }
+  if ((m = head.match(/^Whenever a player casts a spell with mana value equal to the number of ([\w+/-]+) counters on ~$/i))) return { trigger: { on: 'anyCastsSpell', filter: { cmcEqualsCountersOn: m[1] } } };
   if (/^When ~ enters or dies$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'dies', self: true } };
   if ((m = head.match(/^Whenever ~ or another (.+?) you control enters$/i))) {
     const info = parseNounG(m[1]);
@@ -1495,6 +1538,31 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
 
+  // ---- Leva 6a (Legacy, parte 2): Planar Nexus, Containment Priest, Animate Dead, Mox Diamond, Chrome Mox, Petrified Hamlet, Bilbo
+  if (/^~ is every nonbasic land type\.$/i.test(line)) { st.flags9.everyNonbasicLandType = true; return true; }
+  if (/^If a nontoken creature would enter and it wasn't cast, exile it instead\.$/i.test(line)) { st.flags9.exileNoncastCreatures = true; return true; }
+  if (/^Enchant creature card in a graveyard$/i.test(line)) { st.enchant = { what: 'creature', zone: 'graveyard' }; st.flags9.reanimateAura = true; return true; }
+  if (/^When ~ enters, if it's on the battlefield, it loses "enchant creature card in a graveyard" and gains "enchant creature put onto the battlefield with ~\." Return enchanted creature card to the battlefield under your control and attach ~ to it\. When ~ leaves the battlefield, that creature's controller sacrifices it\.$/i.test(line)) return !!st.flags9.reanimateAura;
+  if ((m = line.match(/^If ~ would enter, you may discard (?:a|an) (.+?) card instead\. If you do, put ~ onto the battlefield\. If you don't, put it into its owner's graveyard\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return false;
+    st.flags9.entersUnlessDiscard = info.filter;
+    return true;
+  }
+  if (/^\{T\}: Add one mana of any of the exiled card's colors\.$/i.test(line)) {
+    st.abilities.push({ kind: 'activated', cost: { tap: true }, effect: [{ op: 'addManaChoice', who: 'controller', colorsOfImprint: true }], text: 'Adicionar uma mana de uma cor da carta exilada', isManaAbility: true });
+    return true;
+  }
+  if ((m = line.match(/^Lands with the chosen name have "(.+)"\.?$/))) {
+    const g = compileAbilityText(m[1]);
+    if (!g || g.abilities.length === 0) return false;
+    st.flags9.grantToNamed = g.abilities;
+    return true;
+  }
+  if ((m = line.match(/^Spells you cast from anywhere other than your hand cost ((?:\{[^}]+\})+) less to cast\.$/i))) {
+    (st.costModifiers ??= []).push({ amount: -manaValueOfCost(m[1]), whose: 'you', notFromHand: true });
+    return true;
+  }
   // ---- Leva 6a (Legacy): custos alternativos condicionais, travas, substituições, Tron, Delver
   if ((m = line.match(/^(?:If (.+?), )?[Yy]ou may (.+?) rather than pay (?:this spell's|~'s) mana cost\.$/)) && !/^You may (?:pay \d+ life and )?exile a (?:white|blue|black|red|green) card from your hand rather than pay/.test(line)) {
     const cond = m[1] ? parseCondG(m[1]) : undefined;
@@ -1664,6 +1732,12 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     const n = num(m[2]);
     if (n === null) return false;
     st.castMethods.push({ kind: 'escape', cost: m[1], exileFromGraveyard: n, label: `escapar ${m[1]} + exilar ${n}` });
+    return true;
+  }
+  if ((m = line.match(new RegExp(`^Escape—${MANA}, Exile any number of other cards from your graveyard with (\\w+) or more card types among them\\.$`, 'i')))) {
+    const n = num(m[2]);
+    if (n === null) return false;
+    st.castMethods.push({ kind: 'escape', cost: m[1], escapeTypes: n, label: `escapar ${m[1]} + exilar cartas com ${n} ou mais tipos` });
     return true;
   }
   if ((m = line.match(new RegExp(`^Foretell ${MANA}$`, 'i')))) {
@@ -2014,7 +2088,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     }
     // Pronomes: em gatilhos próprios "it" é a própria carta; em gatilhos de filtro/hospedeiro é o objeto que disparou.
     const trig = header.trigger;
-    const aboutOther = 'what' in trig || /^(host|youSacrifice|youDiscard|anyPlayerDiscards|youDrawCard|youCastSpellOf|youCastSpellNth|anyCastsSpell|blocks|combatDamageToCreature|dealtDamage|damagedCreatureDies)/.test(trig.on);
+    const aboutOther = 'what' in trig || /^(host|youSacrifice|youDiscard|anyPlayerDiscards|youDrawCard|youCastSpellOf|youCastSpellNth|anyCastsSpell|blocks|combatDamageToCreature|dealtDamage|damagedCreatureDies)/.test(trig.on) && trig.on !== 'cardsToYourGraveyard';
     const pronoun: SubjectRef = aboutOther ? 'triggering' : 'self';
     const pronounPlayer: WhoSel = /combatDamageToPlayer|yourCreatureCombatDamageToPlayer|anyPlayerDiscards|anyCastsSpell|dealsDamage|hostDealsDamage|hostControllerUpkeep/.test(trig.on) ? 'triggerPlayer' : 'controller';
     if (!aboutOther) body = body.replace(/^it (deals|gets|gains) /i, '~ $1 ');
@@ -2058,7 +2132,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   }
 
   // ---- generic activated abilities: "<cost>: <effect>. [Activate only as a sorcery.]"
-  if ((m = line.match(/^([^:]+): (.+)$/)) && !/^(?:When|Whenever|At |If |As )/i.test(line)) {
+  if ((m = line.match(/^([^:"]+): (.+)$/)) && !/^(?:When|Whenever|At |If |As )/i.test(line)) {
     const cost = parseActivationCost(m[1]);
     if (!cost) return false;
     let body = m[2].trim();
@@ -2303,6 +2377,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags6,
     ...st.flags7,
     ...st.flags8,
+    ...st.flags9,
     costModifiers: st.costModifiers,
     spellModeChoice: st.spellModeChoice,
     saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
@@ -2420,6 +2495,7 @@ function newParseState(): ParseState {
     flags6: {},
     flags7: {},
     flags8: {},
+    flags9: {},
     levels: [],
     softNotes: [],
   };

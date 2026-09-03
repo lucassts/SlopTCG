@@ -275,6 +275,18 @@ export function moveWithEvent(
   }
   // "If ~ would be put into a graveyard from anywhere, exile it instead." (disturb back faces).
   if (to === 'graveyard' && obj.card.exileInsteadOfGraveyard && !obj.isToken) to = 'exile';
+  // Containment Priest: a nontoken creature that wasn't cast is exiled instead of entering.
+  if (to === 'battlefield' && from !== 'stack' && !obj.isToken && obj.card.types.includes('Creature') && !obj.wasCast &&
+    (['p1', 'p2'] as PlayerId[]).some((p) => state.players[p].zones.battlefield.some((id) => state.objects[id]?.card.exileNoncastCreatures))) {
+    emit({ type: 'fizzled', description: `${obj.card.name}: exilada em vez de entrar (Containment Priest)` });
+    to = 'exile';
+  }
+  // Animate Dead: when the Aura leaves, the creature it brought back is sacrificed.
+  if (from === 'battlefield' && obj.card.reanimateAura && obj.attachedTo !== undefined) {
+    const host = state.objects[obj.attachedTo];
+    obj.attachedTo = undefined;
+    if (host && host.zone === 'battlefield') moveWithEvent(state, host, 'graveyard', 'sacrificed', emit);
+  }
   // Rest in Peace / Leyline of the Void.
   if (to === 'graveyard' && !obj.isToken && (['p1', 'p2'] as PlayerId[]).some((p) => state.players[p].zones.battlefield.some((id) => {
     const mode = state.objects[id]?.card.exileInsteadOfGraveyardFor;

@@ -629,7 +629,23 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const beginEscape = (cv: CardView) => {
     const cm = cv.card.castMethods?.find((m) => m.kind === 'escape');
     if (!cm) return;
-    const others = me.graveyard.filter((c) => c.objectId !== cv.objectId).map((c) => c.objectId);
+    const othersCards = me.graveyard.filter((c) => c.objectId !== cv.objectId);
+    const others = othersCards.map((c) => c.objectId);
+    if (cm.escapeTypes !== undefined) {
+      // Nethergoyf: cobre N tipos de carta com o menor número de cartas (uma por tipo novo).
+      const seen = new Set<string>();
+      const picked: number[] = [];
+      for (const c of othersCards) {
+        const fresh = c.card.types.filter((t) => !seen.has(t));
+        if (fresh.length === 0) continue;
+        fresh.forEach((t) => seen.add(t));
+        picked.push(c.objectId);
+        if (seen.size >= cm.escapeTypes) break;
+      }
+      if (seen.size < cm.escapeTypes) { alert(`Escapar precisa de ${cm.escapeTypes} tipos de carta entre as outras cartas do cemitério (há ${seen.size}).`); return; }
+      beginCast(cv, undefined, false, { method: 'escape', escapeExile: picked });
+      return;
+    }
     const need = cm.exileFromGraveyard ?? 0;
     if (others.length < need) {
       alert(`Escapar precisa exilar ${need} outras cartas do cemitério (você tem ${others.length}).`);
@@ -784,9 +800,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const clickStackItem = (itemIdx: number) => {
     // Alvo em mágica na pilha (counterspell): o sourceId é o objectId do card.
     const item = view.stack[itemIdx];
-    if (targeting && item?.kind === 'spell') {
-      addTarget({ kind: 'object', id: item.sourceId });
-    }
+    if (!targeting || !item) return;
+    const spec = targeting.specs[targeting.chosen.length] as { what?: string } | undefined;
+    // Stifle / Consign to Memory: habilidades (e mágicas) na pilha como itens; counterspell comum: o card da mágica.
+    if (spec?.what === 'stackItem') addTarget({ kind: 'stack', id: item.id });
+    else if (item.kind === 'spell') addTarget({ kind: 'object', id: item.sourceId });
   };
 
   const openMenu = (e: React.MouseEvent, cv: CardView) => {

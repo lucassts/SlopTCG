@@ -65,6 +65,8 @@ export type PendingDecisionView =
 export interface StackItemView {
   id: number;
   kind: 'spell' | 'ability' | 'copy';
+  /** Abilities: activated (vs triggered) — Stifle-style targeting. */
+  activated?: boolean;
   /** For spells: the card object's id (usable as a counterspell target). */
   sourceId: number;
   controller: PlayerId;
@@ -233,6 +235,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       return {
         id: item.id,
         kind: item.kind,
+      activated: item.activated || undefined,
         sourceId: item.sourceId,
         controller: item.controller,
         cardName: hidden ? FACE_DOWN_CARD.name : item.cardName,

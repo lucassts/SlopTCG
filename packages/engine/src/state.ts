@@ -54,6 +54,12 @@ export interface GameObject {
   chosenName?: string;
   /** Entered the battlefield by being cast (The One Ring: "if you cast it"). */
   wasCast?: boolean;
+  /** Chrome Mox: the imprinted (exiled) card. */
+  imprintedId?: number;
+  /** Petrified Hamlet: sources that already granted abilities to this object. */
+  grantedFrom?: number[];
+  /** Bilbo: instant/sorcery cast from the graveyard — exile on resolution. */
+  exileOnResolveOnce?: boolean;
   /** Instant/sorcery cards exiled with delve when cast (Murktide Regent). */
   delvedCount?: number;
   /** Was kicked when cast (permanents). */
@@ -90,7 +96,7 @@ export interface GameObject {
   cantAttackUntilTurn?: number;
   // ---- Leva 4
   /** "Until your next turn" modifications, cleared when that player's turn begins. */
-  untilNextTurn?: { player: PlayerId; power: number; toughness: number; keywords: import('./types.js').Keyword[] }[];
+  untilNextTurn?: { player: PlayerId; power: number; toughness: number; keywords: import('./types.js').Keyword[]; /** Karn: becomes an artifact creature with P/T = mana value. */ becomesCreature?: boolean }[];
   /** Cast for its prototype cost: smaller P/T. */
   prototyped?: boolean;
   /** Exerted: skips the controller's next untap step. */
@@ -159,7 +165,7 @@ export function isCreature(obj: GameObject): boolean {
   // Bestowed auras and attached reconfigure equipment aren't creatures while attached.
   if (obj.attachedTo !== undefined && (obj.bestowed || obj.card.reconfigure)) return false;
   if (obj.card.station && (obj.counters['charge'] ?? 0) >= obj.card.station.threshold) return true;
-  return obj.card.types.includes('Creature') || !!obj.crewedUntilEot || !!obj.faceDown;
+  return obj.card.types.includes('Creature') || !!obj.crewedUntilEot || !!obj.faceDown || !!obj.untilNextTurn?.some((u) => u.becomesCreature);
 }
 
 /** Current level for Level up creatures (level counters) and Classes (counters + 1). */
@@ -213,6 +219,8 @@ export interface StackItem {
   sacrificedPower?: number;
   /** Cast via flashback: the card is exiled instead of going to the graveyard. */
   flashback?: boolean;
+  /** Activated (vs triggered) ability — for Stifle-style targeting. */
+  activated?: boolean;
   /** Triggered abilities: the object that caused the trigger ("it"). */
   subjectId?: number;
   /** Triggered abilities: the player it's about ("that player") and the amount ("that much"). */
@@ -250,6 +258,12 @@ export interface PlayerState {
   spellsCastThisGame?: number;
   /** Protection from everything until this turn number (The One Ring). */
   protectedUntilTurn?: number;
+  /** Bilbo: may cast one matching card from the graveyard this turn. */
+  graveyardCastPermission?: { filter: import('./cards/types.js').FilterSpec; untilTurn: number; exileInstantSorcery?: boolean };
+  /** Tamiyo +2: creatures attacking this player get -N/-0 while turn < untilTurn. */
+  attackersPenalty?: { untilTurn: number; power: number };
+  /** Emblem: no maximum hand size. */
+  noMaxHandSize?: boolean;
   noncreatureSpellsThisTurn?: number;
   lifeGainedThisTurn?: number;
   lifeLostThisTurn?: number;
@@ -581,6 +595,7 @@ export function matchFilter(
   if (filter.tapped && !obj.tapped) return false;
   if (filter.untapped && obj.tapped) return false;
   if (filter.withCounter && (obj.counters[filter.withCounter] ?? 0) <= 0) return false;
+  if (filter.subtype && obj.card.everyNonbasicLandType && obj.card.types.includes('Land') && !['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].includes(filter.subtype)) return true;
   if (ctx.state) {
     if (filter.powerAtLeast !== undefined && effectivePower(ctx.state, obj) < filter.powerAtLeast) return false;
     if (filter.powerAtMost !== undefined && effectivePower(ctx.state, obj) > filter.powerAtMost) return false;
@@ -725,6 +740,7 @@ export function cdaValue(state: GameState, obj: GameObject, amount: import('./ca
   if ('countersOn' in amount) return obj.counters[amount.counter] ?? 0;
   if ('times' in amount) return amount.times * cdaValue(state, obj, amount.of);
   if ('plus' in amount) return amount.plus + cdaValue(state, obj, amount.of);
+  if ('halfLibraryOf' in amount) { const n = state.players[amount.halfLibraryOf === 'opponent' ? opponentOf(me) : me].zones.library.length; return amount.round === 'up' ? Math.ceil(n / 2) : Math.floor(n / 2); }
   if ('cardTypesInGraveyard' in amount) return cardTypesInGraveyards(state, amount.cardTypesInGraveyard === 'each' ? [...PLAYER_IDS] : amount.cardTypesInGraveyard === 'opponent' ? [opponentOf(me)] : [me]);
   return 0;
 }
@@ -762,7 +778,8 @@ export function effectivePower(state: GameState, obj: GameObject): number {
   const fromAttachments = attachmentBonus(state, obj).power;
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
-  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? obj.card.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : 0); // virada para baixo: 2/2
+  const animated = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.power === undefined;
+  const base = obj.faceDown ? 2 : animated ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? obj.card.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : 0); // virada para baixo: 2/2
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.power, 0);
   return base + obj.untilEot.power + untilNext + counters + fromAttachments + staticsFor(state, obj).power + pairedBonus(state, obj).power;
 }
@@ -771,7 +788,8 @@ export function effectiveToughness(state: GameState, obj: GameObject): number {
   const fromAttachments = attachmentBonus(state, obj).toughness;
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
-  const base = obj.faceDown ? 2 : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? obj.card.toughness ?? (obj.card.cdaToughness !== undefined ? cdaValue(state, obj, obj.card.cdaToughness) : 0);
+  const animatedT = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.toughness === undefined;
+  const base = obj.faceDown ? 2 : animatedT ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? obj.card.toughness ?? (obj.card.cdaToughness !== undefined ? cdaValue(state, obj, obj.card.cdaToughness) : 0);
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.toughness, 0);
   return base + obj.untilEot.toughness + untilNext + counters + fromAttachments + staticsFor(state, obj).toughness + pairedBonus(state, obj).toughness;
 }

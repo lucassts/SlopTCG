@@ -124,6 +124,8 @@ export interface FilterSpec {
   cmcEquals?: number;
   /** "nonbasic land". */
   nonbasic?: boolean;
+  /** "nonartifact, nonland card". */
+  notTypes?: CardType[];
   /** "with mana value X or less" (X of the spell being resolved). */
   cmcAtMostX?: boolean;
   /** "with mana value equal to the number of <counter> counters on ~" (Aether Vial). */
@@ -182,11 +184,19 @@ export type DynAmount =
   /** "the number of card types among cards in your/all graveyard(s)" (Tarmogoyf family). */
   | { cardTypesInGraveyard: PlayerSel }
   /** Instant and sorcery cards exiled with delve when this was cast (Murktide Regent). */
-  | 'delvedCount';
+  | 'delvedCount'
+  /** "half the number of cards in your library, rounded up" (Tamiyo). */
+  | { halfLibraryOf: PlayerSel; round: 'up' | 'down' };
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
-  what: 'any' | 'creature' | 'player' | 'permanent' | 'spell' | 'land' | 'artifact' | 'enchantment';
+  what: 'any' | 'creature' | 'player' | 'permanent' | 'spell' | 'land' | 'artifact' | 'enchantment' | 'stackItem';
+  /** 'stackItem': which abilities on the stack qualify; `allowSpell` also accepts spells (Consign to Memory: colorless ones). */
+  abilityKinds?: ('activated' | 'triggered')[];
+  allowSpell?: { colorless?: boolean };
+  /** "with mana value X or less" / "up to X target …" (X chosen at cast time). */
+  cmcAtMostX?: boolean;
+  upToX?: boolean;
   /** For 'spell' targets: restrict by the spell's type (Negate, Essence Scatter…). */
   spellType?: 'creature' | 'noncreature' | 'instantSorcery';
   /** "artifact or enchantment": the object must have at least one of these types. */
@@ -267,7 +277,7 @@ export type EffectStep =
   /** Put the object on top of its owner's library. */
   | { op: 'putOnLibraryTop'; what: SubjectRef }
   /** Predefined artifact tokens with their own abilities. */
-  | { op: 'namedToken'; who: PlayerSel; kind: 'Treasure' | 'Food' | 'Clue' | 'Blood' | 'Powerstone' | 'Map' | 'Gold'; count: DynAmount; tapped?: boolean }
+  | { op: 'namedToken'; who: WhoSel; kind: 'Treasure' | 'Food' | 'Clue' | 'Blood' | 'Powerstone' | 'Map' | 'Gold'; count: DynAmount; tapped?: boolean }
   /** (choice) "You may <effect>" — yes runs `effect`, no runs `else` (if any). */
   | { op: 'mayDo'; prompt?: string; effect: EffectScript; else?: EffectScript; who?: 'opponent' }
   /** Energy: "you get {E}{E}" (negative = pay). */
@@ -362,6 +372,27 @@ export type EffectStep =
   | { op: 'shuffleSelfIntoLibrary' }
   /** "You gain protection from everything until your next turn" (The One Ring). */
   | { op: 'playerProtection'; who: PlayerSel }
+  // ---- Leva 6a (Legacy, parte 2)
+  /** (choice) Atraxa: reveal the top N; one card of each card type may go to hand; rest to the bottom. */
+  | { op: 'revealTopByType'; count: number }
+  /** Bilbo: this turn you may cast one card matching the filter from your graveyard; instants/sorceries cast this way are exiled. */
+  | { op: 'castFromGraveyardThisTurn'; filter: FilterSpec; exileInstantSorcery?: boolean }
+  /** Tamiyo +2: until your next turn, creatures attacking you get -N/-0. */
+  | { op: 'attackersPenaltyUntilNextTurn'; power: number }
+  /** Emblem "You have no maximum hand size." */
+  | { op: 'noMaxHandSizeEmblem'; who: PlayerSel }
+  /** Karn +1: until your next turn, an artifact becomes an artifact creature with P/T equal to its mana value. */
+  | { op: 'animateArtifactUntilNextTurn'; what: SubjectRef }
+  /** (choice) Karn −2: put an artifact card you own from exile into your hand. */
+  | { op: 'returnFromExileToHand'; filter: FilterSpec }
+  /** (choice) Chrome Mox: exile a card from hand and remember it. */
+  | { op: 'imprintFromHand'; filter: FilterSpec }
+  /** (choice) Mox Diamond: discard a matching card or the source goes to the graveyard. */
+  | { op: 'discardOrDie'; filter: FilterSpec }
+  /** Shallow Grave: top creature card of your graveyard returns with haste, exiled at the next end step. */
+  | { op: 'shallowGrave' }
+  /** Sacrifice a referenced object (Animate Dead's host). */
+  | { op: 'sacrificeObject'; what: SubjectRef }
   // ---- Leva 5b: faces e mecânicas rules-heavy
   /** Transform / flip a double-faced permanent. */
   | { op: 'transform'; what: SubjectRef }
@@ -444,7 +475,7 @@ export type EffectStep =
   /** (choice) The player sacrifices `count` permanents matching the filter. */
   | { op: 'sacrifice'; who: WhoSel; filter?: FilterSpec; count: number }
   /** (choice) Look at the top N; chosen cards go to the bottom. */
-  | { op: 'scry'; count: number }
+  | { op: 'scry'; count: number | 'X'; who?: WhoSel }
   /** (choice) Look at the top N; chosen cards go to the graveyard. */
   | { op: 'surveil'; count: number }
   /** (choice) Search your library for up to `count` cards matching the filter. */
@@ -458,7 +489,7 @@ export type EffectStep =
       withCounters?: { counter: string; count: number };
     }
   /** Reanimation: move a (graveyard) target onto the battlefield. */
-  | { op: 'returnToBattlefield'; what: SubjectRef; tapped?: boolean }
+  | { op: 'returnToBattlefield'; what: SubjectRef; tapped?: boolean; /** "under its owner's control". */ owner?: boolean }
   /** Regeneration shield: the next destruction this turn is replaced. */
   | { op: 'regenerate'; what: SubjectRef }
   | { op: 'shuffle'; who: PlayerSel }
@@ -471,7 +502,7 @@ export type EffectStep =
   | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean }
   /** "Add one mana of any color" (or "of these colors") — the activation
    *  carries the chosen color; `colors` restricts the legal choices. */
-  | { op: 'addManaChoice'; who: PlayerSel; count?: number; colors?: Color[] }
+  | { op: 'addManaChoice'; who: PlayerSel; count?: number; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean }
   /**
    * (choice) Cabal Therapy: the controller names a nonland card; the `who`
    * player reveals their hand and discards every card with that name.
@@ -479,7 +510,7 @@ export type EffectStep =
   | { op: 'nameCardDiscard'; who: WhoSel }
   | {
       op: 'token';
-      who: PlayerSel;
+      who: WhoSel;
       count: DynAmount;
       name: string;
       power: number;
@@ -503,6 +534,8 @@ export type EffectScript = EffectStep[];
 
 /** Trigger conditions for triggered abilities. */
 export type TriggerSpec =
+  /** Moonshadow: one or more (matching) cards were put into your graveyard from anywhere (fires once per batch). */
+  | { on: 'cardsToYourGraveyard'; filter?: FilterSpec }
   /** Orcish Bowmasters: an opponent draws a card except the first in their draw step. */
   | { on: 'opponentDrawsExtra' }
   /** Back face: "When this creature transforms into ~" (fires on the face it became). */
@@ -566,7 +599,7 @@ export type TriggerSpec =
   | { on: 'hostCombatDamageToPlayer' }
   | { on: 'hostDealtDamage' }
   /** Any player casts a spell. */
-  | { on: 'anyCastsSpell' }
+  | { on: 'anyCastsSpell'; /** Chalice of the Void: only spells matching (cmcEqualsCountersOn resolves against the source's counters). */ filter?: FilterSpec }
   /** A creature you control deals combat damage to a player (triggerPlayer = the damaged player). */
   | { on: 'yourCreatureCombatDamageToPlayer' }
   | { on: 'youExertThis' }
@@ -734,6 +767,8 @@ export interface CastMethod {
   exileFromGraveyard?: number;
   /** Evoke—Exile a <color> card from your hand (Solitude family): no mana, exile a matching hand card instead. */
   exileFromHand?: FilterSpec;
+  /** Nethergoyf: escape by exiling any number of other cards with at least this many card types among them. */
+  escapeTypes?: number;
   label: string;
 }
 
@@ -858,6 +893,8 @@ export interface CardDefinition {
     perGraveyard?: FilterSpec;
     /** "Spells your opponents cast that target ~ cost {N} more". */
     targetsSelf?: boolean;
+    /** Bilbo: only spells cast from anywhere other than the hand. */
+    notFromHand?: boolean;
   }[];
   /** "If ~ would die, exile it instead." */
   exileInsteadOfDying?: boolean;
@@ -920,6 +957,16 @@ export interface CardDefinition {
   lockChosenName?: boolean;
   /** Rest in Peace / Leyline of the Void: cards going to a graveyard are exiled instead. */
   exileInsteadOfGraveyardFor?: 'all' | 'opponents';
+  /** Planar Nexus: counts as every nonbasic land type. */
+  everyNonbasicLandType?: boolean;
+  /** Containment Priest: nontoken creatures that weren't cast are exiled instead of entering. */
+  exileNoncastCreatures?: boolean;
+  /** Animate Dead: the Aura targets a creature card in a graveyard, returns it under your control and attaches; sacrificed when the Aura leaves. */
+  reanimateAura?: boolean;
+  /** Mox Diamond: on entering, discard a matching card or go to the graveyard. */
+  entersUnlessDiscard?: FilterSpec;
+  /** Petrified Hamlet: lands with the chosen name gain these abilities. */
+  grantToNamed?: AbilityDef[];
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -1064,7 +1111,7 @@ export interface CardDefinition {
    * Aura: what it can enchant. Casting requires this target and the aura
    * enters the battlefield attached to it (fizzles if the target is gone).
    */
-  enchant?: { what: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent'; controlledBy?: 'you' | 'opponent'; /** "Enchant artifact or creature". */ typeAnyOf?: CardType[] };
+  enchant?: { what: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent'; controlledBy?: 'you' | 'opponent'; /** "Enchant artifact or creature". */ typeAnyOf?: CardType[]; /** Animate Dead: "Enchant creature card in a graveyard". */ zone?: 'graveyard' };
   /** Static effects granted to whatever this aura/equipment is attached to. */
   attachEffect?: {
     power?: number;
@@ -1139,8 +1186,10 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
     const typeName = filter.what.charAt(0).toUpperCase() + filter.what.slice(1);
     if (!card.types.includes(typeName as CardType)) return false;
   }
-  if (filter.subtype && !card.subtypes.includes(filter.subtype)) return false;
-  if (filter.subtypeAnyOf && !filter.subtypeAnyOf.some((s) => card.subtypes.includes(s))) return false;
+  if (filter.subtype && !(card.subtypes.includes(filter.subtype) || (!!card.everyNonbasicLandType && card.types.includes('Land') && !['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].includes(filter.subtype)))) return false;
+  const BASIC_LAND_TYPES = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
+  const hasSub = (t: string) => card.subtypes.includes(t) || (!!card.everyNonbasicLandType && !BASIC_LAND_TYPES.includes(t) && !!filter.what && filter.what === 'land');
+  if (filter.subtypeAnyOf && !filter.subtypeAnyOf.some((s) => hasSub(s))) return false;
   if (filter.basic && !card.supertypes?.includes('Basic')) return false;
   if (filter.nonland && card.types.includes('Land')) return false;
   if (filter.noncreature && card.types.includes('Creature')) return false;
@@ -1150,6 +1199,7 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.typeAnyOf && !filter.typeAnyOf.some((t) => card.types.includes(t))) return false;
   if (filter.manaCostIn && !filter.manaCostIn.includes(card.manaCost ?? '')) return false;
   if (filter.nonbasic && card.supertypes?.includes('Basic')) return false;
+  if (filter.notTypes && filter.notTypes.some((t) => card.types.includes(t))) return false;
   if (filter.cmcEquals !== undefined || filter.cmcAtMost !== undefined || filter.cmcAtLeast !== undefined) {
     let mv = 0;
     for (const m of (card.manaCost ?? '').matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : m[1] === 'X' ? 0 : 1;
