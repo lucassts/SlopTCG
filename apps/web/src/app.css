@@ -339,12 +339,19 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .mulligan-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(10, 12, 16, 0.88);
+  background: rgba(10, 12, 16, 0.45);
   display: flex;
   align-items: center;
-  justify-content: center;
+  /* Caixas de decisão ficam à direita, fora de onde as cartas normalmente estão. */
+  justify-content: flex-end;
+  padding-right: 3vw;
   z-index: 250;
 }
+@media (max-width: 900px) {
+  .mulligan-overlay { justify-content: center; padding-right: 0; }
+}
+.storm-counter { margin-left: 10px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; opacity: 0.6; white-space: nowrap; }
+.storm-counter.active { opacity: 1; border-color: #d5745b; color: #ffd8cc; }
 .mulligan-box {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -355,6 +362,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   gap: 14px;
   max-width: min(860px, 94vw);
   align-items: center;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
 }
 .mulligan-box h2 { margin: 0; }
 .mulligan-hand { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }

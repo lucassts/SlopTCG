@@ -131,6 +131,8 @@ export interface GameObject {
   prepared?: boolean;
   /** "When you control no X, sacrifice ~" already pushed. */
   stateTriggerPending?: boolean;
+  /** Printed definition, kept while granted abilities ("~ gains …") replace obj.card. */
+  printedCard?: CardDefinition;
   isToken: boolean;
 }
 
@@ -513,6 +515,8 @@ export function moveObject(
     obj.pairedWith = undefined;
     obj.prepared = undefined;
     obj.stateTriggerPending = undefined;
+    // Granted abilities end when the object leaves the battlefield.
+    if (obj.printedCard) { obj.card = obj.printedCard; obj.printedCard = undefined; }
     // Double-faced cards leave the battlefield front face up (711.4 / 712.8).
     if (obj.baseCard && obj.transformed) { obj.card = obj.baseCard; obj.transformed = false; }
   } else {

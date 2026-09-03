@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-03, v0.14.0)
+## Estado (2026-09-03, v0.14.1 — v0.14.0 + correções de partida: Urza's Saga, Doomsday; full 12.196)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a · gramática 2) | **v0.14 (L5b · faces)** |
 |---|---|---|---|---|---|---|---|---|---|---|

@@ -117,6 +117,8 @@ export interface FilterSpec {
   attacking?: boolean;
   /** Mana value exactly N (transmute). */
   cmcEquals?: number;
+  /** Exact mana cost strings ("{0}", "{1}") — Urza's Saga. */
+  manaCostIn?: string[];
   cmcAtMost?: number;
   cmcAtLeast?: number;
   /** Power / toughness bounds ("creatures with power 2 or less"). */
@@ -163,7 +165,9 @@ export type DynAmount =
   /** Domain: basic land types among lands you control. */
   | 'domain'
   | { times: number; of: DynAmount }
-  | { plus: number; of: DynAmount };
+  | { plus: number; of: DynAmount }
+  /** "half your life, rounded up/down". */
+  | { halfLifeOf: PlayerSel; round: 'up' | 'down' };
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
@@ -327,6 +331,10 @@ export type EffectStep =
   /** (choice) "You may put a land card from your hand onto the battlefield (tapped)". */
   | { op: 'putFromHand'; filter: FilterSpec; tapped?: boolean }
   | { op: 'removeCounters'; what: SubjectRef; counter: string; count: DynAmount }
+  /** "~ gains '<ability>'": the object gets extra abilities/keywords while it stays on the battlefield (Urza's Saga). */
+  | { op: 'grantAbility'; what: SubjectRef; abilities: AbilityDef[]; keywords?: Keyword[] }
+  /** (choice) Doomsday: pick N cards from library + graveyard for the top of the library (in order); exile the rest. */
+  | { op: 'doomsday'; count: number }
   // ---- Leva 5b: faces e mecânicas rules-heavy
   /** Transform / flip a double-faced permanent. */
   | { op: 'transform'; what: SubjectRef }
@@ -1096,6 +1104,7 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.withKeyword && !card.keywords?.includes(filter.withKeyword)) return false;
   if (filter.withoutKeyword && card.keywords?.includes(filter.withoutKeyword)) return false;
   if (filter.typeAnyOf && !filter.typeAnyOf.some((t) => card.types.includes(t))) return false;
+  if (filter.manaCostIn && !filter.manaCostIn.includes(card.manaCost ?? '')) return false;
   if (filter.cmcEquals !== undefined || filter.cmcAtMost !== undefined || filter.cmcAtLeast !== undefined) {
     let mv = 0;
     for (const m of (card.manaCost ?? '').matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : m[1] === 'X' ? 0 : 1;

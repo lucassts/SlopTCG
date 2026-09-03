@@ -12,7 +12,12 @@
  */
 import type { CardType, Color, Keyword } from '../types.js';
 import { BASIC_TYPES, CARD_TYPE_WORD, COLOR_WORDS, KEYWORDS, keywordList, num } from './lexicon.js';
-import type { Cond, DynAmount, EffectStep, FilterSpec, PlayerSel, SubjectRef, TargetSpec, WhoSel } from './types.js';
+import type { AbilityDef, Cond, DynAmount, EffectStep, FilterSpec, PlayerSel, SubjectRef, TargetSpec, WhoSel } from './types.js';
+
+/** Compiles quoted ability text ("{T}: Add {C}.") into abilities/keywords — installed by oracle-parser (avoids a circular import). */
+export type AbilityTextCompiler = (text: string) => { abilities: AbilityDef[]; keywords: import('../types.js').Keyword[] } | null;
+let abilityCompiler: AbilityTextCompiler | null = null;
+export function setAbilityTextCompiler(fn: AbilityTextCompiler): void { abilityCompiler = fn; }
 
 export interface GCtx {
   /** What "it" / "that creature" refers to when no target came earlier in the sentence. */
@@ -106,6 +111,7 @@ export function parseNounG(raw: string): NounInfo | null {
       changed = true;
     }
     if ((m = n.match(/^(.+?) with mana value (\d+)$/i))) { n = m[1]; filter.cmcEquals = parseInt(m[2], 10); changed = true; }
+    if ((m = n.match(/^(.+?) with mana cost \{(\d+)\}(?: or \{(\d+)\})?$/i))) { n = m[1]; filter.manaCostIn = [`{${m[2]}}`, ...(m[3] ? [`{${m[3]}}`] : [])]; changed = true; }
     if ((m = n.match(/^(.+?) (with|without) (flying|reach|trample|haste|vigilance|lifelink|deathtouch|menace|defender|flash|first strike|double strike|hexproof|indestructible)$/i))) {
       n = m[1];
       if (m[2].toLowerCase() === 'with') filter.withKeyword = KEYWORDS[m[3].toLowerCase()];
@@ -480,6 +486,14 @@ export function parseTokenG(text: string, who: PlayerSel = 'controller'): Effect
   let t = text.trim();
   let tappedAttacking = false;
   let tapped = false;
+  // Tokens with granted abilities: "… token with 'This token gets +1/+1 for each artifact you control.'"
+  let granted: { abilities: AbilityDef[]; keywords: Keyword[] } | null = null;
+  if ((m = t.match(/^(.+?) with ["'](.+)["']$/))) {
+    if (!abilityCompiler) return null;
+    granted = abilityCompiler(m[2]);
+    if (!granted) return null;
+    t = m[1];
+  }
   if ((m = t.match(/^(.+?) that's tapped and attacking$/i))) { t = m[1]; tappedAttacking = true; }
   else if ((m = t.match(/^(.+?) that's tapped$/i))) { t = m[1]; tapped = true; }
   else if ((m = t.match(/^(.+?) that are tapped and attacking$/i))) { t = m[1]; tappedAttacking = true; }
@@ -498,9 +512,11 @@ export function parseTokenG(text: string, who: PlayerSel = 'controller'): Effect
     const types: CardType[] = ['Creature'];
     if (/artifact/i.test(m[6])) types.unshift('Artifact');
     if (/enchantment/i.test(m[6])) types.unshift('Enchantment');
+    const allKws = [...(kws ?? []), ...(granted?.keywords ?? [])];
     return [{
       op: 'token', who, count, name: m[7]?.trim() ?? subtypes.join(' '), power: parseInt(m[2], 10), toughness: parseInt(m[3], 10),
-      colors, subtypes, keywords: kws ?? undefined, types, tapped: tapped || tappedAttacking || undefined, attacking: tappedAttacking || undefined,
+      colors, subtypes, keywords: allKws.length > 0 ? allKws : undefined, types, tapped: tapped || tappedAttacking || undefined, attacking: tappedAttacking || undefined,
+      abilities: granted && granted.abilities.length > 0 ? granted.abilities : undefined,
     }];
   }
   return null;
@@ -567,6 +583,13 @@ function objectEffect(subj: Subj, verb: string, ctx: GCtx, specs: TargetSpec[]):
     if (!per) return null;
     const p = parseInt(m[1], 10), tg = parseInt(m[2], 10);
     return wrap([{ op: 'pump', what: ref, power: 0, toughness: 0, powerDyn: p === 1 ? per : { times: p, of: per }, toughnessDyn: tg === 1 ? per : { times: tg, of: per }, duration: duration === 'yourNextTurn' ? 'yourNextTurn' : undefined }]);
+  }
+  // "~ gains '{T}: Add {C}.'" — granted ability text (Urza's Saga chapters).
+  if ((m = core.match(/^gains? ["'](.+)["']$/))) {
+    if (!abilityCompiler) return null;
+    const g = abilityCompiler(m[1]);
+    if (!g || (g.abilities.length === 0 && g.keywords.length === 0)) return null;
+    return wrap([{ op: 'grantAbility', what: ref, abilities: g.abilities, keywords: g.keywords.length > 0 ? g.keywords : undefined }]);
   }
   if ((m = core.match(/^(?:gains?|has|have) (\w[\w\s,]*?)$/i))) {
     const kws = keywordList(m[1]);
@@ -803,6 +826,7 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
   }
   if ((m = body.match(/^(?:gains?|gain) (.+?) life$/i))) { const a = parseAmountG(m[1].replace(/^an amount of life equal to /i, '').replace(/^life equal to /i, ''), subjRef); return a === null ? null : [{ op: 'gainLife', who, amount: scale(a) }]; }
   if ((m = body.match(/^(?:gains?|gain) life equal to (.+)$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'gainLife', who, amount: a }]; }
+  if ((m = body.match(/^loses? half (?:your|their) life, rounded (up|down)$/i))) return [{ op: 'loseLife', who, amount: { halfLifeOf: who === 'opponent' ? 'opponent' : 'controller', round: m[1].toLowerCase() as 'up' | 'down' } }];
   if ((m = body.match(/^loses? (.+?) life$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'loseLife', who, amount: scale(a) }]; }
   if ((m = body.match(/^loses? life equal to (.+)$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'loseLife', who, amount: a }]; }
   if ((m = body.match(/^discards? (\w+) cards?( at random)?$/i))) {

@@ -14,7 +14,7 @@
  */
 import type { CardType, Color, Keyword } from '../types.js';
 import { BASIC_TYPES, COLOR_WORDS, KEYWORDS, NUMBER_WORDS, TYPE_WORD, keywordList, num } from './lexicon.js';
-import { filterToTargetSpec, parseAmountG, parseCondG, parseNounG, parseSentenceG, parseStaticG, type GCtx } from './grammar.js';
+import { filterToTargetSpec, parseAmountG, parseCondG, parseNounG, parseSentenceG, parseStaticG, setAbilityTextCompiler, type GCtx } from './grammar.js';
 import type {
   AbilityDef,
   CardDefinition,
@@ -573,7 +573,15 @@ function parseEffectText(
     text = m[2];
     if (!text.trim()) return { steps };
   }
-  const sentences = text.split(/\.\s+|\.$/).map((s) => s.trim()).filter(Boolean);
+  // Doomsday: duas frases acopladas viram uma escolha só.
+  if ((m = text.match(/^Search your library and graveyard for (\w+) cards? and exile the rest\. Put the chosen cards on top of your library in any order\.\s*(.*)$/i))) {
+    const n = num(m[1]);
+    if (n === null) return null;
+    steps.push({ op: 'doomsday', count: n });
+    text = m[2];
+    if (!text.trim()) return { steps };
+  }
+  const sentences = splitSentences(text);
   if (sentences.length === 0) return null;
   let lastMayDo: Extract<EffectStep, { op: 'mayDo' }> | null = null;
   for (const rawSentence of sentences) {
@@ -625,7 +633,7 @@ function parseEffectText(
     }
     if (!parsed) {
       // "X and Y" / "X, then Y": cada parte simples, no máximo um alvo no todo.
-      const parts = sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b|it\b)/i).map((p) => p.trim());
+      const parts = /"/.test(sentence) ? [sentence] : sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b|it\b)/i).map((p) => p.trim());
       if (parts.length >= 2) {
         const acc: EffectStep[] = [];
         let partSpec: TargetSpec | undefined;
@@ -653,7 +661,7 @@ function parseEffectText(
       let g = tryG(sentence);
       if (!g) {
         // Compostos "X and Y" / "X, then Y" pela gramática, parte a parte (alvos acumulam; "and it …" é frase própria).
-        const parts = sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b)/i).map((p) => p.trim());
+        const parts = /"/.test(sentence) ? [sentence] : sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b)/i).map((p) => p.trim());
         if (parts.length >= 2) {
           const acc: EffectStep[] = [];
           const accSpecs: TargetSpec[] = [];
@@ -2071,38 +2079,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     .replace(/[ \t]+/g, ' ')
     .trim();
 
-  const st: ParseState = {
-    keywords: [],
-    protectionFrom: [],
-    entersTapped: false,
-    abilities: [],
-    spellTargets: [],
-    spellEffect: [],
-    spellModes: [],
-    modalOpen: false,
-    devoid: false,
-    uncounterable: false,
-    exileOnResolve: false,
-    storm: false,
-    noMaxHandSize: false,
-    kickerEffect: [],
-    infect: false,
-    wither: false,
-    exalted: false,
-    flags: {},
-    revealTop: false,
-    playerHexproof: false,
-    castMethods: [],
-    multikicker: false,
-    flags2: {},
-    flags3: {},
-    flags4: {},
-    flags5: {},
-    flags6: {},
-    flags7: {},
-    levels: [],
-    softNotes: [],
-  };
+  const st = newParseState();
 
   // Spells stay all-or-nothing (a resolução tem que estar certa); permanentes
   // sem linhas de spell podem ser jogados mesmo com habilidades não
@@ -2324,3 +2301,66 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   }
   return def;
 }
+
+function newParseState(): ParseState {
+  return {
+    keywords: [],
+    protectionFrom: [],
+    entersTapped: false,
+    abilities: [],
+    spellTargets: [],
+    spellEffect: [],
+    spellModes: [],
+    modalOpen: false,
+    devoid: false,
+    uncounterable: false,
+    exileOnResolve: false,
+    storm: false,
+    noMaxHandSize: false,
+    kickerEffect: [],
+    infect: false,
+    wither: false,
+    exalted: false,
+    flags: {},
+    revealTop: false,
+    playerHexproof: false,
+    castMethods: [],
+    multikicker: false,
+    flags2: {},
+    flags3: {},
+    flags4: {},
+    flags5: {},
+    flags6: {},
+    flags7: {},
+    levels: [],
+    softNotes: [],
+  };
+}
+
+/** Sentence split that ignores periods inside double quotes ("~ gains '{T}: Add {C}.'"). */
+function splitSentences(text: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') inQuote = !inQuote;
+    if (ch === '.' && !inQuote && (i === text.length - 1 || /\s/.test(text[i + 1] ?? ''))) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+/** Quoted ability text ("{T}: Add {C}." / "This token gets +1/+1 for each artifact you control.") → abilities/keywords. */
+function compileAbilityText(text: string): { abilities: AbilityDef[]; keywords: Keyword[] } | null {
+  const st = newParseState();
+  const norm = text.replace(/\bThis (token|creature|permanent|land|artifact|enchantment|Saga)\b/gi, '~').trim();
+  for (const line of norm.split('\n').map((l) => l.trim()).filter(Boolean)) if (!parseLine(line, st, false, [])) return null;
+  return { abilities: st.abilities, keywords: st.keywords };
+}
+setAbilityTextCompiler(compileAbilityText);

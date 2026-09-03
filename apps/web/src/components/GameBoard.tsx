@@ -919,6 +919,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
             {STEP_SHORT[s]}
           </span>
         ))}
+        <span className={`storm-counter ${view.spellsCastThisTurn > 0 ? 'active' : ''}`} title="Mágicas conjuradas neste turno (contagem de tempestade)">
+          ⛈ Tempestade {view.spellsCastThisTurn}
+        </span>
         <div className="phase-actions">
           {promptText && <span className="prompt-banner">{promptText}</span>}
           {targeting && <button onClick={() => setTargeting(null)}>Cancelar</button>}

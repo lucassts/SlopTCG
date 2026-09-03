@@ -101,6 +101,8 @@ export interface PlayerView {
 export interface GameView {
   you: PlayerId;
   turn: number;
+  /** Spells cast this turn by anyone (storm count). */
+  spellsCastThisTurn: number;
   step: Step;
   activePlayer: PlayerId;
   priority: PlayerId | null;
@@ -215,6 +217,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
   return {
     you: viewer,
     turn: state.turn,
+    spellsCastThisTurn: state.spellsCastThisTurn,
     step: state.step,
     activePlayer: state.activePlayer,
     priority: state.priority,

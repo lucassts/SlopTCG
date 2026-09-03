@@ -137,6 +137,11 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if (typeof amount === 'number') return amount;
   if (amount === 'X') return ctx.xValue ?? 0;
   if (amount === 'sacrificedPower') return ctx.sacrificedPower ?? 0;
+  if (typeof amount === 'object' && 'halfLifeOf' in amount) {
+    const who = amount.halfLifeOf === 'opponent' ? opponentOf(ctx.controller) : ctx.controller;
+    const life = ctx.state.players[who].life;
+    return amount.round === 'up' ? Math.ceil(life / 2) : Math.floor(life / 2);
+  }
   if (amount === 'triggerAmount') return ctx.triggerAmount ?? 0;
   if (amount === 'domain') {
     const lands = ctx.state.players[ctx.controller].zones.battlefield.map((id) => ctx.state.objects[id].card);
@@ -175,9 +180,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -296,6 +301,18 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         min: 0,
         max: Math.min(step.count, options.length),
         prompt: `Busque até ${step.count} carta(s) na sua biblioteca`,
+        mode: 'cards',
+      };
+    }
+    case 'doomsday': {
+      const options = [...state.players[controller].zones.library, ...state.players[controller].zones.graveyard];
+      const n = Math.min(step.count, options.length);
+      return {
+        player: controller,
+        options,
+        min: n,
+        max: n,
+        prompt: `Escolha ${step.count} cartas (biblioteca e cemitério) para o topo da biblioteca, na ordem em que vão ficar; o resto é exilado`,
         mode: 'cards',
       };
     }
@@ -758,6 +775,17 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       emit({ type: 'shuffled', player: ctx.controller });
       return;
     }
+    case 'doomsday': {
+      const me = ctx.controller;
+      const keep = picks.filter((id) => { const o = state.objects[id]; return !!o && (o.zone === 'library' || o.zone === 'graveyard') && o.owner === me; });
+      const rest = [...state.players[me].zones.library, ...state.players[me].zones.graveyard].filter((id) => !keep.includes(id));
+      for (const id of rest) moveWithEvent(state, state.objects[id], 'exile', 'exiled', emit);
+      for (const id of keep) { const o = state.objects[id]; if (o.zone === 'graveyard') moveWithEvent(state, o, 'library', 'returned', emit, 'top'); }
+      const lib = state.players[me].zones.library;
+      state.players[me].zones.library = [...keep.filter((id) => lib.includes(id)), ...lib.filter((id) => !keep.includes(id))];
+      emit({ type: 'searched', player: me, found: keep.map((id) => state.objects[id].card.name), to: 'libraryTop' });
+      return;
+    }
   }
 }
 
@@ -1218,6 +1246,16 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       if (src) src.prepared = false;
       return;
     }
+
+    case 'grantAbility':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (!obj || obj.zone !== 'battlefield') continue;
+        if (!obj.printedCard) obj.printedCard = obj.card;
+        obj.card = { ...obj.card, abilities: [...(obj.card.abilities ?? []), ...step.abilities], keywords: [...(obj.card.keywords ?? []), ...(step.keywords ?? [])] };
+        emit({ type: 'fizzled', description: `${obj.card.name} ganha: ${[...step.abilities.map((a) => a.text), ...(step.keywords ?? [])].join('; ')}` });
+      }
+      return;
 
     case 'pairSoulbond': {
       const src = state.objects[ctx.sourceId];

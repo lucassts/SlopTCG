@@ -94,7 +94,8 @@ function targetRefs(effect) {
   const walk = (v) => {
     if (typeof v === 'string' && v.startsWith('target:')) refs.push(parseInt(v.slice(7), 10));
     else if (Array.isArray(v)) v.forEach(walk);
-    else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    // Habilidades concedidas / de fichas ("token with '…'") têm os próprios alvos.
+    else if (v && typeof v === 'object') Object.entries(v).forEach(([k, x]) => { if (k !== 'abilities') walk(x); });
   };
   walk(effect);
   return refs;
