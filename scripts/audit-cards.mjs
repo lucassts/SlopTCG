@@ -36,50 +36,8 @@ const corpus = raw.filter((c) =>
   (!ONLY || c.name === ONLY),
 ).slice(0, LIMIT);
 
-// ------------------------------------ mesmo mapeamento do servidor
-const DEMO_BY_NAME = new Map(Object.values(DEMO_CARDS).map((c) => [c.name.toLowerCase(), c]));
-const KNOWN_TYPES = ['Land', 'Creature', 'Artifact', 'Enchantment', 'Instant', 'Sorcery', 'Planeswalker', 'Battle'];
-const num = (v) => { if (v === undefined) return undefined; const n = parseInt(v, 10); return Number.isNaN(n) ? undefined : n; };
-
-function toDefinition(official) {
-  const registry = DEMO_BY_NAME.get(official.name.toLowerCase());
-  const face = official.card_faces?.[0];
-  const input = {
-    name: official.name.split('//')[0].trim(),
-    manaCost: official.mana_cost || face?.mana_cost,
-    typeLine: (official.type_line || face?.type_line || '').split('//')[0].trim(),
-    oracleText: official.oracle_text ?? face?.oracle_text,
-    power: num(official.power ?? face?.power),
-    toughness: num(official.toughness ?? face?.toughness),
-    loyalty: num(official.loyalty ?? face?.loyalty),
-    defense: num(official.defense ?? face?.defense),
-    colors: official.colors ?? face?.colors ?? [],
-    oracleId: official.oracle_id,
-    scryfallId: official.id,
-  };
-  const FRONT_FACE_LAYOUTS = new Set(['transform', 'modal_dfc', 'adventure', 'split', 'flip', 'battle', 'prepare']);
-  const multiface = !!official.card_faces;
-  if (multiface && !FRONT_FACE_LAYOUTS.has(official.layout ?? '')) return { def: null, source: 'multiface' };
-  const back = official.card_faces?.[1];
-  if (back && FRONT_FACE_LAYOUTS.has(official.layout ?? '')) {
-    input.layout = official.layout;
-    input.backFace = {
-      name: (back.name ?? '').trim(), manaCost: back.mana_cost, typeLine: (back.type_line ?? '').trim(), oracleText: back.oracle_text,
-      power: num(back.power), toughness: num(back.toughness), loyalty: num(back.loyalty), defense: num(back.defense), colors: back.colors ?? [],
-    };
-  }
-  const diag = { failedLines: [] };
-  const compiled = compileOracleCard(input, diag);
-  if (compiled && multiface && !compiled.backFace) {
-    compiled.automation = 'partial';
-    compiled.automationNotes = [...(compiled.automationNotes ?? []), 'Outra face não modelada'];
-    return { def: compiled, source: 'partial' };
-  }
-  if (compiled && compiled.automation === 'full') return { def: compiled, source: 'full' };
-  if (registry) return { def: { ...registry, scryfallId: official.id }, source: 'registry' };
-  if (compiled) return { def: compiled, source: compiled.automation };
-  return { def: null, source: 'manual', input, failedLines: diag.failedLines };
-}
+// ------------------------------------ mesmo mapeamento do servidor (scripts/lib/definition.mjs)
+import { num, toDefinition } from './lib/definition.mjs';
 
 // ------------------------------------------------ validação estrutural
 const KEYWORDS = new Set([
