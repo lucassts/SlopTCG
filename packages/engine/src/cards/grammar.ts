@@ -75,9 +75,9 @@ export function parseNounG(raw: string): NounInfo | null {
   }
 
   // Zone suffixes: "creature card in/from your graveyard", "card from your hand".
-  if ((m = n.match(/^(.+?) (?:cards? )?(?:in|from) (?:your|a|an opponent's|any|a single|target player's|that player's|their) (graveyard|hand|library|exile)$/i))) {
+  if ((m = n.match(/^(.+?) (?:cards? )?(?:in|from) (?:(?:your|a|an opponent's|any|a single|target player's|that player's|their|all) )?(graveyards?|hand|library|exile)$/i))) {
     n = m[1].replace(/ cards?$/i, '');
-    zone = m[2].toLowerCase() as NounInfo['zone'];
+    zone = m[2].toLowerCase().replace(/s$/, '') as NounInfo['zone'];
     if (/an opponent's/i.test(raw)) filter.controlledBy = 'opponent';
     else if (/your/i.test(raw)) filter.controlledBy = 'you';
   }
@@ -111,6 +111,8 @@ export function parseNounG(raw: string): NounInfo | null {
       changed = true;
     }
     if ((m = n.match(/^(.+?) with mana value (\d+)$/i))) { n = m[1]; filter.cmcEquals = parseInt(m[2], 10); changed = true; }
+    if ((m = n.match(/^(.+?) with mana value X or less$/i))) { n = m[1]; filter.cmcAtMostX = true; changed = true; }
+    if ((m = n.match(/^(.+?) with mana value equal to the number of ([\w+/-]+) counters on ~$/i))) { n = m[1]; filter.cmcEqualsCountersOn = m[2]; changed = true; }
     if ((m = n.match(/^(.+?) with mana cost \{(\d+)\}(?: or \{(\d+)\})?$/i))) { n = m[1]; filter.manaCostIn = [`{${m[2]}}`, ...(m[3] ? [`{${m[3]}}`] : [])]; changed = true; }
     if ((m = n.match(/^(.+?) (with|without) (flying|reach|trample|haste|vigilance|lifelink|deathtouch|menace|defender|flash|first strike|double strike|hexproof|indestructible)$/i))) {
       n = m[1];
@@ -138,6 +140,7 @@ export function parseNounG(raw: string): NounInfo | null {
     [/^(white|blue|black|red|green) /i, (mm) => { filter.color = COLOR_WORDS[mm[1].toLowerCase()]; return true; }],
     [/^non-([A-Z][a-z]+) /, (mm) => { filter.notSubtype = mm[1]; return true; }],
     [/^nonland /i, () => { filter.nonland = true; return true; }],
+    [/^nonbasic /i, () => { filter.nonbasic = true; return true; }],
     [/^noncreature /i, () => { filter.noncreature = true; return true; }],
     [/^basic /i, () => { filter.basic = true; return true; }],
   ];
@@ -238,6 +241,7 @@ export function filterToTargetSpec(info: NounInfo): TargetSpec | null {
   if (f.untapped) spec.untapped = true;
   if (f.attacking || f.inCombat) spec.combat = true;
   if (f.legendary) spec.legendary = true;
+  if (f.nonbasic) spec.nonbasic = true;
   if (f.withCounter) return null; // sem suporte em alvo
   if (info.zone === 'graveyard') { spec.zone = 'graveyard'; if (f.controlledBy === 'you') { spec.ownedBy = 'you'; spec.controlledBy = undefined; } }
   else if (info.zone) return null;
@@ -254,7 +258,7 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
   if (t === 'that much' || t === 'that many') return 'triggerAmount';
   const n = num(t);
   if (n !== null) return n;
-  if ((m = t.match(/^(?:its|that creature's|that permanent's|~'s|this creature's) (power|toughness|mana value)$/))) {
+  if ((m = t.match(/^(?:its|that creature's|that permanent's|that card's|that spell's|~'s|this creature's) (power|toughness|mana value)$/))) {
     const k = m[1];
     return k === 'power' ? { powerOf: subject } : k === 'toughness' ? { toughnessOf: subject } : { cmcOf: subject };
   }
@@ -263,6 +267,7 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
     if (!info || info.player) return null;
     return { per: { ...info.filter, controlledBy: /you control/.test(t) ? 'you' : 'any' } };
   }
+  if ((m = t.match(/^the number of card types among cards in (your|all) graveyards?$/))) return { cardTypesInGraveyard: m[1] === 'all' ? 'each' : 'controller' };
   if ((m = t.match(/^the number of (.+?) in your graveyard$/))) {
     const info = parseNounG(m[1].replace(/ cards?$/, ''));
     if (!info || info.player) return null;
@@ -272,7 +277,8 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
   if (t === 'the number of cards in your graveyard') return { graveyardCount: 'controller' };
   if (t === 'your life total') return { lifeOf: 'controller' };
   if (t === 'the number of basic land types among lands you control') return 'domain';
-  if ((m = t.match(/^the number of ([\w+/-]+) counters on (?:it|~|this creature|that creature)$/))) return { countersOn: subject, counter: m[1] };
+  if ((m = t.match(/^the number of ([\w+/-]+) counters? on (?:it|~|this creature|that creature)$/))) return { countersOn: subject, counter: m[1] };
+  if (t === 'that number') return null;
   if ((m = t.match(/^twice (.+)$/))) { const inner = parseAmountG(m[1], subject); return inner === null ? null : { times: 2, of: inner }; }
   return null;
 }
@@ -339,6 +345,16 @@ export function parseCondG(raw: string): Cond | null {
   if (low === 'you gained life this turn' || low === "you've gained life this turn") return { kind: 'gainedLifeThisTurn' };
   // ---- Leva 5b
   if (low === 'no spells were cast last turn') return { kind: 'noSpellsLastTurn' };
+  // ---- Leva 6a (Legacy)
+  if ((m = low.match(/^it has mana value (\d+) or (less|greater|more)$/))) return { kind: 'subjectIs', ref: 'triggering', filter: /less/.test(m[2]) ? { cmcAtMost: parseInt(m[1], 10) } : { cmcAtLeast: parseInt(m[1], 10) } };
+  if ((m = low.match(/^(?:it's|it is) (white|blue|black|red|green)$/))) return { kind: 'subjectIs', ref: 'triggering', filter: { color: COLOR_WORDS[m[1]] } };
+  if ((m = low.match(/^(?:~|this spell) is the first spell you've cast this game$/))) return { kind: 'firstSpellThisGame' };
+  if (low === 'you cast it' || low === 'it was cast') return { kind: 'wasCast' };
+  if (low === 'there is an instant card and a sorcery card in your graveyard') return { kind: 'and', conds: [{ kind: 'graveyardAtLeast', count: 1, filter: { what: 'instant' } }, { kind: 'graveyardAtLeast', count: 1, filter: { what: 'sorcery' } }] };
+  if ((m = low.match(/^you control (?:a|an) (.+?) and (?:a|an) (.+)$/))) {
+    const a = parseNounG(m[1]); const b = parseNounG(m[2]);
+    if (a && b && !a.player && !b.player) return { kind: 'and', conds: [{ kind: 'controlsAtLeast', count: 1, filter: { ...a.filter, controlledBy: 'you' } }, { kind: 'controlsAtLeast', count: 1, filter: { ...b.filter, controlledBy: 'you' } }] };
+  }
   if (low === 'a player cast two or more spells last turn') return { kind: 'twoSpellsLastTurn' };
   if (low === "it's day" || low === 'it is day') return { kind: 'dayNight', value: 'day' };
   if (low === "it's night" || low === 'it is night') return { kind: 'dayNight', value: 'night' };
@@ -355,13 +371,13 @@ export function parseCondG(raw: string): Cond | null {
   if ((m = low.match(/^an opponent has (\d+) or less life$/))) return { kind: 'lifeAtMost', who: 'opponent', amount: parseInt(m[1], 10) };
   if ((m = low.match(/^a player has (\d+) or less life$/))) return { kind: 'lifeAtMost', who: 'each', amount: parseInt(m[1], 10) };
   if (low === 'you have more life than an opponent' || low === 'you have the most life or are tied for most life') return { kind: 'moreLifeThanOpponent' };
+  if (low === 'there are four or more card types among cards in your graveyard') return { kind: 'delirium' };
   if ((m = low.match(/^there are (\w+) or more (.+?) cards? in your graveyard$/))) {
     const n = num(m[1]);
     const info = parseNounG(m[2]);
     return n === null || !info ? null : { kind: 'graveyardAtLeast', count: n, filter: info.filter };
   }
   if ((m = low.match(/^there are (\w+) or more cards in your graveyard$/))) { const n = num(m[1]); return n === null ? null : { kind: 'graveyardAtLeast', count: n }; }
-  if (low === 'there are four or more card types among cards in your graveyard') return { kind: 'delirium' };
   if ((m = t.match(/^you control (\w+) or more (.+)$/i))) {
     const n = num(m[1]);
     const info = parseNounG(m[2]);
@@ -448,12 +464,12 @@ function parseSubject(text: string, ctx: GCtx, specs: TargetSpec[], baseIdx: num
     return { kind: 'player', who: last > 0 ? `controllerOf:${last - 1}` : 'controllerOfTriggering' };
   }
   if (/^defending player$/i.test(t)) return { kind: 'player', who: 'opponent' };
-  if ((m = t.match(/^(?:up to (\w+) )?(?:another )?target (.+)$/i))) {
+  if ((m = t.match(/^(?:up to (\w+) )?(?:another |other )?target (.+)$/i))) {
     const info = parseNounG(m[2]);
     if (!info) return null;
     const spec = filterToTargetSpec(info);
     if (!spec) return null;
-    if (/^another target/i.test(t) && spec.what !== 'player') (spec as TargetSpec & { other?: boolean }).other = true;
+    if (/^(?:another|other) target/i.test(t) && spec.what !== 'player') (spec as TargetSpec & { other?: boolean }).other = true;
     const n = m[1] ? num(m[1]) : 1;
     if (n === null || n === 0) return null;
     if (n > 1) {
@@ -680,6 +696,17 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     return [{ op: 'bounceOwn', filter: { ...info.filter, controlledBy: 'you' } }];
   }
   if (/^sacrifice ~$/i.test(clause)) return [{ op: 'sacrificeSelf' }];
+  if ((m = clause.match(/^put (\w+) cards? from your hand on top of your library(?: in any order)?$/i))) { const n = num(m[1]); return n === null ? null : [{ op: 'putHandOnTop', count: n }]; }
+  if ((m = clause.match(/^look at the top card of (target player's|target opponent's|your|each opponent's) library$/i))) {
+    const w = m[1].toLowerCase();
+    if (w.startsWith('target')) { specs.push(/opponent/.test(w) ? { what: 'player', controlledBy: 'opponent' } : { what: 'player' }); return [{ op: 'lookAtTop', who: `target:${ctx.base + specs.length - 1}`, count: 1 }]; }
+    return [{ op: 'lookAtTop', who: w === 'your' ? 'controller' : 'opponent', count: 1 }];
+  }
+  if ((m = clause.match(/^look at a card at random in (target player's|target opponent's) hand$/i))) {
+    specs.push(/opponent/i.test(m[1]) ? { what: 'player', controlledBy: 'opponent' } : { what: 'player' });
+    return [{ op: 'lookRandomHand', who: `target:${ctx.base + specs.length - 1}` }];
+  }
+  if (/^shuffle ~ into its owner's library$/i.test(clause)) return [{ op: 'shuffleSelfIntoLibrary' }];
   if ((m = clause.match(/^remove (a|an|\w+|X) ([\w+/-]+) counters? from (.+)$/i))) {
     const count: DynAmount | null = m[1] === 'X' ? 'X' : /^an?$/i.test(m[1]) ? 1 : num(m[1]);
     if (count === null) return null;
@@ -698,6 +725,7 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     if (!subj || subj.kind === 'player') return null;
     return apply(subj, (r) => [{ op: 'putOnLibraryBottom', what: r }]);
   }
+  if (/^exile all graveyards$/i.test(clause)) return [{ op: 'exileGraveyard', who: 'each' }];
   if ((m = clause.match(/^exile (?:all cards from )?(target player's|target opponent's|each opponent's|that player's|your|each player's) graveyard$/i))) {
     const w = m[1].toLowerCase();
     if (w.startsWith('target')) {
@@ -725,7 +753,7 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     return apply(subj, (r) => [{ op: 'preventAllTo', what: r }]);
   }
   // Leva 5b: dupla-face.
-  if ((m = clause.match(/^exile (.+?), then return (?:it|that card) to the battlefield transformed under (?:your|its owner's) control$/i))) {
+  if ((m = clause.match(/^exile (.+?), then return (?:it|that card|her|him|them) to the battlefield transformed under (?:your|its owner's|her owner's|his owner's|their owner's) control$/i))) {
     const subj = subjOf(m[1]);
     if (!subj || subj.kind === 'player') return null;
     return apply(subj, (r) => [{ op: 'returnTransformed', what: r }]);
@@ -757,6 +785,12 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     return apply(subj, (r) => [{ op: 'returnToHand', what: r }]);
   }
   if ((m = clause.match(/^return (.+?) to the battlefield(?: under (?:your|its owner's) control)?( tapped)?$/i))) {
+    const subj = subjOf(m[1]);
+    if (!subj || subj.kind === 'player') return null;
+    const tapped = !!m[2];
+    return apply(subj, (r) => [{ op: 'returnToBattlefield', what: r, tapped: tapped || undefined }]);
+  }
+  if ((m = clause.match(/^put (.+?) onto the battlefield(?: under your control)?( tapped)?$/i)) && !/from your hand/i.test(m[1])) {
     const subj = subjOf(m[1]);
     if (!subj || subj.kind === 'player') return null;
     const tapped = !!m[2];
@@ -863,11 +897,23 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
   if (who === 'controller') {
     if ((m = body.match(/^scry (\d+)$/i))) return [{ op: 'scry', count: parseInt(m[1], 10) }];
     if (/^learn$/i.test(body)) return [{ op: 'learn' }];
+    if (/^take an extra turn after this one$/i.test(body)) return [{ op: 'extraTurn', who: 'controller' }];
+    if (/^gains? protection from everything until your next turn$/i.test(body)) return [{ op: 'playerProtection', who: 'controller' }];
+    if ((m = body.match(/^add (\w+) mana of any one color$/i))) { const n = num(m[1]); return n === null ? null : [{ op: 'addManaChoice', who: 'controller', count: n }]; }
     if ((m = body.match(/^puts? (?:a|an) (.+?) from your hand onto the battlefield( tapped)?$/i))) {
       const info = parseNounG(m[1]);
       if (!info || info.player || info.zone) return null;
       return [{ op: 'putFromHand', filter: info.filter, tapped: !!m[2] || undefined }];
     }
+  }
+  // "Each player may put a … card from their hand onto the battlefield" (Show and Tell).
+  if ((m = body.match(/^(?:may )?puts? (?:a|an) (.+?) from (?:their|your) hand onto the battlefield( tapped)?$/i)) && (who === 'each' || who === 'opponent')) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player || info.zone) return null;
+    const mk = (w: PlayerSel): EffectStep => ({ op: 'putFromHand', filter: info.filter, tapped: !!m![2] || undefined, who: w });
+    return who === 'each' ? [mk('controller'), mk('opponent')] : [mk('opponent')];
+  }
+  if (who === 'controller') {
     if (/^add one mana of any color$/i.test(body)) return [{ op: 'addManaChoice', who: 'controller' }];
     if (/^add one mana of the chosen color$/i.test(body)) return [{ op: 'addChosenColorMana' }];
     if ((m = body.match(/^add \{([WUBRGC])\} or (?:\{([WUBRGC])\}|one mana of the chosen color)$/i))) {
@@ -893,11 +939,16 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
       if (!tail || /^then put them back in any order$/i.test(tail) || /^you may put them back in any order$/i.test(tail)) return [{ op: 'scry', count: n }];
       if (/^you may put (?:it|that card|one of them) into your graveyard$/i.test(tail) || /^you may put any of them into your graveyard$/i.test(tail)) return [{ op: 'surveil', count: n }];
       let mm: RegExpMatchArray | null;
-      if ((mm = tail.match(/^(?:you may )?put (?:one of them|up to (\w+) of them|(?:a|an) (.+?) card from among them) into your hand and the rest (?:on the bottom of your library in a random order|into your graveyard|on the bottom of your library)$/i))) {
-        const pick = mm[1] ? num(mm[1]) ?? 1 : 1;
-        const info = mm[2] ? parseNounG(mm[2]) : null;
-        if (mm[2] && !info) return null;
+      if ((mm = tail.match(/^(?:you may )?put (?:one of them|up to (\w+) of them|(\w+) of them|(?:a|an) (.+?) card from among them) into your hand and the rest (?:on the bottom of your library in a random order|on the bottom of your library in any order|into your graveyard|on the bottom of your library)$/i))) {
+        const pick = mm[1] ? num(mm[1]) ?? 1 : mm[2] ? num(mm[2]) ?? 1 : 1;
+        const info = mm[3] ? parseNounG(mm[3]) : null;
+        if (mm[3] && !info) return null;
         return [{ op: 'digTop', count: n, pick, filter: info?.filter, rest: /graveyard/i.test(tail) ? 'graveyard' : 'bottom' }];
+      }
+      if ((mm = tail.match(/^you may reveal (?:a|an) (.+?) card from among them and put it into your hand[.,]? ?(?:then )?put the rest (?:on the bottom of your library in a random order|into your graveyard|on the bottom of your library)$/i))) {
+        const info = parseNounG(mm[1]);
+        if (!info) return null;
+        return [{ op: 'digTop', count: n, pick: 1, filter: info.filter, rest: /graveyard/i.test(tail) ? 'graveyard' : 'bottom' }];
       }
       if ((mm = tail.match(/^put (?:one of them|(?:a|an) (.+?) card from among them) (?:into your hand|on top of your library)\.? ?(?:put the rest|and the rest) (?:on the bottom of your library in a random order|into your graveyard)$/i))) {
         const info = mm[1] ? parseNounG(mm[1]) : null;
@@ -930,11 +981,27 @@ export function parseSentenceG(sentence: string, ctx: GCtx): GResult | null {
       return { steps: [{ op: 'if', cond, then: inner.steps }], specs: inner.specs };
     }
   }
+  // "Destroy that creature if it has mana value 4 or less instead if <cond2>": só vale sob cond2.
+  if ((m = s.match(/^(.+?) instead if (.+)$/i))) {
+    const cond2 = parseCondG(m[2]);
+    const inner = cond2 ? parseSentenceG(m[1], ctx) : null;
+    if (cond2 && inner) return { steps: [{ op: 'if', cond: cond2, then: inner.steps }], specs: inner.specs };
+  }
   if ((m = s.match(/^(.+?) if (.+)$/i)) && !/^if /i.test(s)) {
     const cond = parseCondG(m[2]);
     if (cond) {
       const inner = parseSentenceG(m[1], ctx);
-      if (inner) return { steps: [{ op: 'if', cond, then: inner.steps }], specs: inner.specs };
+      if (inner) {
+        // "it" in the condition is the last target of this sentence (Fatal Push, Hydroblast).
+        const all = [...ctx.priorSpecs, ...inner.specs];
+        const lastObj = all.map((sp, i) => ({ sp, i })).filter((x) => x.sp.what !== 'player').pop();
+        const retarget = (c: Cond): Cond =>
+          c.kind === 'subjectIs' && c.ref === 'triggering' && lastObj ? { ...c, ref: `target:${lastObj.i}` }
+          : c.kind === 'not' ? { kind: 'not', cond: retarget(c.cond) }
+          : c.kind === 'and' || c.kind === 'or' ? { ...c, conds: c.conds.map(retarget) }
+          : c;
+        return { steps: [{ op: 'if', cond: retarget(cond), then: inner.steps }], specs: inner.specs };
+      }
     }
   }
   // "… unless you pay {cost}" / "… unless you discard a card / sacrifice a creature".

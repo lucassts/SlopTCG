@@ -25,6 +25,11 @@ export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | '
  */
 export type Cond =
   | { kind: 'yourTurn' }
+  // ---- Leva 6a
+  | { kind: 'topCardIs'; filter: FilterSpec }
+  | { kind: 'firstSpellThisGame' }
+  /** "if you cast it" (The One Ring). */
+  | { kind: 'wasCast' }
   // ---- Leva 5b
   | { kind: 'dayNight'; value: 'day' | 'night' }
   | { kind: 'noSpellsLastTurn' }
@@ -117,6 +122,12 @@ export interface FilterSpec {
   attacking?: boolean;
   /** Mana value exactly N (transmute). */
   cmcEquals?: number;
+  /** "nonbasic land". */
+  nonbasic?: boolean;
+  /** "with mana value X or less" (X of the spell being resolved). */
+  cmcAtMostX?: boolean;
+  /** "with mana value equal to the number of <counter> counters on ~" (Aether Vial). */
+  cmcEqualsCountersOn?: string;
   /** Exact mana cost strings ("{0}", "{1}") — Urza's Saga. */
   manaCostIn?: string[];
   cmcAtMost?: number;
@@ -167,7 +178,11 @@ export type DynAmount =
   | { times: number; of: DynAmount }
   | { plus: number; of: DynAmount }
   /** "half your life, rounded up/down". */
-  | { halfLifeOf: PlayerSel; round: 'up' | 'down' };
+  | { halfLifeOf: PlayerSel; round: 'up' | 'down' }
+  /** "the number of card types among cards in your/all graveyard(s)" (Tarmogoyf family). */
+  | { cardTypesInGraveyard: PlayerSel }
+  /** Instant and sorcery cards exiled with delve when this was cast (Murktide Regent). */
+  | 'delvedCount';
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
@@ -176,6 +191,8 @@ export interface TargetSpec {
   spellType?: 'creature' | 'noncreature' | 'instantSorcery';
   /** "artifact or enchantment": the object must have at least one of these types. */
   typeAnyOf?: CardType[];
+  /** "nonbasic land". */
+  nonbasic?: boolean;
   /** "tapped creature" / "attacking or blocking creature". */
   tapped?: boolean;
   combat?: boolean;
@@ -244,7 +261,7 @@ export type EffectStep =
   | { op: 'returnToHand'; what: SubjectRef }
   | { op: 'tap'; what: SubjectRef }
   | { op: 'untap'; what: SubjectRef }
-  | { op: 'counterSpell'; what: SubjectRef }
+  | { op: 'counterSpell'; what: SubjectRef; /** Force of Negation: exile it instead of the graveyard. */ exile?: boolean }
   /** (choice) Mana Leak: the spell's controller may pay `cost`; otherwise it is countered. */
   | { op: 'counterUnlessPay'; what: SubjectRef; cost: string }
   /** Put the object on top of its owner's library. */
@@ -329,12 +346,22 @@ export type EffectStep =
   /** Learn (no sideboard here): may discard a card to draw a card. */
   | { op: 'learn' }
   /** (choice) "You may put a land card from your hand onto the battlefield (tapped)". */
-  | { op: 'putFromHand'; filter: FilterSpec; tapped?: boolean }
+  | { op: 'putFromHand'; filter: FilterSpec; tapped?: boolean; who?: PlayerSel }
   | { op: 'removeCounters'; what: SubjectRef; counter: string; count: DynAmount }
   /** "~ gains '<ability>'": the object gets extra abilities/keywords while it stays on the battlefield (Urza's Saga). */
   | { op: 'grantAbility'; what: SubjectRef; abilities: AbilityDef[]; keywords?: Keyword[] }
   /** (choice) Doomsday: pick N cards from library + graveyard for the top of the library (in order); exile the rest. */
   | { op: 'doomsday'; count: number }
+  /** (choice) Brainstorm: put N cards from your hand on top of your library, in the chosen order. */
+  | { op: 'putHandOnTop'; count: number }
+  /** Look at the top card of a player's library / a random card of a hand (logged for the controller). */
+  | { op: 'lookAtTop'; who: WhoSel; count: number }
+  | { op: 'lookRandomHand'; who: WhoSel }
+  | { op: 'extraTurn'; who: PlayerSel }
+  /** "Shuffle ~ into its owner's library" (Green Sun's Zenith). */
+  | { op: 'shuffleSelfIntoLibrary' }
+  /** "You gain protection from everything until your next turn" (The One Ring). */
+  | { op: 'playerProtection'; who: PlayerSel }
   // ---- Leva 5b: faces e mecânicas rules-heavy
   /** Transform / flip a double-faced permanent. */
   | { op: 'transform'; what: SubjectRef }
@@ -366,7 +393,7 @@ export type EffectStep =
   /** Monstrosity / Adapt: put N +1/+1 counters once (flag `once`). */
   | { op: 'putCountersOnce'; counter: string; count: number; flag: string }
   /** (choice) The controller picks a color / creature type stored on the source ("as ~ enters, choose…"). */
-  | { op: 'chooseValue'; kind: 'color' | 'creatureType' }
+  | { op: 'chooseValue'; kind: 'color' | 'creatureType' | 'cardName' }
   /** Add mana of the color chosen for the source. */
   | { op: 'addChosenColorMana'; count?: number }
   /** (choice) Devour N: sacrifice any number of creatures, N counters each. */
@@ -476,6 +503,8 @@ export type EffectScript = EffectStep[];
 
 /** Trigger conditions for triggered abilities. */
 export type TriggerSpec =
+  /** Orcish Bowmasters: an opponent draws a card except the first in their draw step. */
+  | { on: 'opponentDrawsExtra' }
   /** Back face: "When this creature transforms into ~" (fires on the face it became). */
   | { on: 'transformsInto'; self: true }
   /** State trigger: "When you control no Islands, sacrifice ~." */
@@ -615,6 +644,10 @@ export interface ActivatedAbility extends LevelGate {
     discardSelf?: boolean;
     /** "Remove N X counters from ~". */
     removeCounters?: { counter: string; count: number };
+    /** Lion's Eye Diamond: discard your whole hand. */
+    discardHand?: boolean;
+    /** Simian Spirit Guide: exile this card from your hand. */
+    exileSelfFromHand?: boolean;
     /** "Exile a creature card from your graveyard" (engine picks the first matching card unless the action names one). */
     exileFromGraveyard?: { filter: FilterSpec; count: number };
     /** "Return a land you control to its owner's hand" (first land unless the action names one). */
@@ -699,6 +732,8 @@ export interface CastMethod {
   cost: string;
   /** Escape: exile this many other cards from your graveyard. */
   exileFromGraveyard?: number;
+  /** Evoke—Exile a <color> card from your hand (Solitude family): no mana, exile a matching hand card instead. */
+  exileFromHand?: FilterSpec;
   label: string;
 }
 
@@ -875,7 +910,16 @@ export interface CardDefinition {
   /** "Prevent all damage that would be dealt by ~" (also on auras: by enchanted creature). */
   preventsOwnDamage?: boolean;
   /** "Each player can't cast more than one spell each turn." */
-  oneSpellPerTurn?: boolean;
+  oneSpellPerTurn?: boolean | 'noncreature';
+  // ---- Leva 6a (Legacy)
+  /** Stony Silence: activated abilities of artifacts can't be activated. */
+  artifactAbilitiesLocked?: boolean | 'opponents';
+  /** Voice of Victory: your opponents can't cast spells during your turn. */
+  opponentsCantCastOnYourTurn?: boolean;
+  /** Pithing Needle: activated (non-mana) abilities of sources with the chosen name can't be activated. */
+  lockChosenName?: boolean;
+  /** Rest in Peace / Leyline of the Void: cards going to a graveyard are exiled instead. */
+  exileInsteadOfGraveyardFor?: 'all' | 'opponents';
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -946,7 +990,7 @@ export interface CardDefinition {
    * Alternative cost (Force of Will): instead of the mana cost, pay life
    * and/or exile matching cards from your hand.
    */
-  altCost?: { payLife?: number; exileFromHand?: { count: number; filter: FilterSpec }; label: string };
+  altCost?: { payLife?: number; exileFromHand?: { count: number; filter: FilterSpec }; label: string; /** Daze: return a land you control to hand. */ returnLand?: FilterSpec; /** "pay {0}" / "cast it without paying its mana cost". */ free?: boolean; /** "If it's not your turn, …" */ condition?: Cond };
   /**
    * Alternative casting methods with their own mana cost and side effects.
    * The client offers each as a cast option; the engine applies the rules.
@@ -1013,7 +1057,7 @@ export interface CardDefinition {
   vanishing?: number;
   fading?: number;
   /** "As ~ enters, choose a color / creature type." */
-  chooseOnEnter?: 'color' | 'creatureType';
+  chooseOnEnter?: 'color' | 'creatureType' | 'cardName';
   /** Devour N. */
   devour?: number;
   /**
@@ -1105,6 +1149,7 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.withoutKeyword && card.keywords?.includes(filter.withoutKeyword)) return false;
   if (filter.typeAnyOf && !filter.typeAnyOf.some((t) => card.types.includes(t))) return false;
   if (filter.manaCostIn && !filter.manaCostIn.includes(card.manaCost ?? '')) return false;
+  if (filter.nonbasic && card.supertypes?.includes('Basic')) return false;
   if (filter.cmcEquals !== undefined || filter.cmcAtMost !== undefined || filter.cmcAtLeast !== undefined) {
     let mv = 0;
     for (const m of (card.manaCost ?? '').matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : m[1] === 'X' ? 0 : 1;

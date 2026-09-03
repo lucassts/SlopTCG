@@ -531,7 +531,7 @@ function parsePronounEffect(clause: string, spec: TargetSpec): EffectStep[] | nu
  */
 function parseEffectText(
   text: string,
-  gctx: { pronoun: SubjectRef; pronounPlayer: WhoSel } = { pronoun: 'self', pronounPlayer: 'controller' },
+  gctx: { pronoun: SubjectRef; pronounPlayer: WhoSel; /** Targets already introduced by earlier lines of the same spell ("that creature"). */ priorSpecs?: TargetSpec[] } = { pronoun: 'self', pronounPlayer: 'controller' },
 ): { steps: EffectStep[]; spec?: TargetSpec; specs?: TargetSpec[]; selfExile?: boolean; kickerSteps?: EffectStep[] } | null {
   let m: RegExpMatchArray | null;
   const steps: EffectStep[] = [];
@@ -555,8 +555,16 @@ function parseEffectText(
     text = m[3];
     if (!text.trim()) return { steps, spec };
   }
+  // Flow State: "Look at the top N…. Put A of them into your hand and the rest X. If <cond>, instead put B of them into your hand and the rest X."
+  if ((m = text.match(/^Look at the top (\w+) cards? of your library\. Put (\w+) of them into your hand and the rest on the bottom of your library in (?:any|a random) order\. If (.+?), instead put (\w+) of them into your hand and the rest on the bottom of your library in (?:any|a random) order\.\s*(.*)$/i))) {
+    const n = num(m[1]); const a = num(m[2]); const b = num(m[4]); const cond = parseCondG(m[3]);
+    if (n === null || a === null || b === null || !cond) return null;
+    steps.push({ op: 'if', cond, then: [{ op: 'digTop', count: n, pick: b, rest: 'bottom' }], else: [{ op: 'digTop', count: n, pick: a, rest: 'bottom' }] });
+    text = m[5];
+    if (!text.trim()) return { steps };
+  }
   // "Look at the top N cards of your library. Put one of them into your hand and the rest…" — as duas frases formam uma só instrução (gramática).
-  text = text.replace(/^(Look at the top \w+ cards? of your library)\. ((?:You may )?[Pp]ut (?:one of them|up to \w+ of them|(?:a|an) [\w\s-]+? card from among them) [^.]*\.)/i, '$1 $2');
+  text = text.replace(/^(Look at the top \w+ cards? of your library)\. ((?:You may )?[Pp]ut (?:one of them|up to \w+ of them|\w+ of them|(?:a|an) [\w\s-]+? card from among them) [^.]*\.)/i, '$1 $2');
   // "Reveal the top card of your library. If it's a X card, put it into your hand. Otherwise, put it on the bottom/into your graveyard."
   if ((m = text.match(/^Reveal the top card of your library\. If it's (?:a|an) ([\w\s-]+?) card, put it into your hand\. Otherwise, put it (on the bottom of your library|into your graveyard)\.?\s*(.*)$/i))) {
     const info = parseNounG(m[1]);
@@ -573,6 +581,16 @@ function parseEffectText(
     text = m[2];
     if (!text.trim()) return { steps };
   }
+  // "Look at the top N…. You may reveal a X card from among them and put it into your hand. Put the rest…" (Once Upon a Time).
+  text = text.replace(/^(Look at the top \w+ cards? of your library)\. (You may reveal (?:a|an) [\w\s-]+? card from among them and put it into your hand)\. Put the rest ([^.]*\.)/i, '$1 $2, then put the rest $3');
+  // Malevolent Rumble: "Reveal the top N cards of your library. You may put a X card from among them into your hand. Put the rest into your graveyard."
+  if ((m = text.match(/^Reveal the top (\w+) cards? of your library\. You may put (?:a|an) ([\w\s-]+?) card from among them into your hand\. Put the rest (into your graveyard|on the bottom of your library in a random order)\.\s*(.*)$/i))) {
+    const n = num(m[1]); const info = parseNounG(m[2]);
+    if (n === null || !info || info.player) return null;
+    steps.push({ op: 'digTop', count: n, pick: 1, filter: info.filter, rest: /graveyard/i.test(m[3]) ? 'graveyard' : 'bottom' });
+    text = m[4];
+    if (!text.trim()) return { steps };
+  }
   // Doomsday: duas frases acopladas viram uma escolha só.
   if ((m = text.match(/^Search your library and graveyard for (\w+) cards? and exile the rest\. Put the chosen cards on top of your library in any order\.\s*(.*)$/i))) {
     const n = num(m[1]);
@@ -587,6 +605,12 @@ function parseEffectText(
   for (const rawSentence of sentences) {
     let sentence = rawSentence;
     if (/^exile ~$/i.test(sentence)) { selfExile = true; continue; }
+    sentence = sentence.replace(/^Then (?=[a-z~])/i, '');
+    if (/^If that spell is countered this way, exile it instead of putting it into its owner's graveyard$/i.test(sentence)) {
+      const last = steps[steps.length - 1];
+      if (last && last.op === 'counterSpell') { last.exile = true; continue; }
+      return null;
+    }
     // Leva 5: "If that creature would die this turn, exile it instead" qualifica o dano anterior; restrição de gasto de mana é ignorada.
     if (/^If (?:that creature|it) would die this turn, exile it instead$/i.test(sentence)) {
       const last = steps[steps.length - 1];
@@ -656,7 +680,7 @@ function parseEffectText(
     }
     if (!parsed) {
       // Leva 4: gramática composicional (sujeito × verbo × quantidade × condição × duração; vários alvos).
-      const prior = specs ?? (spec ? [spec] : []);
+      const prior = specs ?? (spec ? [spec] : [...(gctx.priorSpecs ?? [])]);
       const tryG = (s: string) => parseSentenceG(s, { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length, priorSpecs: prior });
       let g = tryG(sentence);
       if (!g) {
@@ -692,6 +716,11 @@ function parseEffectText(
     }
     lastMayDo = null;
     (kicked ? kickerSteps : steps).push(...parsed.steps);
+  }
+  // Specs inherited from earlier lines are not new targets of this text.
+  const inherited = gctx.priorSpecs?.length ?? 0;
+  if (inherited > 0 && specs && specs.length >= inherited && specs.slice(0, inherited).every((x, i) => x === gctx.priorSpecs![i])) {
+    specs = specs.length > inherited ? specs.slice(inherited) : undefined;
   }
   return { steps, spec, specs, selfExile: selfExile || undefined, kickerSteps: kickerSteps.length > 0 ? kickerSteps : undefined };
 }
@@ -751,7 +780,7 @@ interface ParseState {
   minBlockers?: number;
   extraBlocks?: number | 'any';
   evasionPowerAtLeast?: number;
-  chooseOnEnter?: 'color' | 'creatureType';
+  chooseOnEnter?: 'color' | 'creatureType' | 'cardName';
   kickerEnters?: { counter: string; count: number };
   castMethods: CastMethod[];
   buyback?: string;
@@ -776,6 +805,8 @@ interface ParseState {
   flags6: Partial<Pick<CardDefinition, 'entersTappedUnlessCond' | 'entersTappedIf' | 'assignAsUnblocked' | 'playLandsFromGraveyard' | 'castFromLibraryTop' | 'preventDamageRemoveCounter' | 'cantAttackAlone' | 'autoRegenerate' | 'shuffleInsteadOfGraveyard' | 'opponentsCreaturesEnterTapped' | 'preventsOwnDamage' | 'oneSpellPerTurn' | 'cyclingTrigger'>>;
   /** Spree: modal spell whose modes carry their own costs. */
   spree?: boolean;
+  /** Leva 6a (Legacy): travas, substituições, uma mágica não-criatura por turno. */
+  flags8: Partial<Pick<CardDefinition, 'oneSpellPerTurn' | 'artifactAbilitiesLocked' | 'lockChosenName' | 'exileInsteadOfGraveyardFor' | 'opponentsCantCastOnYourTurn'>>;
   /** Leva 5b: faces, P/T variável, mecânicas rules-heavy. */
   flags7: Partial<Pick<CardDefinition, 'daybound' | 'nightbound' | 'disturb' | 'aftermath' | 'fuse' | 'soulbond' | 'pairedBonus' | 'enlist' | 'casualty' | 'castOnly' | 'exileInsteadOfGraveyard' | 'entersPrepared' | 'setsDayOnEnter' | 'cdaPower' | 'cdaToughness'>>;
   costModifiers?: NonNullable<CardDefinition['costModifiers']>;
@@ -906,6 +937,8 @@ function parseActivationCost(text: string): Extract<AbilityDef, { kind: 'activat
     if (/^Return a land you control to its owner's hand$/i.test(tok)) { cost.returnLand = true; any = true; continue; }
     if (/^Exile ~$/i.test(tok)) { cost.exileSelfFromBattlefield = true; any = true; continue; }
     if (/^Discard (?:~|this card)$/i.test(tok)) { cost.discardSelf = true; any = true; continue; }
+    if (/^Discard your hand$/i.test(tok)) { cost.discardHand = true; any = true; continue; }
+    if (/^Exile (?:~|this card) from your hand$/i.test(tok)) { cost.exileSelfFromHand = true; any = true; continue; }
     return null; // marcadores em quantidade livre etc. fora da DSL
   }
   return any ? cost : null;
@@ -951,7 +984,7 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever a player casts a spell$/i.test(head)) return { trigger: { on: 'anyCastsSpell' } };
   if (/^Whenever (?:a|one or more) creatures? you control deals? combat damage to a player$/i.test(head)) return { trigger: { on: 'yourCreatureCombatDamageToPlayer' } };
   if (/^Whenever you exert ~$/i.test(head)) return { trigger: { on: 'youExertThis' } };
-  if ((m = head.match(/^Whenever you draw your (second|third) card each turn$/i))) return { trigger: { on: 'youDrawCardNth', nth: m[1].toLowerCase() === 'second' ? 2 : 3 } };
+  if ((m = head.match(/^(?:Whenever|When) you draw your (second|third) card (?:each turn|in a turn)$/i))) return { trigger: { on: 'youDrawCardNth', nth: m[1].toLowerCase() === 'second' ? 2 : 3 } };
   if ((m = head.match(/^Whenever you cast your (second|third) spell each turn$/i))) return { trigger: { on: 'youCastSpellNth', nth: m[1].toLowerCase() === 'second' ? 2 : 3 } };
   if (/^Whenever you cast a creature spell$/i.test(head)) return { trigger: { on: 'youCastSpellOf', filter: { what: 'creature' } } };
   if (/^Whenever you cast or copy an instant or sorcery spell$/i.test(head)) return { trigger: { on: 'youCastSpell', instantSorceryOnly: true } };
@@ -1021,6 +1054,8 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever you gain life$/i.test(head)) return { trigger: { on: 'youGainLife' } };
   // ---- Leva 5
   if (/^Whenever ~ becomes untapped$/i.test(head)) return { trigger: { on: 'becomesUntapped', self: true } };
+  if (/^When ~ enters and whenever an opponent draws a card except the first one they draw in each of their draw steps$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'opponentDrawsExtra' } };
+  if (/^When you play another land$/i.test(head)) return { trigger: { on: 'etb', what: { what: 'land', controlledBy: 'you', other: true } } };
   if (/^When ~ enters or dies$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'dies', self: true } };
   if ((m = head.match(/^Whenever ~ or another (.+?) you control enters$/i))) {
     const info = parseNounG(m[1]);
@@ -1051,7 +1086,7 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
 function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: string[]): boolean {
   let m: RegExpMatchArray | null;
   // Palavra de habilidade ("Metalcraft — ", "Landfall — ") é rótulo, não regra.
-  const line = rawLine.replace(/^(?!Landfall)[A-Z][a-z]+(?: [a-z]+)* — (?=\{|When|Whenever|At |~|As |If |Creatures|Other|Each|You)/, '');
+  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [a-z]+)* — (?=\{|~|[A-Z])/, '');
 
   // ---- modal spells: "Choose one —" (or "one or both", "two", "up to one/two", "any number") + "• …" lines
   if (isSpell && (m = line.match(/^Choose (one|two|three|one or both|one or more|up to one|up to two|up to three|any number) —$/i))) {
@@ -1256,12 +1291,13 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     const cond: Cond = parseCondG(m[1] ?? m[4])!;
     let sm: RegExpMatchArray | null;
     // "~ gets +N/+N (and has X)" / "~ has X" sobre a própria carta.
-    if ((sm = inner.match(/^(?:~|it) gets ([+-]\d+)\/([+-]\d+)(?: and has (\w[\w\s,]*?))?$/i)) || (sm = inner.match(/^(?:~|it) has (\w[\w\s,]*?)$/i))) {
+    if ((sm = inner.match(/^(?:~|it) gets ([+-]\d+)\/([+-]\d+)(?:,? (?:and )?has (\w[\w\s,]*?))?(?:,? and (?:attacks|must attack) each combat if able)?$/i)) || (sm = inner.match(/^(?:~|it) has (\w[\w\s,]*?)$/i))) {
+      const mustAttack = /attacks? each combat if able$/i.test(inner);
       const isPT = sm.length > 2 && sm[2] !== undefined;
       const kwText = isPT ? sm[3] : sm[1];
       const kws = kwText ? keywordList(kwText) : undefined;
       if (kwText && !kws) return false;
-      st.abilities.push({ kind: 'static', selfOnly: true, filter: {}, condition: cond, power: isPT ? parseInt(sm[1], 10) : undefined, toughness: isPT ? parseInt(sm[2], 10) : undefined, keywords: kws ?? undefined, text: line });
+      st.abilities.push({ kind: 'static', selfOnly: true, filter: {}, condition: cond, power: isPT ? parseInt(sm[1], 10) : undefined, toughness: isPT ? parseInt(sm[2], 10) : undefined, keywords: [...(kws ?? []), ...(mustAttack ? ['mustAttack' as const] : [])].length > 0 ? [...(kws ?? []), ...(mustAttack ? ['mustAttack' as const] : [])] : undefined, text: line });
       return true;
     }
     const before = st.abilities.length;
@@ -1459,6 +1495,55 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
 
+  // ---- Leva 6a (Legacy): custos alternativos condicionais, travas, substituições, Tron, Delver
+  if ((m = line.match(/^(?:If (.+?), )?[Yy]ou may (.+?) rather than pay (?:this spell's|~'s) mana cost\.$/)) && !/^You may (?:pay \d+ life and )?exile a (?:white|blue|black|red|green) card from your hand rather than pay/.test(line)) {
+    const cond = m[1] ? parseCondG(m[1]) : undefined;
+    if (m[1] && !cond) return false;
+    const c = m[2];
+    let cm: RegExpMatchArray | null;
+    let alt: CardDefinition['altCost'] | null = null;
+    if ((cm = c.match(/^pay (\d+) life$/i))) alt = { payLife: parseInt(cm[1], 10), label: `pague ${cm[1]} de vida` };
+    else if ((cm = c.match(/^exile a (white|blue|black|red|green) card from your hand$/i))) alt = { exileFromHand: { count: 1, filter: { color: COLOR_WORDS[cm[1].toLowerCase()] } }, label: `exile uma carta ${COLOR_PT[cm[1].toLowerCase()]} da mão` };
+    else if ((cm = c.match(/^pay (\d+) life and exile a (white|blue|black|red|green) card from your hand$/i))) alt = { payLife: parseInt(cm[1], 10), exileFromHand: { count: 1, filter: { color: COLOR_WORDS[cm[2].toLowerCase()] } }, label: `pague ${cm[1]} de vida e exile uma carta ${COLOR_PT[cm[2].toLowerCase()]} da mão` };
+    else if ((cm = c.match(/^return (?:a|an) (.+?) you control to its owner's hand$/i))) { const info = parseNounG(cm[1]); if (!info || info.player) return false; alt = { returnLand: { ...info.filter, controlledBy: 'you' }, label: `devolva ${cm[1]} para a mão` }; }
+    else if (/^pay \{0\}$/i.test(c)) alt = { free: true, label: 'de graça' };
+    if (!alt) return false;
+    if (cond) { alt.condition = cond; alt.label += ` (se ${m[1]})`; }
+    st.altCost = alt;
+    return true;
+  }
+  if ((m = line.match(/^If (.+?), you may cast (?:it|~|this spell) without paying its mana cost\.$/i))) {
+    const cond = parseCondG(m[1]);
+    if (!cond) return false;
+    st.altCost = { free: true, condition: cond, label: `de graça (se ${m[1]})` };
+    return true;
+  }
+  if (/^Each player can't cast more than one noncreature spell each turn\.$/i.test(line)) { st.flags8.oneSpellPerTurn = 'noncreature'; return true; }
+  if ((m = line.match(/^Evoke—Exile a (white|blue|black|red|green) card from your hand\.$/i))) { st.castMethods.push({ kind: 'evoke', cost: '', label: `evocar (exile uma carta ${COLOR_PT[m[1].toLowerCase()]} da mão)`, exileFromHand: { color: COLOR_WORDS[m[1].toLowerCase()] } }); return true; }
+  if (/^Your opponents can't cast spells during your turn\.$/i.test(line)) { st.flags8.opponentsCantCastOnYourTurn = true; return true; }
+  if (/^Activated abilities of artifacts your opponents control can't be activated\.$/i.test(line)) { st.flags8.artifactAbilitiesLocked = 'opponents'; return true; }
+  if (/^Activated abilities of artifacts can't be activated\.$/i.test(line)) { st.flags8.artifactAbilitiesLocked = true; return true; }
+  if (/^As ~ enters, choose a card name\.$/i.test(line)) { st.chooseOnEnter = 'cardName'; return true; }
+  if (/^Activated abilities of sources with the chosen name can't be activated unless they're mana abilities\.$/i.test(line)) { st.flags8.lockChosenName = true; return true; }
+  if (/^If a card or token would be put into a graveyard from anywhere, exile it instead\.$/i.test(line)) { st.flags8.exileInsteadOfGraveyardFor = 'all'; return true; }
+  if (/^If a card would be put into an opponent's graveyard from anywhere, exile it instead\.$/i.test(line)) { st.flags8.exileInsteadOfGraveyardFor = 'opponents'; return true; }
+  if ((m = line.match(/^~ enters with (?:a|an) ([\w+/-]+) counter on it for each instant and sorcery card exiled with it\.$/i))) { st.entersWithCounters = { counter: m[1], count: 'delvedCount' }; return true; }
+  if ((m = line.match(/^\{T\}: Add \{C\}\. If you control (?:an? )?(.+?) and (?:an? )?(.+?), add ((?:\{C\})+) instead\.$/i))) {
+    const sub = (w: string) => w.trim().split(/\s+/).pop()!;
+    const extra = m[3].split('{C}').length - 2;
+    st.abilities.push({
+      kind: 'activated', cost: { tap: true }, isManaAbility: true, text: `Adicionar {C} (${m[3]} com ${m[1]} e ${m[2]})`,
+      effect: [{ op: 'addMana', who: 'controller', mana: ['C'] }, { op: 'if', cond: { kind: 'and', conds: [{ kind: 'controlsAtLeast', count: 1, filter: { what: 'land', subtype: sub(m[1]), controlledBy: 'you' } }, { kind: 'controlsAtLeast', count: 1, filter: { what: 'land', subtype: sub(m[2]), controlledBy: 'you' } }] }, then: [{ op: 'addMana', who: 'controller', mana: Array.from({ length: extra }, () => 'C' as const) }] }],
+    });
+    return true;
+  }
+  if ((m = line.match(/^At the beginning of your upkeep, look at the top card of your library\. You may reveal that card\. If (?:a|an) (.+?) card is revealed this way, (.+)\.$/i))) {
+    const info = parseNounG(m[1]);
+    const parsed = info && !info.player ? parseEffectText(m[2] + '.') : null;
+    if (!parsed || specsOf(parsed)) return false;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'upkeep', whose: 'controller' }, effect: [{ op: 'if', cond: { kind: 'topCardIs', filter: info!.filter }, then: parsed.steps }], text: line });
+    return true;
+  }
   // ---- Leva 5b: dupla-face, dia/noite, P/T variável, mecânicas rules-heavy
   if (/^Daybound$/i.test(line)) { st.flags7.daybound = true; return true; }
   if (/^Nightbound$/i.test(line)) { st.flags7.nightbound = true; return true; }
@@ -1990,6 +2075,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
       else if ((am = body.match(/ Activate no more than (\w+) times? each turn\.$/i))) { maxPerTurn = num(am[1]) ?? undefined; body = body.replace(/ Activate no more than \w+ times? each turn\.$/i, '.'); rest = true; }
       else if (/ Activate only during your turn\.$/i.test(body)) { actCond = { kind: 'yourTurn' }; body = body.replace(/ Activate only during your turn\.$/i, '.'); rest = true; }
       else if (/ Activate only during combat\.$/i.test(body)) { body = body.replace(/ Activate only during combat\.$/i, '.'); rest = true; }
+      else if (/ Activate only as an instant\.$/i.test(body)) { body = body.replace(/ Activate only as an instant\.$/i, '.'); rest = true; }
       else if ((am = body.match(/ Activate only if (.+?)\.$/i))) {
         const c = parseCondG(am[1]);
         if (!c) return false;
@@ -2000,7 +2086,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     }
     if (/Activate only/i.test(body)) return false;
     // Leva 5: habilidades do cemitério ("Return this card from your graveyard to your hand / the battlefield tapped").
-    let zone: 'graveyard' | 'hand' | undefined = cost.discardSelf ? 'hand' : undefined;
+    let zone: 'graveyard' | 'hand' | undefined = cost.discardSelf || cost.exileSelfFromHand ? 'hand' : undefined;
     let parsed: ReturnType<typeof parseEffectText>;
     let gm: RegExpMatchArray | null;
     if ((gm = body.match(/^Return (?:~|this card) from your graveyard to (your hand|the battlefield tapped|the battlefield)\.$/i))) {
@@ -2035,7 +2121,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
       st.spellEffect.push({ op: 'nameCardDiscard', who: 'target:0' });
       return true;
     }
-    const parsed = parseEffectText(line);
+    const parsed = parseEffectText(line, { pronoun: st.spellTargets.length > 0 ? `target:${st.spellTargets.length - 1}` : 'self', pronounPlayer: 'controller', priorSpecs: st.spellTargets });
     if (!parsed) return false;
     const specs = specsOf(parsed);
     if (specs) {
@@ -2216,6 +2302,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags5,
     ...st.flags6,
     ...st.flags7,
+    ...st.flags8,
     costModifiers: st.costModifiers,
     spellModeChoice: st.spellModeChoice,
     saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
@@ -2332,6 +2419,7 @@ function newParseState(): ParseState {
     flags5: {},
     flags6: {},
     flags7: {},
+    flags8: {},
     levels: [],
     softNotes: [],
   };

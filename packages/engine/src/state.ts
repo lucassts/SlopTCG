@@ -51,6 +51,11 @@ export interface GameObject {
   /** "As ~ enters, choose a color / creature type". */
   chosenColor?: import('./types.js').Color;
   chosenType?: string;
+  chosenName?: string;
+  /** Entered the battlefield by being cast (The One Ring: "if you cast it"). */
+  wasCast?: boolean;
+  /** Instant/sorcery cards exiled with delve when cast (Murktide Regent). */
+  delvedCount?: number;
   /** Was kicked when cast (permanents). */
   kicked?: boolean;
   /** Echo: came under control this turn (pay on next upkeep). */
@@ -241,6 +246,10 @@ export interface PlayerState {
   permanentsLeftThisTurn?: number;
   nonlandEnteredThisTurn?: number;
   spellsCastThisTurn?: number;
+  /** Spells cast this game (Once Upon a Time). */
+  spellsCastThisGame?: number;
+  /** Protection from everything until this turn number (The One Ring). */
+  protectedUntilTurn?: number;
   noncreatureSpellsThisTurn?: number;
   lifeGainedThisTurn?: number;
   lifeLostThisTurn?: number;
@@ -386,6 +395,8 @@ export interface GameState {
   creaturesDiedThisTurn?: number;
   /** Day/night (daybound/nightbound); undefined until something makes it day or night. */
   dayNight?: 'day' | 'night';
+  /** Extra turns queued (Time Walk, Emrakul). */
+  extraTurns?: PlayerId[];
   /** Spells cast during the previous turn (all players / by its active player). */
   spellsCastLastTurn?: number;
   activeSpellsLastTurn?: number;
@@ -515,6 +526,7 @@ export function moveObject(
     obj.pairedWith = undefined;
     obj.prepared = undefined;
     obj.stateTriggerPending = undefined;
+    obj.wasCast = undefined;
     // Granted abilities end when the object leaves the battlefield.
     if (obj.printedCard) { obj.card = obj.printedCard; obj.printedCard = undefined; }
     // Double-faced cards leave the battlefield front face up (711.4 / 712.8).
@@ -603,6 +615,9 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'twoSpellsLastTurn': return (state.spellsCastLastTurn ?? 0) >= 2;
     case 'inCombat': return /combat|declare/i.test(state.step);
     case 'prepared': return !!source.prepared;
+    case 'topCardIs': { const top = state.objects[state.players[me].zones.library[0]]; return !!top && cardMatchesFilter(top.card, cond.filter); }
+    case 'firstSpellThisGame': return (state.players[me].spellsCastThisGame ?? 0) === 0;
+    case 'wasCast': return !!source.wasCast;
     case 'beingAttacked': return state.step === 'declareAttackers' && state.combatAwaiting === null && state.activePlayer !== me && battlefield(state).some((o) => o.attacking);
     case 'topCardSharesCreatureType': {
       const top = state.objects[state.players[me].zones.library[0]];
@@ -710,7 +725,15 @@ export function cdaValue(state: GameState, obj: GameObject, amount: import('./ca
   if ('countersOn' in amount) return obj.counters[amount.counter] ?? 0;
   if ('times' in amount) return amount.times * cdaValue(state, obj, amount.of);
   if ('plus' in amount) return amount.plus + cdaValue(state, obj, amount.of);
+  if ('cardTypesInGraveyard' in amount) return cardTypesInGraveyards(state, amount.cardTypesInGraveyard === 'each' ? [...PLAYER_IDS] : amount.cardTypesInGraveyard === 'opponent' ? [opponentOf(me)] : [me]);
   return 0;
+}
+
+/** Distinct card types among cards in the given players' graveyards (Tarmogoyf). */
+export function cardTypesInGraveyards(state: GameState, players: PlayerId[]): number {
+  const types = new Set<string>();
+  for (const p of players) for (const id of state.players[p].zones.graveyard) for (const t of state.objects[id]?.card.types ?? []) types.add(t);
+  return types.size;
 }
 
 /** Soulbond: the partner while both are on the battlefield under the same controller. */

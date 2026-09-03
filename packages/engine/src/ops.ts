@@ -204,6 +204,7 @@ export function dealDamageToPlayer(
   emit: Emit,
   opts?: { infect?: boolean; toxic?: number; sourceId?: number; combat?: boolean },
 ): void {
+  if ((state.players[playerId].protectedUntilTurn ?? -1) > state.turn) { emit({ type: 'fizzled', description: `${state.players[playerId].name}: dano prevenido (proteção contra tudo)` }); return; }
   if (amount <= 0) return;
   const ps = state.players[playerId];
   if (ps.preventAllThisTurn) {
@@ -274,6 +275,11 @@ export function moveWithEvent(
   }
   // "If ~ would be put into a graveyard from anywhere, exile it instead." (disturb back faces).
   if (to === 'graveyard' && obj.card.exileInsteadOfGraveyard && !obj.isToken) to = 'exile';
+  // Rest in Peace / Leyline of the Void.
+  if (to === 'graveyard' && !obj.isToken && (['p1', 'p2'] as PlayerId[]).some((p) => state.players[p].zones.battlefield.some((id) => {
+    const mode = state.objects[id]?.card.exileInsteadOfGraveyardFor;
+    return mode === 'all' || (mode === 'opponents' && p !== obj.owner);
+  }))) to = 'exile';
   // Turn bookkeeping for conditions (morbid, revolt, celebration).
   if (from === 'battlefield') {
     const ps = state.players[obj.controller];

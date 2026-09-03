@@ -32,6 +32,7 @@ import {
 } from './ops.js';
 import {
   battlefield,
+  cardTypesInGraveyards,
   createObject,
   effectivePower,
   effectiveToughness,
@@ -137,6 +138,9 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if (typeof amount === 'number') return amount;
   if (amount === 'X') return ctx.xValue ?? 0;
   if (amount === 'sacrificedPower') return ctx.sacrificedPower ?? 0;
+  if (amount === 'delvedCount') return ctx.state.objects[ctx.sourceId]?.delvedCount ?? 0;
+  if (typeof amount === 'object' && 'cardTypesInGraveyard' in amount)
+    return cardTypesInGraveyards(ctx.state, amount.cardTypesInGraveyard === 'each' ? ['p1', 'p2'] : amount.cardTypesInGraveyard === 'opponent' ? [opponentOf(ctx.controller)] : [ctx.controller]);
   if (typeof amount === 'object' && 'halfLifeOf' in amount) {
     const who = amount.halfLifeOf === 'opponent' ? opponentOf(ctx.controller) : ctx.controller;
     const life = ctx.state.players[who].life;
@@ -180,9 +184,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -291,9 +295,10 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       };
     }
     case 'search': {
+      const filter = step.filter?.cmcAtMostX ? { ...step.filter, cmcAtMostX: undefined, cmcAtMost: ctx.xValue ?? 0 } : step.filter;
       const options = state.players[controller].zones.library
         .map((id) => state.objects[id])
-        .filter((o) => cardMatchesFilter(o.card, step.filter))
+        .filter((o) => cardMatchesFilter(o.card, filter))
         .map((o) => o.id);
       return {
         player: controller,
@@ -422,9 +427,17 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       return { player: controller, options: [...hand], min: 0, max: 1, prompt: `${ctx.sourceName}: aprender — descarte uma carta para comprar uma (opcional)`, mode: 'cards' };
     }
     case 'putFromHand': {
-      const options = state.players[controller].zones.hand.filter((id) => cardMatchesFilter(state.objects[id].card, step.filter));
-      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
-      return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: coloque uma carta da mão no campo de batalha (opcional)`, mode: 'cards' };
+      const who = step.who === 'opponent' ? opponentOf(controller) : controller;
+      const src = state.objects[ctx.sourceId];
+      const filter = step.filter.cmcEqualsCountersOn ? { ...step.filter, cmcEqualsCountersOn: undefined, cmcEquals: src?.counters[step.filter.cmcEqualsCountersOn] ?? 0 } : step.filter;
+      const options = state.players[who].zones.hand.filter((id) => cardMatchesFilter(state.objects[id].card, filter));
+      if (options.length === 0) return { player: who, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: who, options, min: 0, max: 1, prompt: `${ctx.sourceName}: coloque uma carta da mão no campo de batalha (opcional)`, mode: 'cards' };
+    }
+    case 'putHandOnTop': {
+      const options = [...state.players[controller].zones.hand];
+      const n = Math.min(step.count, options.length);
+      return { player: controller, options, min: n, max: n, prompt: `${ctx.sourceName}: escolha ${step.count} carta(s) da mão para o topo da biblioteca (a primeira fica no topo)`, mode: 'cards' };
     }
     case 'digTop': {
       const top = state.players[controller].zones.library.slice(0, step.count);
@@ -438,8 +451,8 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         options: [],
         min: 0,
         max: 0,
-        prompt: step.kind === 'color' ? `${ctx.sourceName}: escolha uma cor` : `${ctx.sourceName}: escolha um tipo de criatura`,
-        mode: step.kind === 'color' ? 'chooseColor' : 'chooseType',
+        prompt: step.kind === 'color' ? `${ctx.sourceName}: escolha uma cor` : step.kind === 'cardName' ? `${ctx.sourceName}: escolha o nome de uma carta` : `${ctx.sourceName}: escolha um tipo de criatura`,
+        mode: step.kind === 'color' ? 'chooseColor' : step.kind === 'cardName' ? 'nameCard' : 'chooseType',
       };
     case 'devour': {
       const options = state.players[controller].zones.battlefield
@@ -610,9 +623,15 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
     case 'putFromHand': {
       const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
       if (!o || o.zone !== 'hand') return;
-      o.controller = ctx.controller;
+      o.controller = step.who === 'opponent' ? opponentOf(ctx.controller) : ctx.controller;
       moveWithEvent(state, o, 'battlefield', 'resolved', emit);
       if (step.tapped) setTapped(state, o, true, emit);
+      return;
+    }
+    case 'putHandOnTop': {
+      const chosen = picks.filter((id) => state.objects[id]?.zone === 'hand' && state.objects[id].owner === ctx.controller);
+      for (const id of [...chosen].reverse()) moveWithEvent(state, state.objects[id], 'library', 'returned', emit, 'top');
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${chosen.length} carta(s) da mão foram para o topo da biblioteca` });
       return;
     }
     case 'digTop': {
@@ -635,6 +654,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       const src = state.objects[ctx.sourceId];
       if (!src || !text) return;
       if (step.kind === 'color') src.chosenColor = text as import('./types.js').Color;
+      else if (step.kind === 'cardName') src.chosenName = text.trim();
       else src.chosenType = text.trim();
       emit({ type: 'valueChosen', player: ctx.controller, cardName: ctx.sourceName, value: text });
       return;
@@ -1247,6 +1267,41 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       return;
     }
 
+    case 'lookAtTop': {
+      const who = choicePlayer(ctx, step.who);
+      const top = state.players[who].zones.library.slice(0, step.count).map((id) => state.objects[id].card.name);
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} olhou o topo da biblioteca de ${state.players[who].name} (${top.join(', ') || 'vazia'})` });
+      return;
+    }
+    case 'lookRandomHand': {
+      const who = choicePlayer(ctx, step.who);
+      const hand = state.players[who].zones.hand;
+      if (hand.length === 0) return;
+      const r = shuffle([...hand], state.rngState);
+      state.rngState = r.state;
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} olhou uma carta aleatória da mão de ${state.players[who].name} (${state.objects[r.items[0]].card.name})` });
+      return;
+    }
+    case 'extraTurn':
+      for (const p of resolvePlayers(step.who, ctx.controller)) { (state.extraTurns ??= []).push(p); emit({ type: 'fizzled', description: `${state.players[p].name} joga um turno extra depois deste` }); }
+      return;
+    case 'shuffleSelfIntoLibrary': {
+      const src = state.objects[ctx.sourceId];
+      if (!src || src.isToken) return;
+      moveWithEvent(state, src, 'library', 'returned', emit, 'bottom');
+      const r = shuffle(state.players[src.owner].zones.library, state.rngState);
+      state.players[src.owner].zones.library = r.items;
+      state.rngState = r.state;
+      emit({ type: 'shuffled', player: src.owner });
+      return;
+    }
+    case 'playerProtection':
+      for (const p of resolvePlayers(step.who, ctx.controller)) {
+        state.players[p].protectedUntilTurn = state.turn + (state.activePlayer === p ? 2 : 1);
+        emit({ type: 'fizzled', description: `${state.players[p].name} tem proteção contra tudo até o próximo turno` });
+      }
+      return;
+
     case 'grantAbility':
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
@@ -1391,7 +1446,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         state.stack = state.stack.filter((s) => s !== item);
         if (obj) {
           // Flashback: a countered flashback spell is exiled instead.
-          const dest = item.flashback ? 'exile' : 'graveyard';
+          const dest = item.flashback || step.exile ? 'exile' : 'graveyard';
           obj.zone = dest;
           state.players[obj.owner].zones[dest].push(obj.id);
         }
@@ -1876,6 +1931,7 @@ export function targetMatchesSpec(
     if (spec.what !== 'player' && spec.what !== 'any') return false;
     // "You have hexproof": opponents can't target you.
     if (choice.player !== controller && state.players[choice.player].zones.battlefield.some((id) => state.objects[id].card.playerHexproof)) return false;
+    if ((state.players[choice.player].protectedUntilTurn ?? -1) > state.turn) return false;
     return true;
   }
   if (spec.what === 'player') return false;
@@ -1927,6 +1983,7 @@ export function targetMatchesSpec(
   if (spec.nontoken && obj.isToken) return false;
   if (spec.untapped && obj.tapped) return false;
   if (spec.legendary && !obj.card.supertypes?.includes('Legendary')) return false;
+  if (spec.nonbasic && obj.card.supertypes?.includes('Basic')) return false;
   switch (spec.what) {
     case 'any':
       return true;

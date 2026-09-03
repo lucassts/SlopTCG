@@ -19,14 +19,19 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-03, v0.14.1 — v0.14.0 + correções de partida: Urza's Saga, Doomsday; full 12.196)
+## Estado (2026-09-03, v0.15.0 — Leva 6a, metagame Legacy)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a · gramática 2) | **v0.14 (L5b · faces)** |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | **12.170** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | **15.620** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | **5.290** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | **0** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | **v0.15 (L6a · Legacy)** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | **12.561** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | **15.393** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | **5.126** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | **0** |
+
+**Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
+scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
+mede quanto do que se joga já é full (META% × cópias). Legacy: **43,7% →
+67,1%** na v0.15.0. Relatórios em `data/meta/<formato>-gap.md`.
 
 A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
 "outra face não modelada" restam 143 (versos cujo texto ainda não compila).
@@ -264,12 +269,29 @@ Guiada pela cauda de `data/tail-full.txt` (frases completas, sem truncar):
   estado), "Cast ~ only during the declare attackers step…", "Choose three,
   same mode more than once", "Choose one (commander: both)".
 
-### Leva 6 — o que sobra
-Mutate (34), Phasing (12), Banding (14), Ward—Discard (12), Conspire, Splice,
-Strive, Companion, Meld (21), os 143 versos que ainda não compilam, Alchemy
-(Starting intensity, Teamwork, Specialize, Double team) e a cauda de frases
-únicas do `data/tail-full.txt` — script por carta (Tier 2) é o mais barato
-daqui em diante.
+### Leva 6 — metagame, formato a formato
+A partir daqui a prioridade vem do que as pessoas jogam: o relatório
+`scripts/meta-gap.mjs` ranqueia as cartas com lacuna pelo peso no meta e
+lista as linhas de texto que as seguram. Ordem combinada com o Lucas:
+**Legacy → Vintage → Standard → Pauper → Premodern → o resto**.
+
+**6a — Legacy, feita (v0.15.0)**: 43,7% → 67,1% ponderado. Famílias:
+filtro "nonbasic"; condições sobre o alvo ("if it has mana value 2 or less",
+"if it's red", "… instead if <condição>"); alvos de linhas anteriores valem
+nas seguintes; custos alternativos condicionais (Daze, Snuff Out, Force of
+Negation, Once Upon a Time, Mindbreak Trap); Brainstorm; Show and Tell;
+turno extra; Green Sun's Zenith; proteção contra tudo (The One Ring); Rest in
+Peace / Leyline; Pithing Needle; Stony Silence; Deafening Silence; Voice of
+Victory; Tron; Delver; Bowmasters; Murktide; Goyfs; Evoke por exílio; LED;
+Spirit Guides; Aether Vial; Stock Up / Flow State / Malevolent Rumble.
+
+O que ainda segura o Legacy (peso): Moonshadow, Bilbo, Tamiyo (verso),
+Atraxa, Consign to Memory / Stifle (anular habilidades), Phelia, Kozilek's
+Command, Petrified Hamlet, Karn, Planar Nexus, Chalice of the Void,
+Containment Priest, Animate Dead, Chrome Mox, Mox Diamond, Shallow Grave.
+
+Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
+Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.
 
 ## Regras de trabalho por leva
 1. `node scripts/audit-cards.mjs` no começo (baseline) e no fim (medida).

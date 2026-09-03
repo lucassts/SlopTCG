@@ -662,8 +662,10 @@ export class Game {
     if (s.stack.some((i) => i.kind === 'spell' && s.objects[i.sourceId]?.card.splitSecond))
       { this.fail(playerId, 'fração de segundo: nada pode ser conjurado agora'); return false; }
     // "Each player can't cast more than one spell each turn."
-    if ((s.players[playerId].spellsCastThisTurn ?? 0) >= 1 && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id].card.oneSpellPerTurn)))
+    if ((s.players[playerId].spellsCastThisTurn ?? 0) >= 1 && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id].card.oneSpellPerTurn === true)))
       { this.fail(playerId, 'só uma mágica por turno'); return false; }
+    if (!card.types.includes('Creature') && (s.players[playerId].noncreatureSpellsThisTurn ?? 0) >= 1 && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id].card.oneSpellPerTurn === 'noncreature')))
+      { this.fail(playerId, 'só uma mágica que não seja criatura por turno'); return false; }
     // "You may cast <X> spells from the top of your library."
     const viaLibraryTop = obj.zone === 'library' && s.players[playerId].zones.library[0] === obj.id &&
       s.players[playerId].zones.battlefield.some((id) => { const f = s.objects[id].card.castFromLibraryTop; return !!f && cardMatchesFilter(card, f); });
@@ -727,6 +729,13 @@ export class Game {
       { this.fail(playerId, `${card.name} ainda não é automatizada — use o modo manual`); return false; }
     if (extra.faceDown && !card.morph)
       { this.fail(playerId, 'essa carta não pode ser conjurada virada para baixo'); return false; }
+    if (cm?.exileFromHand) {
+      const pick = s.players[playerId].zones.hand.map((id) => s.objects[id]).find((o) => o.id !== obj.id && cardMatchesFilter(o.card, cm.exileFromHand!));
+      if (!pick) { this.fail(playerId, `${cm.label}: você precisa exilar uma carta da mão`); return false; }
+      moveWithEvent(s, pick, 'exile', 'exiled', this.emit);
+    }
+    if (s.activePlayer !== playerId && s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id].card.opponentsCantCastOnYourTurn))
+      { this.fail(playerId, 'você não pode conjurar mágicas durante o turno do oponente (Voice of Victory)'); return false; }
     if (cm?.kind === 'surge' && s.spellsCastThisTurn === 0)
       { this.fail(playerId, 'surge: você precisa ter conjurado outra mágica neste turno'); return false; }
     if ((cm?.kind === 'prowl' || cm?.kind === 'spectacle') && !s.combatDamageThisTurn)
@@ -847,6 +856,14 @@ export class Game {
     const alt = useAltCost ? card.altCost : undefined;
     if (useAltCost && !alt)
       { this.fail(playerId, 'essa mágica não tem custo alternativo'); return false; }
+    if (alt?.condition && !staticConditionHolds(s, { ...obj, controller: playerId }, alt.condition))
+      { this.fail(playerId, `${card.name}: a condição do custo alternativo não vale agora`); return false; }
+    let altLand: GameObject | undefined;
+    if (alt?.returnLand) {
+      const lands = s.players[playerId].zones.battlefield.map((id) => s.objects[id]).filter((o) => matchFilter({ controller: playerId, sourceId: obj.id }, alt.returnLand!, o));
+      altLand = lands.find((o) => o.tapped) ?? lands[0];
+      if (!altLand) { this.fail(playerId, `${card.name}: você precisa controlar um terreno para devolver`); return false; }
+    }
     if (useAltCost && viaFlashback)
       { this.fail(playerId, 'custo alternativo não se combina com flashback'); return false; }
     const exiles = altExile ?? [];
@@ -886,6 +903,7 @@ export class Game {
       // X with an alternative cost is untypical; treat as 0 when present.
       if (alt.payLife) changeLife(s, playerId, -alt.payLife, `custo de ${card.name}`, this.emit);
       for (const id of exiles) moveWithEvent(s, s.objects[id], 'exile', 'exiled', this.emit);
+      if (altLand) moveWithEvent(s, altLand, 'hand', 'returned', this.emit);
     } else {
       const baseCost = extra.faceDown ? '{3}' : cm ? cm.cost : viaFlashback ? card.flashback!.cost : card.manaCost;
       const cost = parseCost(baseCost);
@@ -988,7 +1006,7 @@ export class Game {
       for (const h of helpers) {
         for (const id of h.ids) {
           const o = s.objects[id];
-          if (h.kind === 'delve') moveWithEvent(s, o, 'exile', 'exiled', this.emit);
+          if (h.kind === 'delve') { moveWithEvent(s, o, 'exile', 'exiled', this.emit); if (o.card.types.includes('Instant') || o.card.types.includes('Sorcery')) obj.delvedCount = (obj.delvedCount ?? 0) + 1; }
           else setTapped(s, o, true, this.emit);
         }
         this.emit({ type: 'fizzled', description: `${card.name}: ${h.kind} pagou ${h.ids.length} de mana genérica` });
@@ -1028,6 +1046,7 @@ export class Game {
     obj.exiledAs = undefined;
     obj.miracleAvailable = undefined;
     obj.castX = xValue;
+    obj.wasCast = true;
     if (fromHand && card.rebound) obj.castMethod = obj.castMethod ?? undefined, (obj as GameObject & { reboundFromHand?: boolean }).reboundFromHand = true;
     const description =
       (mode ? `${card.name} — ${mode.label}` : card.name) +
@@ -1074,6 +1093,7 @@ export class Game {
     s.passCount = 0;
     s.priority = playerId;
     s.players[playerId].spellsCastThisTurn = (s.players[playerId].spellsCastThisTurn ?? 0) + 1;
+    s.players[playerId].spellsCastThisGame = (s.players[playerId].spellsCastThisGame ?? 0) + 1;
     if (!card.types.includes('Creature')) s.players[playerId].noncreatureSpellsThisTurn = (s.players[playerId].noncreatureSpellsThisTurn ?? 0) + 1;
     this.emit({ type: 'spellCast', player: playerId, objectId: obj.id, cardName: card.name, targets });
     if (copies > 0) this.emit({ type: 'copiesCreated', cardName: card.name, count: copies, reason: 'storm' });
@@ -1288,6 +1308,11 @@ export class Game {
     if ((ability.zone ?? 'battlefield') !== obj.zone)
       { this.fail(playerId, `${obj.card.name}: essa habilidade só funciona ${ability.zone === 'graveyard' ? 'do cemitério' : ability.zone === 'hand' ? 'da mão' : 'no campo de batalha'}`); return false; }
 
+    // Stony Silence / Pithing Needle.
+    if (obj.card.types.includes('Artifact') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => { const l = s.objects[id].card.artifactAbilitiesLocked; return l === true || (l === 'opponents' && p !== playerId); })))
+      { this.fail(playerId, `${obj.card.name}: habilidades ativadas de artefatos não podem ser ativadas`); return false; }
+    if (!ability.isManaAbility && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id].card.lockChosenName && s.objects[id].chosenName === obj.card.name)))
+      { this.fail(playerId, `${obj.card.name}: habilidades com esse nome estão travadas`); return false; }
     // Mana abilities may be activated at any time; others need priority.
     if (!ability.isManaAbility && !ability.immediate) {
       const err = this.requirePriority(playerId);
@@ -1421,6 +1446,10 @@ export class Game {
       s.players[playerId].energy -= ability.cost.energy;
       this.emit({ type: 'energyChanged', player: playerId, delta: -ability.cost.energy, total: s.players[playerId].energy });
     }
+    if (ability.cost.discardHand) {
+      for (const id of [...s.players[playerId].zones.hand]) { const c = s.objects[id]; if (c.id === obj.id && ability.zone === 'hand') continue; moveWithEvent(s, c, 'graveyard', 'discarded', this.emit); this.emit({ type: 'discarded', player: playerId, objectId: id, cardName: c.card.name }); }
+    }
+    if (ability.cost.exileSelfFromHand && obj.zone === 'hand') moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
     if (ability.cost.discardSelf && obj.zone === 'hand') {
       moveWithEvent(s, obj, 'graveyard', 'discarded', this.emit);
       this.emit({ type: 'discarded', player: playerId, objectId: obj.id, cardName: obj.card.name });
@@ -1918,7 +1947,9 @@ export class Game {
   private beginTurn(): void {
     const s = this.state;
     s.turn += 1;
-    s.activePlayer = opponentOf(s.activePlayer);
+    const extra = s.extraTurns?.shift();
+    s.activePlayer = extra ?? opponentOf(s.activePlayer);
+    if (extra) this.emit({ type: 'fizzled', description: `Turno extra de ${s.players[extra].name}` });
     s.spellsCastThisTurn = 0;
     s.combatDamagePrevented = false;
     for (const obj of Object.values(s.objects)) {
@@ -2462,6 +2493,16 @@ export class Game {
         }
       }
       if (ev.type === 'cardDrawn') {
+        const firstInDrawStep = this.state.step === 'draw' && this.state.activePlayer === ev.player && this.state.players[ev.player].drawsThisTurn === 1;
+        if (!firstInDrawStep) {
+          const foe = opponentOf(ev.player);
+          for (const id of [...this.state.players[foe].zones.battlefield]) {
+            const o = this.state.objects[id];
+            (o?.card.abilities ?? []).forEach((ab, idx) => {
+              if (ab.kind === 'triggered' && ab.trigger.on === 'opponentDrawsExtra' && abilityActive(o, ab)) this.pushTrigger(o, ab, undefined, undefined, { subjectPlayer: ev.player, abilityIndex: idx });
+            });
+          }
+        }
         this.fireControllerTriggers(ev.player, 'youDrawCard', { subjectId: ev.objectId, subjectPlayer: ev.player });
         this.fireControllerTriggers(ev.player, 'youDrawCardNth', { subjectId: ev.objectId, subjectPlayer: ev.player, nth: this.state.players[ev.player].drawsThisTurn });
         // Miracle: the first card drawn this turn may be cast for its miracle cost right now.
