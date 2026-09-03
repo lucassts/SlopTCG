@@ -6,6 +6,7 @@
 import type { GameEvent } from './events.js';
 import { moveObject, type GameObject, type GameState } from './state.js';
 import type { PlayerId, TargetChoice, ZoneName } from './types.js';
+import { shuffle } from './rng.js';
 
 export type Emit = (ev: GameEvent) => void;
 
@@ -67,6 +68,7 @@ export function changeLife(state: GameState, playerId: PlayerId, delta: number, 
     }
     player.lifeGainedThisTurn = (player.lifeGainedThisTurn ?? 0) + delta;
   }
+  if (delta < 0) player.lifeLostThisTurn = (player.lifeLostThisTurn ?? 0) - delta;
   player.life += delta;
   emit({ type: 'lifeChanged', player: playerId, delta, total: player.life, reason });
 }
@@ -98,6 +100,21 @@ export function dealDamageToObject(
     emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
     return;
   }
+  // "Prevent all damage that would be dealt by ~" (source flag, or an aura on the source).
+  const srcObj = opts?.sourceId !== undefined ? state.objects[opts.sourceId] : undefined;
+  if (srcObj && (srcObj.card.preventsOwnDamage || Object.values(state.objects).some((a) => a.zone === 'battlefield' && a.attachedTo === srcObj.id && a.card.attachEffect?.preventsDamage))) {
+    emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
+    return;
+  }
+  // "If damage would be dealt to ~, prevent that damage. Remove a +1/+1 counter from ~."
+  if (target.card.preventDamageRemoveCounter && (target.counters[target.card.preventDamageRemoveCounter] ?? 0) > 0) {
+    const c = target.card.preventDamageRemoveCounter;
+    target.counters[c] -= 1;
+    emit({ type: 'countersChanged', objectId: target.id, cardName: target.card.name, counter: c, delta: -1, total: target.counters[c] });
+    emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
+    return;
+  }
+  if (opts?.sourceId !== undefined) target.damagedByThisTurn = [...(target.damagedByThisTurn ?? []), opts.sourceId];
   if ((target.preventNext ?? 0) > 0) {
     const prevented = Math.min(amount, target.preventNext!);
     target.preventNext! -= prevented;
@@ -147,8 +164,8 @@ export function dealDamageToObject(
  * instead of dying. Returns true if the object actually died.
  */
 export function destroyObject(state: GameState, obj: GameObject, emit: Emit): boolean {
-  if ((obj.counters['__regen'] ?? 0) > 0) {
-    obj.counters['__regen'] -= 1;
+  if ((obj.counters['__regen'] ?? 0) > 0 || obj.card.autoRegenerate) {
+    if ((obj.counters['__regen'] ?? 0) > 0) obj.counters['__regen'] -= 1;
     if (obj.counters['__regen'] === 0) delete obj.counters['__regen'];
     obj.damage = 0;
     delete obj.counters['__deathtouched'];
@@ -182,6 +199,11 @@ export function dealDamageToPlayer(
   if (amount <= 0) return;
   const ps = state.players[playerId];
   if (ps.preventAllThisTurn) {
+    emit({ type: 'damagePrevented', sourceName, targetName: ps.name, amount });
+    return;
+  }
+  const srcObj = opts?.sourceId !== undefined ? state.objects[opts.sourceId] : undefined;
+  if (srcObj && (srcObj.card.preventsOwnDamage || Object.values(state.objects).some((a) => a.zone === 'battlefield' && a.attachedTo === srcObj.id && a.card.attachEffect?.preventsDamage))) {
     emit({ type: 'damagePrevented', sourceName, targetName: ps.name, amount });
     return;
   }
@@ -231,7 +253,16 @@ export function moveWithEvent(
         return mode === 'all' || (mode === 'opponents' && p !== obj.controller);
       }),
     );
-    if (obj.card.exileInsteadOfDying || staticExile) to = 'exile';
+    if (obj.card.exileInsteadOfDying || staticExile || obj.exileIfDiesThisTurn) to = 'exile';
+  }
+  // "If ~ would be put into a graveyard from anywhere, shuffle it into its owner's library instead."
+  if (to === 'graveyard' && obj.card.shuffleInsteadOfGraveyard && !obj.isToken) {
+    moveObject(state, obj, 'library', 'bottom');
+    const r = shuffle(state.players[obj.owner].zones.library, state.rngState);
+    state.players[obj.owner].zones.library = r.items;
+    state.rngState = r.state;
+    emit({ type: 'zoneChanged', objectId: obj.id, cardName: obj.card.name, from, to: 'library', player: obj.owner, reason });
+    return;
   }
   // Turn bookkeeping for conditions (morbid, revolt, celebration).
   if (from === 'battlefield') {

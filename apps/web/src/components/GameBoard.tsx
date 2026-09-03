@@ -95,6 +95,8 @@ interface Targeting {
   handPickColor?: string;
   /** Retrace: the hand pick must be a land card. */
   handPickLand?: boolean;
+  /** Hand picks are an additional-cost discard (not an alternative-cost exile). */
+  handPickDiscard?: boolean;
   /** Station: first pick (after hand picks) is the creature to tap. */
   tapPick?: boolean;
   /** Entwine: every mode. */
@@ -356,8 +358,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           kicked: t.kicked,
           sacrifices: sacCount > 0 ? sacrifices : undefined,
           useAltCost: t.useAltCost,
-          altExile: handPick > 0 && t.method !== 'retrace' ? altExile : undefined,
-          discards: t.method === 'retrace' ? altExile : undefined,
+          altExile: handPick > 0 && t.method !== 'retrace' && !t.handPickDiscard ? altExile : undefined,
+          discards: t.method === 'retrace' || t.handPickDiscard ? altExile : undefined,
           method: t.method,
           escapeExile: t.escapeExile,
           faceDown: t.faceDown,
@@ -567,13 +569,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     const fbSac = fromGraveyard ? def.flashback?.sacrifice : undefined;
     const bargainSac = kicked && def.kicker?.sacrifice ? 'artefato, encantamento ou ficha para sacrificar' : undefined;
     const emergeSac = extra.method === 'emerge' ? 'criatura para sacrificar (emergir)' : undefined;
-    const sacCount = def.additionalCost ? def.additionalCost.count ?? 1 : fbSac || bargainSac || emergeSac ? 1 : 0;
+    const sacCount = def.additionalCost?.sacrifice ? def.additionalCost.count ?? 1 : fbSac || bargainSac || emergeSac ? 1 : 0;
     const sacSpecs = Array.from({ length: sacCount }, () => ({
-      what: def.additionalCost?.sacrifice.what ?? fbSac?.what ?? emergeSac ?? bargainSac ?? 'permanent',
+      what: def.additionalCost?.sacrifice?.what ?? fbSac?.what ?? emergeSac ?? bargainSac ?? 'permanent',
     }));
-    // Retrace: uma carta de terreno da mão para descartar, antes de tudo.
-    const handPickCount = extra.method === 'retrace' ? 1 : 0;
-    const handSpecs = handPickCount > 0 ? [{ what: 'carta de terreno da sua mão para descartar' }] : [];
+    // Custo adicional de vida (Leva 5): confirmação explícita.
+    if (def.additionalCost?.payLife && !confirm(`${def.name}: pagar ${def.additionalCost.payLife} pontos de vida como custo adicional?`)) return;
+    // Retrace: uma carta de terreno da mão para descartar, antes de tudo. Custo adicional de descarte: N cartas da mão.
+    const discardCost = extra.method !== 'retrace' ? def.additionalCost?.discard ?? 0 : 0;
+    const handPickCount = extra.method === 'retrace' ? 1 : discardCost;
+    const handSpecs = extra.method === 'retrace' ? [{ what: 'carta de terreno da sua mão para descartar' }] : Array.from({ length: discardCost }, () => ({ what: 'carta da sua mão para descartar' }));
     const targetSpecs = extra.entwine
       ? (def.spellModes ?? []).flatMap((m) => m.targets ?? [])
       : extra.modes
@@ -592,8 +597,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : extra.modes ? `${def.name} — ${extra.modes.map((i) => def.spellModes?.[i]?.label).join(' + ')}` : def.name;
-      const label = handPickCount > 0 ? `${base} (escolha o terreno a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: handPickCount > 0 || undefined, replicateTimes });
+      const label = handPickCount > 0 ? `${base} (escolha ${extra.method === 'retrace' ? 'o terreno' : 'a(s) carta(s)'} a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes });
     }
   };
 
@@ -687,6 +692,14 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         colors: choice.colors ?? ['W', 'U', 'B', 'R', 'G'],
         name: cv.card.name,
       });
+      return;
+    }
+    // Leva 5: "Add {C} or one mana of the chosen color" / "Add {R} or {G}" pela gramática.
+    const opts = ability.effect.find((s) => s.op === 'addManaOptions');
+    if (opts && opts.op === 'addManaOptions') {
+      const colors = [...opts.options, ...(opts.chosenColor && cv.chosenColor ? [cv.chosenColor] : [])];
+      if (colors.length === 1) { onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx, manaColor: colors[0] as 'C' }); return; }
+      setColorPick({ objectId: cv.objectId, abilityIndex: idx, colors, name: cv.card.name });
       return;
     }
     beginAbility(cv, idx, ability);
@@ -1205,7 +1218,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                       type: 'activateAbility',
                       objectId: pick.objectId,
                       abilityIndex: pick.abilityIndex,
-                      manaColor: c as 'W' | 'U' | 'B' | 'R' | 'G',
+                      manaColor: c as 'W' | 'U' | 'B' | 'R' | 'G' | 'C',
                     });
                   }}
                 >

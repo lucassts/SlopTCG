@@ -19,14 +19,18 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-03, v0.12.0)
+## Estado (2026-09-03, v0.13.0)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | **v0.12 (Leva 4)** |
-|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | **10.296** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | **16.960** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | **5.769** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | **55** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | **v0.13 (L5 · gramática 2)** |
+|---|---|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | **11.800** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | **15.772** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | **5.453** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | **55** |
+
+A gramática 2 (Leva 5, primeira metade) rendeu +1.504 full e tirou 316
+cartas do manual; frases pendentes distintas: 17.855 → 16.677. Falhas de
+simulação: 7 (todas explicáveis pelo cenário do auditor).
 
 A Leva 4 foi a que virou a curva, como previsto: +3.160 full numa leva só,
 e as frases pendentes distintas caíram de 20.669 para 17.855.
@@ -208,11 +212,43 @@ Reescrever `parseEffectText` como gramática recursiva:
 Cada regra nova aqui destrava centenas de frases distintas de uma vez — é
 aqui que a curva vira.
 
-### Leva 5 — o que sobra
+### Leva 5a — feita (v0.13.0): gramática 2
+Guiada pela cauda de `data/tail-full.txt` (frases completas, sem truncar):
+- **custos adicionais genéricos** (descartar, pagar vida, exilar do
+  cemitério, sacrificar qualquer substantivo — "an artifact or creature");
+- **Spree** (cada modo soma o próprio custo);
+- **custos de ativação**: remover marcadores, exilar cartas do cemitério,
+  virar uma criatura desvirada, devolver um terreno, exilar ~, descartar ~;
+- **habilidades do cemitério** ("Return this card from your graveyard to
+  your hand / the battlefield tapped");
+- **Enchant generalizado** ("artifact or creature", "nonland permanent",
+  "creature you control"); "Enchant player" continua fora;
+- "return the exiled card(s)" (Banishing Light e família), `bounceOwn`,
+  `learn`, mover marcadores, fundo da biblioteca, exilar cemitério, revelar
+  mão, "deals damage equal to X to Y", "blocks ~ this turn if able",
+  "if that creature would die this turn, exile it instead";
+- **busca genérica** pela gramática de substantivos ("Rebel permanent card
+  with mana value 3 or less", "instant or sorcery card");
+- condições de turno novas (ganhou N vida, conjurou não-criatura, oponente
+  perdeu vida, permanente saiu, atacou sozinha, N atacantes);
+- estáticas: entra virado a menos que / se `<condição>`, atribui dano como
+  se não bloqueada, jogar terrenos do cemitério, conjurar do topo, prevenir
+  dano removendo marcador, não ataca sozinha, embaralhar em vez de ir ao
+  cemitério, criaturas do oponente entram viradas, uma mágica por turno,
+  "During your turn, <estática>" genérico;
+- gatilhos: becomes untapped, enters or dies, constellation genérica,
+  attacks alone / with N others, each upkeep, multicolored spell, cycle
+  trigger, hospedeiro causa dano, criatura ferida por ~ morre, upkeep do
+  controlador do hospedeiro;
+- mana: `Add {C} or one mana of the chosen color`, `{R} or {G}` pela
+  gramática, habilidade genérica marcada como de mana quando só produz mana.
+
+### Leva 5b — o que sobra
 Cartas dupla-face de verdade (transformar/verso jogável, 731 cartas),
-adventure/split (segunda metade), poder/resistência `*` (CDA), cartas Un-,
-e o resto do `data/tail-sentences.txt` — nesse ponto, script por carta
-(Tier 2) é o mais barato, e a lista do auditor diz exatamente quais.
+adventure/split (segunda metade), poder/resistência `*` (CDA), rules-heavy
+(Soulbond, Mutate, Phasing, Banding, Provoke, Enlist, Batalhas, Daybound),
+cartas Un-, e o resto do `data/tail-full.txt` — nesse ponto, script por
+carta (Tier 2) é o mais barato, e a lista do auditor diz exatamente quais.
 
 ## Regras de trabalho por leva
 1. `node scripts/audit-cards.mjs` no começo (baseline) e no fim (medida).

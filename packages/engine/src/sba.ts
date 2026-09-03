@@ -105,8 +105,10 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
         // Auras: the host must still match "Enchant X"; equipment needs a creature.
         const wants = obj.card.enchant?.what ?? 'creature';
         const wantedType = (wants.charAt(0).toUpperCase() + wants.slice(1)) as CardType;
+        const anyOf = obj.card.enchant?.typeAnyOf;
         const hostGone =
-          !host || host.zone !== 'battlefield' || (wants !== 'permanent' && !(wants === 'creature' ? isCreature(host) : host.card.types.includes(wantedType)));
+          !host || host.zone !== 'battlefield' ||
+          (anyOf ? !anyOf.some((t) => (t === 'Creature' ? isCreature(host) : host.card.types.includes(t))) : wants !== 'permanent' && !(wants === 'creature' ? isCreature(host) : host.card.types.includes(wantedType)));
         if (hostGone) {
           // Bestowed aura: becomes a creature again instead of dying (702.103).
           if (obj.bestowed) {

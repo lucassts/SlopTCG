@@ -101,6 +101,16 @@ export interface GameObject {
   originalCard?: CardDefinition;
   /** Clone: entering as a copy — state-based actions wait for the choice. */
   copyPending?: boolean;
+  // ---- Leva 5
+  /** Exiled by this object ("return the exiled card"). */
+  exiledBy?: number;
+  /** Objects that dealt damage to this creature this turn. */
+  damagedByThisTurn?: number[];
+  /** "If that creature would die this turn, exile it instead." */
+  exileIfDiesThisTurn?: boolean;
+  /** "Target creature blocks ~ this turn if able" / "can't block ~ this turn". */
+  mustBlockId?: number;
+  cantBlockId?: number;
   /** Turn it was foretold/plotted (can't be cast the same turn / only as sorcery). */
   exiledOnTurn?: number;
   /** Bestow: on the battlefield as an Aura (not a creature while attached). */
@@ -219,7 +229,9 @@ export interface PlayerState {
   permanentsLeftThisTurn?: number;
   nonlandEnteredThisTurn?: number;
   spellsCastThisTurn?: number;
+  noncreatureSpellsThisTurn?: number;
   lifeGainedThisTurn?: number;
+  lifeLostThisTurn?: number;
   /** Damage prevention shields on the player (this turn). */
   preventNext?: number;
   preventAllThisTurn?: boolean;
@@ -524,6 +536,7 @@ export function matchFilter(
   if (filter.other && obj.id === ctx.sourceId) return false;
   if (filter.attacking && !obj.attacking) return false;
   if (filter.inCombat && !obj.attacking && obj.blocking === undefined) return false;
+  if (filter.multicolored && obj.card.colors.length < 2) return false;
   if (filter.token && !obj.isToken) return false;
   if (filter.nontoken && obj.isToken) return false;
   if (filter.tapped && !obj.tapped) return false;
@@ -587,6 +600,12 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'opponentPoisonAtLeast': return state.players[opp].poison >= cond.count;
     case 'isMainPhase': return state.step === 'main1' || state.step === 'main2';
     case 'subjectIs': return false; // precisa do contexto do efeito (condHolds)
+    case 'attackersAtLeast': return (state.attackersThisTurn ?? 0) >= cond.count;
+    case 'attackedAlone': return (state.attackersThisTurn ?? 0) === 1;
+    case 'lifeGainedAtLeast': return (state.players[me].lifeGainedThisTurn ?? 0) >= cond.amount;
+    case 'castNoncreatureThisTurn': return (state.players[me].noncreatureSpellsThisTurn ?? 0) > 0;
+    case 'opponentLostLifeThisTurn': return (state.players[opp].lifeLostThisTurn ?? 0) > 0;
+    case 'anyPermanentLeftThisTurn': return PLAYER_IDS.some((p) => (state.players[p].permanentsLeftThisTurn ?? 0) > 0);
     case 'not': return !staticConditionHolds(state, source, cond.cond);
     case 'and': return cond.conds.every((c) => staticConditionHolds(state, source, c));
     case 'or': return cond.conds.some((c) => staticConditionHolds(state, source, c));

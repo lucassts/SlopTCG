@@ -72,7 +72,7 @@ export type PlayerAction =
       /** Permanents sacrificed to pay the ability's sacrifice cost. */
       sacrifices?: number[];
       /** Chosen color for "add one mana of any color" abilities. */
-      manaColor?: 'W' | 'U' | 'B' | 'R' | 'G';
+      manaColor?: 'W' | 'U' | 'B' | 'R' | 'G' | 'C';
       /** Hand cards discarded to pay a "Discard a card:" cost. */
       discards?: number[];
       /** Station: the other untapped creature tapped as the cost. */

@@ -59,8 +59,8 @@ export interface EffectContext {
   targets: TargetChoice[];
   xValue?: number;
   sacrificedPower?: number;
-  /** Color chosen by the player for 'addManaChoice' abilities. */
-  chosenMana?: 'W' | 'U' | 'B' | 'R' | 'G';
+  /** Mana chosen by the player for 'addManaChoice' / 'addManaOptions' abilities. */
+  chosenMana?: 'W' | 'U' | 'B' | 'R' | 'G' | 'C';
   /** Triggered abilities: the object that caused the trigger. */
   subjectId?: number;
   /** Triggered abilities: the player the trigger is about ("that player"). */
@@ -174,9 +174,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -393,6 +393,21 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       void hand;
       return { player: controller, options: [...after], min: 1, max: 1, prompt: `${ctx.sourceName}: conspirar — descarte uma carta`, mode: 'cards' };
     }
+    case 'bounceOwn': {
+      const options = state.players[controller].zones.battlefield.map((id) => state.objects[id]).filter((o) => matchFilter({ controller, sourceId: ctx.sourceId, state }, { ...step.filter, controlledBy: undefined }, o)).map((o) => o.id);
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 1, max: 1, prompt: `${ctx.sourceName}: devolva uma permanente sua para a mão`, mode: 'cards' };
+    }
+    case 'learn': {
+      const hand = state.players[controller].zones.hand;
+      if (hand.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options: [...hand], min: 0, max: 1, prompt: `${ctx.sourceName}: aprender — descarte uma carta para comprar uma (opcional)`, mode: 'cards' };
+    }
+    case 'putFromHand': {
+      const options = state.players[controller].zones.hand.filter((id) => cardMatchesFilter(state.objects[id].card, step.filter));
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: coloque uma carta da mão no campo de batalha (opcional)`, mode: 'cards' };
+    }
     case 'digTop': {
       const top = state.players[controller].zones.library.slice(0, step.count);
       const options = top.filter((id) => cardMatchesFilter(state.objects[id].card, step.filter));
@@ -559,6 +574,27 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
           emit({ type: 'countersChanged', objectId: who.id, cardName: who.card.name, counter: '+1/+1', delta: 1, total: who.counters['+1/+1'] });
         }
       }
+      return;
+    }
+    case 'bounceOwn': {
+      const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      if (o && o.zone === 'battlefield') moveWithEvent(state, o, 'hand', 'returned', emit);
+      return;
+    }
+    case 'learn': {
+      const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      if (!o || o.zone !== 'hand') return;
+      moveWithEvent(state, o, 'graveyard', 'discarded', emit);
+      emit({ type: 'discarded', player: ctx.controller, objectId: o.id, cardName: o.card.name });
+      draw(state, ctx.controller, emit);
+      return;
+    }
+    case 'putFromHand': {
+      const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      if (!o || o.zone !== 'hand') return;
+      o.controller = ctx.controller;
+      moveWithEvent(state, o, 'battlefield', 'resolved', emit);
+      if (step.tapped) setTapped(state, o, true, emit);
       return;
     }
     case 'digTop': {
@@ -981,8 +1017,10 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         if (t.kind === 'player') dealDamageToPlayer(state, t.player, amount, ctx.sourceName, emit, { infect: src?.infect, toxic: src?.toxic, sourceId: ctx.sourceId });
         else {
           const obj = objectAlive(state, t);
-          if (obj && obj.zone === 'battlefield')
+          if (obj && obj.zone === 'battlefield') {
+            if (step.exileIfDies) obj.exileIfDiesThisTurn = true;
             dealDamageToObject(state, obj, amount, ctx.sourceName, emit, { sourceColors: sourceColors(ctx), infect: src?.infect, wither: src?.wither, sourceId: ctx.sourceId });
+          }
         }
       }
       return;
@@ -1145,8 +1183,83 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
     case 'exile':
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
-        if (obj && (obj.zone === 'battlefield' || obj.zone === 'graveyard'))
+        if (obj && (obj.zone === 'battlefield' || obj.zone === 'graveyard')) {
           moveWithEvent(state, obj, 'exile', 'exiled', emit);
+          if ((obj.zone as string) === 'exile') obj.exiledBy = ctx.sourceId;
+        }
+      }
+      return;
+
+    case 'returnExiledBy': {
+      for (const o of Object.values(state.objects)) {
+        if (o.zone !== 'exile' || o.exiledBy !== ctx.sourceId) continue;
+        o.exiledBy = undefined;
+        o.exiledAs = undefined;
+        if (step.to === 'battlefield') { o.controller = o.owner; moveWithEvent(state, o, 'battlefield', 'returned', emit); }
+        else moveWithEvent(state, o, 'hand', 'returned', emit);
+      }
+      return;
+    }
+
+    case 'moveAllCounters': {
+      const src = state.objects[ctx.sourceId];
+      const [t] = resolveSubject(ctx, step.to);
+      const to = t?.kind === 'object' ? state.objects[t.id] : undefined;
+      if (!src || !to || to.zone !== 'battlefield') return;
+      const counters = src.zone === 'battlefield' ? src.counters : src.lastCounters ?? {};
+      for (const [counter, n] of Object.entries(counters)) {
+        if (n <= 0 || counter.startsWith('__')) continue;
+        to.counters[counter] = (to.counters[counter] ?? 0) + n;
+        emit({ type: 'countersChanged', objectId: to.id, cardName: to.card.name, counter, delta: n, total: to.counters[counter] });
+      }
+      return;
+    }
+
+    case 'putOnLibraryBottom':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (obj && (obj.zone === 'battlefield' || obj.zone === 'graveyard')) moveWithEvent(state, obj, 'library', 'returned', emit, 'bottom');
+      }
+      return;
+
+    case 'removeCounters': {
+      const n = resolveAmount(ctx, step.count);
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (!obj || obj.zone !== 'battlefield') continue;
+        const have = obj.counters[step.counter] ?? 0;
+        const delta = Math.min(have, n);
+        if (delta <= 0) continue;
+        obj.counters[step.counter] = have - delta;
+        emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: step.counter, delta: -delta, total: have - delta });
+      }
+      return;
+    }
+
+    case 'addManaOptions': {
+      const sym = ctx.chosenMana;
+      if (!sym) return;
+      state.players[ctx.controller].manaPool[sym] += 1;
+      emit({ type: 'manaAdded', player: ctx.controller, mana: [sym], sourceName: ctx.sourceName });
+      return;
+    }
+
+    case 'exileGraveyard':
+      for (const p of resolveWho(ctx, step.who))
+        for (const id of [...state.players[p].zones.graveyard]) moveWithEvent(state, state.objects[id], 'exile', 'exiled', emit);
+      return;
+
+    case 'revealHand':
+      for (const p of resolveWho(ctx, step.who))
+        emit({ type: 'handRevealed', player: p, cards: state.players[p].zones.hand.map((id) => state.objects[id].card.name) });
+      return;
+
+    case 'mustBlockSource':
+    case 'cantBlockSource':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (!obj || obj.zone !== 'battlefield') continue;
+        if (step.op === 'mustBlockSource') obj.mustBlockId = ctx.sourceId; else obj.cantBlockId = ctx.sourceId;
       }
       return;
 
@@ -1551,6 +1664,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
             power: step.power,
             toughness: step.toughness,
             keywords: step.keywords,
+            abilities: step.abilities,
             automation: 'full',
           }, p);
           obj.isToken = true;

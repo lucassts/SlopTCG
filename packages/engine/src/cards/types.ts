@@ -65,6 +65,13 @@ export type Cond =
   | { kind: 'isMainPhase' }
   /** The target / triggering object matches the filter ("if it's a creature card"). */
   | { kind: 'subjectIs'; ref: SubjectRef; filter: FilterSpec }
+  /** "attacks alone" / "~ and at least two other creatures attack". */
+  | { kind: 'attackersAtLeast'; count: number }
+  | { kind: 'attackedAlone' }
+  | { kind: 'lifeGainedAtLeast'; amount: number }
+  | { kind: 'castNoncreatureThisTurn' }
+  | { kind: 'opponentLostLifeThisTurn' }
+  | { kind: 'anyPermanentLeftThisTurn' }
   | { kind: 'not'; cond: Cond }
   | { kind: 'and'; conds: Cond[] }
   | { kind: 'or'; conds: Cond[] };
@@ -121,6 +128,8 @@ export interface FilterSpec {
   legendary?: boolean;
   /** "creature that's attacking or blocking". */
   inCombat?: boolean;
+  /** Two or more colors. */
+  multicolored?: boolean;
 }
 
 /**
@@ -215,7 +224,7 @@ export type EffectStep =
   /** The whole hand goes to the graveyard (wheels). */
   | { op: 'discardHand'; who: WhoSel }
   | { op: 'mill'; who: WhoSel; count: number }
-  | { op: 'damage'; to: SubjectRef; amount: DynAmount }
+  | { op: 'damage'; to: SubjectRef; amount: DynAmount; /** "If that creature would die this turn, exile it instead." */ exileIfDies?: boolean }
   | { op: 'gainLife'; who: WhoSel; amount: DynAmount }
   | { op: 'loseLife'; who: WhoSel; amount: DynAmount }
   | { op: 'destroy'; what: SubjectRef }
@@ -297,6 +306,26 @@ export type EffectStep =
   | { op: 'digTop'; count: number; pick: number; filter?: FilterSpec; rest: 'bottom' | 'graveyard' | 'top'; to?: 'hand' | 'battlefield' }
   /** "Exile the top N cards of your library" (no play permission). */
   | { op: 'exileTopSelf'; count: number }
+  // ---- Leva 5 (gramática 2)
+  /** "Return the exiled card(s) to the battlefield under its owner's control / to its owner's hand" (cards the source exiled). */
+  | { op: 'returnExiledBy'; to: 'battlefield' | 'hand' }
+  /** (choice) "Return a land you control to its owner's hand". */
+  | { op: 'bounceOwn'; filter: FilterSpec }
+  /** "Put its counters on target creature" (counters the source had when it died). */
+  | { op: 'moveAllCounters'; to: SubjectRef }
+  | { op: 'putOnLibraryBottom'; what: SubjectRef }
+  /** Learn (no sideboard here): may discard a card to draw a card. */
+  | { op: 'learn' }
+  /** (choice) "You may put a land card from your hand onto the battlefield (tapped)". */
+  | { op: 'putFromHand'; filter: FilterSpec; tapped?: boolean }
+  | { op: 'removeCounters'; what: SubjectRef; counter: string; count: DynAmount }
+  /** "Add {C} or one mana of the chosen color" / "Add {G} or {U}": the activation carries the pick. */
+  | { op: 'addManaOptions'; options: ManaSymbol[]; chosenColor?: boolean }
+  | { op: 'exileGraveyard'; who: WhoSel }
+  | { op: 'revealHand'; who: WhoSel }
+  /** "Tap that creature and it doesn't untap…" is a pump; "target creature blocks ~ this turn if able" / "can't block ~ this turn". */
+  | { op: 'mustBlockSource'; what: SubjectRef }
+  | { op: 'cantBlockSource'; what: SubjectRef }
   /**
    * (choice) "Sacrifice ~ unless you pay {N}" / echo / cumulative upkeep:
    * the controller may pay the cost (per age counter when `perCounter`);
@@ -414,6 +443,8 @@ export type EffectStep =
       sacrificeAtEnd?: boolean;
       /** Job select / For Mirrodin!: attach the source Equipment to the token. */
       attachSource?: boolean;
+      /** Granted abilities ("It has 'Sacrifice this token: Add {C}.'"). */
+      abilities?: AbilityDef[];
     };
 
 export type EffectScript = EffectStep[];
@@ -490,7 +521,16 @@ export type TriggerSpec =
   /** Landfall-style etb for the host's controller is covered by etb filters. */
   | { on: 'youSacrifice'; filter?: FilterSpec }
   | { on: 'anyPlayerDiscards' }
-  | { on: 'youDiscard' };
+  | { on: 'youDiscard' }
+  // ---- Leva 5
+  | { on: 'becomesUntapped'; self: true }
+  | { on: 'hostDealsDamage' }
+  /** "Whenever a creature dealt damage by ~ this turn dies". */
+  | { on: 'damagedCreatureDies'; self: true }
+  /** "When you cycle this card". */
+  | { on: 'youCycleThis' }
+  /** "At the beginning of the upkeep of enchanted creature's controller". */
+  | { on: 'hostControllerUpkeep' };
 
 /** Level up / Class: the ability works only within this level range. */
 export interface LevelGate {
@@ -544,6 +584,14 @@ export interface ActivatedAbility extends LevelGate {
     tapCreature?: boolean;
     /** Transmute: discard this card from hand as part of the cost. */
     discardSelf?: boolean;
+    /** "Remove N X counters from ~". */
+    removeCounters?: { counter: string; count: number };
+    /** "Exile a creature card from your graveyard" (engine picks the first matching card unless the action names one). */
+    exileFromGraveyard?: { filter: FilterSpec; count: number };
+    /** "Return a land you control to its owner's hand" (first land unless the action names one). */
+    returnLand?: boolean;
+    /** "Exile ~" (from the battlefield). */
+    exileSelfFromBattlefield?: boolean;
   };
   targets?: TargetSpec[];
   effect: EffectScript;
@@ -628,6 +676,8 @@ export interface SpellMode {
   label: string;
   targets?: TargetSpec[];
   effect: EffectScript;
+  /** Spree: extra mana cost of choosing this mode. */
+  cost?: string;
 }
 
 export interface CardDefinition {
@@ -656,8 +706,8 @@ export interface CardDefinition {
   spellModes?: SpellMode[];
   /** Storm: when cast, copy this spell once per spell cast earlier this turn. */
   storm?: boolean;
-  /** Additional cost paid at cast time (e.g. Fling's sacrifice). */
-  additionalCost?: { sacrifice: FilterSpec; count?: number };
+  /** Additional cost paid at cast time (Fling's sacrifice; discard / pay life / exile from graveyard). */
+  additionalCost?: { sacrifice?: FilterSpec; count?: number; discard?: number; payLife?: number; exileFromGraveyard?: { filter: FilterSpec; count: number } };
   /** Kicker: optional extra mana cost; when paid, `effect` is appended
    *  (spells) or the permanent enters with `entersWithCounters` (creatures). */
   kicker?: {
@@ -771,6 +821,32 @@ export interface CardDefinition {
   canExert?: boolean;
   /** Clone: "You may have ~ enter as a copy of any creature on the battlefield." */
   copyOnEnter?: boolean;
+  // ---- Leva 5
+  /** "~ enters tapped unless <cond>" / "If <cond>, ~ enters tapped". */
+  entersTappedUnlessCond?: Cond;
+  entersTappedIf?: Cond;
+  /** "You may have ~ assign its combat damage as though it weren't blocked." */
+  assignAsUnblocked?: boolean;
+  /** "You may play lands from your graveyard." */
+  playLandsFromGraveyard?: boolean;
+  /** "You may cast <filter> spells from the top of your library." */
+  castFromLibraryTop?: FilterSpec;
+  /** "If damage would be dealt to ~, prevent that damage. Remove a +1/+1 counter from ~." */
+  preventDamageRemoveCounter?: string;
+  /** "~ can't attack alone." / "~ can't attack or block alone." */
+  cantAttackAlone?: boolean;
+  /** "If ~ would be destroyed, regenerate it." */
+  autoRegenerate?: boolean;
+  /** "If ~ would be put into a graveyard from anywhere, shuffle it into its owner's library instead." */
+  shuffleInsteadOfGraveyard?: boolean;
+  /** "Creatures your opponents control enter tapped." */
+  opponentsCreaturesEnterTapped?: boolean;
+  /** "Prevent all damage that would be dealt by ~" (also on auras: by enchanted creature). */
+  preventsOwnDamage?: boolean;
+  /** "Each player can't cast more than one spell each turn." */
+  oneSpellPerTurn?: boolean;
+  /** Cycling trigger ("When you cycle this card, X"). */
+  cyclingTrigger?: EffectScript;
   /** "Raid — ~ enters with a +1/+1 counter if you attacked this turn" (counters conditioned). */
   entersWithCountersIf?: Cond;
   /** "~ enters with a +1/+1 counter on it for each time it was kicked" handled by kicker.entersWithCounters × times. */
@@ -882,7 +958,7 @@ export interface CardDefinition {
    * Aura: what it can enchant. Casting requires this target and the aura
    * enters the battlefield attached to it (fizzles if the target is gone).
    */
-  enchant?: { what: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent'; controlledBy?: 'you' | 'opponent' };
+  enchant?: { what: 'creature' | 'land' | 'artifact' | 'enchantment' | 'permanent'; controlledBy?: 'you' | 'opponent'; /** "Enchant artifact or creature". */ typeAnyOf?: CardType[] };
   /** Static effects granted to whatever this aura/equipment is attached to. */
   attachEffect?: {
     power?: number;
@@ -898,6 +974,10 @@ export interface CardDefinition {
     /** "Enchanted creature gets +1/+1 for each X" (dynamic). */
     powerPer?: FilterSpec;
     toughnessPer?: FilterSpec;
+    /** "Prevent all damage that would be dealt by enchanted creature." */
+    preventsDamage?: boolean;
+    /** "Enchanted creature is goaded." */
+    goaded?: boolean;
   };
   /** Ward N: opponents' spells/abilities targeting this permanent cost {N} more. */
   ward?: number;
@@ -972,6 +1052,9 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.notColor && card.colors.includes(filter.notColor)) return false;
   if (filter.notSubtype && card.subtypes.includes(filter.notSubtype)) return false;
   if (filter.legendary && !card.supertypes?.includes('Legendary')) return false;
+  if (filter.multicolored && card.colors.length < 2) return false;
+  if (filter.powerAtLeast !== undefined && (card.power ?? 0) < filter.powerAtLeast) return false;
+  if (filter.powerAtMost !== undefined && (card.power ?? 0) > filter.powerAtMost) return false;
   return true;
 }
 

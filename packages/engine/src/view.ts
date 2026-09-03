@@ -27,6 +27,8 @@ export interface CardView {
   crewed: boolean;
   /** Morph/Disguise: currently face down (the controller still sees the real card). */
   faceDown?: boolean;
+  /** "As ~ enters, choose a color": the chosen color (for "add {C} or one mana of the chosen color"). */
+  chosenColor?: string;
   /** Why the card waits in exile (foretold/plotted/suspended…), for the owner's exile viewer. */
   exiledAs?: string;
   /** Attacker was blocked this combat (ninjutsu needs an unblocked one). */
@@ -158,6 +160,7 @@ function cardView(state: GameState, obj: GameObject, viewer?: PlayerId): CardVie
     tapped: obj.tapped,
     damage: obj.damage,
     counters: Object.fromEntries(Object.entries(obj.counters).filter(([k]) => !k.startsWith('__'))),
+    chosenColor: obj.chosenColor,
     power: creature ? effectivePower(state, obj) : null,
     toughness: creature ? effectiveToughness(state, obj) : null,
     attacking: obj.attacking,

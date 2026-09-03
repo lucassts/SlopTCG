@@ -155,7 +155,7 @@ function dealCombatDamage(state: GameState, emit: Emit, deals: (o: GameObject) =
     };
 
     if (atkDeals && power > 0) {
-      if (!atk.wasBlocked) {
+      if (!atk.wasBlocked || atk.card.assignAsUnblocked) {
         hitFace();
       } else if (blockers.length === 0) {
         // All blockers already died; only trample lets damage through.

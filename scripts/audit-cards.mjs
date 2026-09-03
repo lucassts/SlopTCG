@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileOracleCard, DEMO_CARDS, Game, parseCost } from '../packages/engine/dist/index.js';
 import { targetMatchesSpec } from '../packages/engine/dist/effects.js';
+import { cardMatchesFilter } from '../packages/engine/dist/cards/types.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -147,12 +148,11 @@ function fillDeck(extra) {
 
 const matchesFilter = (obj, filter) => {
   if (!filter) return true;
-  if (filter.what && filter.what !== 'permanent') {
-    const t = filter.what.charAt(0).toUpperCase() + filter.what.slice(1);
-    if (!obj.card.types.includes(t)) return false;
-  }
-  if (filter.nonland && obj.card.types.includes('Land')) return false;
-  if (filter.noncreature && obj.card.types.includes('Creature')) return false;
+  if (!cardMatchesFilter(obj.card, filter)) return false;
+  if (filter.token && !obj.isToken) return false;
+  if (filter.nontoken && obj.isToken) return false;
+  if (filter.tapped && !obj.tapped) return false;
+  if (filter.untapped && obj.tapped) return false;
   return true;
 };
 
@@ -288,7 +288,7 @@ function simulate(def) {
       if (!r.ok) problems.push(`jogar terreno recusado: ${errMsg(r)}`);
       else settle(game, log);
     } else {
-      const specs = def.spellModes?.[0]?.targets ?? (def.enchant ? [{ what: def.enchant.what, controlledBy: def.enchant.controlledBy }] : def.spellTargets ?? []);
+      const specs = def.spellModes?.[0]?.targets ?? (def.enchant ? [{ what: def.enchant.what, controlledBy: def.enchant.controlledBy, typeAnyOf: def.enchant.typeAnyOf }] : def.spellTargets ?? []);
       const targets = specs.map((spec) => pickTarget(game, me, opp, spec));
       if (targets.some((t) => t === null)) {
         log.push(`sem alvo legal para conjurar (${specs.map((x) => x.what).join(',')}) — pulado`);
@@ -296,12 +296,25 @@ function simulate(def) {
         const action = { type: 'castSpell', objectId: cardId, targets };
         if (def.spellModes?.length) { if (def.spellModeChoice) action.modes = def.spellModes.map((_, i) => i).slice(0, Math.max(1, def.spellModeChoice.min)); else action.mode = 0; }
         if (def.manaCost?.includes('{X}')) action.x = 1;
-        if (def.additionalCost) {
-          const sacs = s.players[me].zones.battlefield.map((id) => s.objects[id]).filter((o) => o.id !== cardId && matchesFilter(o, def.additionalCost.sacrifice)).slice(0, def.additionalCost.count ?? 1).map((o) => o.id);
+        let skipCast = false;
+        if (def.additionalCost?.sacrifice) {
+          const need = def.additionalCost.count ?? 1;
+          const sacs = s.players[me].zones.battlefield.map((id) => s.objects[id]).filter((o) => o.id !== cardId && matchesFilter(o, def.additionalCost.sacrifice)).slice(0, need).map((o) => o.id);
+          if (sacs.length < need) { log.push('sem permanente legal para o custo adicional de sacrifício — pulado'); skipCast = true; }
           action.sacrifices = sacs;
         }
-        const r = game.apply(me, action);
-        if (!r.ok) problems.push(`conjuração recusada: ${errMsg(r)}`);
+        if (def.additionalCost?.discard) {
+          const hand = s.players[me].zones.hand.filter((id) => id !== cardId).slice(0, def.additionalCost.discard);
+          if (hand.length < def.additionalCost.discard) { log.push('mão insuficiente para o custo adicional de descarte — pulado'); skipCast = true; }
+          action.discards = hand;
+        }
+        if (def.additionalCost?.exileFromGraveyard) {
+          const gyOk = s.players[me].zones.graveyard.filter((id) => cardMatchesFilter(s.objects[id].card, def.additionalCost.exileFromGraveyard.filter)).length >= def.additionalCost.exileFromGraveyard.count;
+          if (!gyOk) { log.push('cemitério sem cartas para o custo adicional de exílio — pulado'); skipCast = true; }
+        }
+        const r = skipCast ? { ok: true, skipped: true } : game.apply(me, action);
+        if (skipCast) { /* cenário não cobre o custo adicional */ }
+        else if (!r.ok) problems.push(`conjuração recusada: ${errMsg(r)}`);
         else {
           settle(game, log);
           const obj = s.objects[cardId];
@@ -332,6 +345,20 @@ function simulate(def) {
           const step = ab.effect.find((e) => e.op === 'addManaChoice');
           action.manaColor = step.colors?.[0] ?? 'G';
         }
+        if (ab.kind === 'activated' && ab.effect.some((e) => e.op === 'addManaOptions')) {
+          const step = ab.effect.find((e) => e.op === 'addManaOptions');
+          action.manaColor = step.options[0];
+        }
+        // Custos de marcadores: o cenário planta os marcadores para exercitar o efeito.
+        if (ab.kind === 'activated' && ab.cost.removeCounters) {
+          const { counter, count } = ab.cost.removeCounters;
+          s.objects[cardId].counters[counter] = Math.max(s.objects[cardId].counters[counter] ?? 0, count);
+        }
+        if (ab.kind === 'activated' && ab.cost.tapCreature) {
+          const tc = s.players[me].zones.battlefield.map((id) => s.objects[id]).find((o) => o.id !== cardId && o.card.types.includes('Creature') && !o.tapped);
+          if (!tc) { log.push(`habilidade ${i}: nenhuma criatura para virar — pulada`); return; }
+          action.tapCreature = tc.id;
+        }
         if (ab.kind === 'activated' && ab.cost.sacrifice) {
           const sac = s.players[me].zones.battlefield.map((id) => s.objects[id]).find((o) => o.id !== cardId && matchesFilter(o, ab.cost.sacrifice));
           if (!sac) { log.push(`habilidade ${i}: nada para sacrificar — pulada`); return; }
@@ -349,7 +376,7 @@ function simulate(def) {
         if (!r.ok) {
           const m = errMsg(r);
           // esperados no cenário: enjoo, mana já gasta por outra habilidade, custo de vida alto
-          if (/enjoo|mana insuficiente|pontos de vida para pagar|lealdade insuficiente|energia para pagar|estacionar|não está ativa neste nível|só no nível/.test(m)) log.push(`habilidade ${i}: ${m}`);
+          if (/enjoo|mana insuficiente|pontos de vida para pagar|lealdade insuficiente|energia para pagar|estacionar|não está ativa neste nível|só no nível|precisa exilar|precisa devolver|não satisfaz o custo/.test(m)) log.push(`habilidade ${i}: ${m}`);
           else problems.push(`habilidade ${i} recusada: ${m}`);
         } else settle(game, log);
       });
@@ -365,7 +392,7 @@ function simulate(def) {
         const r = game.apply(me, { type: 'activateAbility', objectId: cardId, abilityIndex: i, targets });
         if (!r.ok) {
           const m = errMsg(r);
-          if (/mana insuficiente|feitiço/.test(m)) log.push(`habilidade ${i} (cemitério): ${m}`);
+          if (/mana insuficiente|feitiço|descarte|sacrificar|precisa exilar|precisa devolver/.test(m)) log.push(`habilidade ${i} (cemitério): ${m}`);
           else problems.push(`habilidade ${i} (cemitério) recusada: ${m}`);
         } else settle(game, log);
       }
