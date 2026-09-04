@@ -130,6 +130,41 @@ describe('M28 · jogo', () => {
     expect(game.state.objects[bolt].zone).toBe('exile');
   });
 
+  it('Beseech the Mirror com bargain conjura Tendrils of Agony por zero, com alvo e com as cópias do Storm', () => {
+    const tendrils = mk({ name: 'Tendrils of Agony', manaCost: '{2}{B}{B}', typeLine: 'Sorcery', colors: ['B'], oracleText: 'Target player loses 2 life and you gain 2 life.' + String.fromCharCode(10) + 'Storm (When you cast this spell, copy it for each spell cast before it this turn. You may choose new targets for the copies.)' });
+    expect(tendrils.automation, tendrils.automationNotes?.join(' | ')).toBe('full');
+    expect(tendrils.storm).toBe(true);
+    const game = makeGame([...FILLER, beseech, tendrils, idol, idol, idol], FILLER, { topP1: [beseech.id, idol.id, idol.id, idol.id] });
+    goToMain1(game);
+    for (let i = 0; i < 4; i++) put(game, 'p1', 'swamp');
+    put(game, 'p1', 'plains'); put(game, 'p1', 'plains'); put(game, 'p1', 'plains'); put(game, 'p1', 'plains');
+    let t: number;
+    try { t = findIn(game, 'p1', 'library', tendrils.id); } catch { t = findIn(game, 'p1', 'hand', tendrils.id); game.apply('p1', { type: 'manualMove', objectId: t, to: 'library', position: 'bottom' }); }
+    // Duas mágicas antes (dois ídolos), depois o Beseech barganhado sacrificando o primeiro ídolo: 3 mágicas antes da Tendrils.
+    const i1 = findIn(game, 'p1', 'hand', idol.id);
+    expect(cast(game, 'p1', i1).ok).toBe(true); settle(game);
+    const i2 = findIn(game, 'p1', 'hand', idol.id);
+    expect(cast(game, 'p1', i2).ok).toBe(true); settle(game);
+    untapAll(game, 'p1');
+    const rb = cast(game, 'p1', findIn(game, 'p1', 'hand', beseech.id), { kicked: true, sacrifices: [i1] });
+    expect(rb.ok, JSON.stringify(rb.events)).toBe(true);
+    untilChoice(game);
+    answer(game, 'p1', [t]);
+    untilChoice(game);
+    expect(game.state.pendingDecision?.type === 'effectChoice' && game.state.pendingDecision.mode).toBe('confirm');
+    answer(game, 'p1', [], 'yes');
+    passUntil(game, (s) => s.pendingDecision?.type === 'chooseTargets' || (s.stack.length === 0 && s.pendingDecision === null), 50);
+    expect(game.state.pendingDecision?.type).toBe('chooseTargets');
+    expect(game.state.players.p1.manaPool.B + game.state.players.p1.manaPool.W).toBe(0); // sem mana no pool: custo zero
+    expect(game.apply('p1', { type: 'chooseTargets', targets: [{ kind: 'player', player: 'p2' }] }).ok).toBe(true);
+    expect(game.state.objects[t].zone).toBe('stack');
+    expect(game.state.stack.filter((i) => i.sourceId === t && i.kind === 'copy').length).toBe(3); // storm: ídolo, ídolo, Beseech
+    settle(game);
+    expect(game.state.players.p2.life).toBe(12); // 4 × 2
+    expect(game.state.players.p1.life).toBe(28);
+    expect(game.state.objects[t].zone).toBe('graveyard');
+  });
+
   it("Beseech the Mirror sem bargain só põe a carta na mão", () => {
     const game = makeGame([...FILLER, beseech, will], FILLER, { topP1: [beseech.id] });
     goToMain1(game);

@@ -2303,31 +2303,49 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
  * madness after paying). Only cards that need no targets — a free cast that
  * needs targets stays where it is and is logged.
  */
-export function castCardFree(state: GameState, obj: GameObject, controller: PlayerId, emit: Emit, note: string): boolean {
+export function castCardFree(state: GameState, obj: GameObject, controller: PlayerId, emit: Emit, note: string, targets?: TargetChoice[]): boolean {
   const card = obj.card;
   if (card.types.includes('Land')) return false;
-  const needsTargets = (card.spellTargets?.length ?? 0) > 0 || !!card.enchant || (card.spellModes?.length ?? 0) > 0;
-  if (needsTargets) {
-    emit({ type: 'fizzled', description: `${card.name}: precisa de alvos — não pode ser conjurada automaticamente (${note})` });
+  const needsModes = !!card.enchant || (card.spellModes?.length ?? 0) > 0;
+  if (needsModes) {
+    emit({ type: 'fizzled', description: `${card.name}: precisa de modos/anexo — não pode ser conjurada automaticamente (${note})` });
     return false;
+  }
+  const specs = card.spellTargets ?? [];
+  if (specs.length > 0 && !targets) {
+    // Targets are chosen by the controller; the cast completes in doChooseTargets (Tendrils via Beseech, cascade into a burn spell…).
+    state.pendingDecision = { type: 'chooseTargets', player: controller, sourceId: obj.id, cardName: card.name, specs, effect: card.spellEffect ?? [], text: note, freeCast: { note } };
+    emit({ type: 'fizzled', description: `${card.name} (${note}): escolha os alvos` });
+    return true;
   }
   removeFromCurrentZone(state, obj);
   obj.zone = 'stack';
   obj.exiledAs = undefined;
   obj.controller = controller;
+  obj.wasCast = true;
+  obj.castFromHand = false;
+  const chosen = targets ?? [];
+  const effect = card.spellEffect ?? [];
   state.stack.push({
     id: state.nextStackId++,
     kind: 'spell',
     sourceId: obj.id,
     controller,
     cardName: card.name,
-    effect: card.spellEffect ?? [],
-    targets: [],
+    effect,
+    targets: chosen,
     description: `${card.name} (${note})`,
   });
+  // Storm: one copy per spell cast earlier this turn (Tendrils of Agony off Beseech the Mirror).
+  const copies = card.storm ? state.spellsCastThisTurn : 0;
   state.spellsCastThisTurn += 1;
+  state.players[controller].spellsCastThisTurn = (state.players[controller].spellsCastThisTurn ?? 0) + 1;
+  for (const c of card.colors) if (!(state.players[controller].colorsCastThisTurn ??= []).includes(c)) state.players[controller].colorsCastThisTurn!.push(c);
+  for (let i = 0; i < copies; i++) {
+    state.stack.push({ id: state.nextStackId++, kind: 'copy', sourceId: obj.id, controller, cardName: card.name, effect, targets: [...chosen], description: `Cópia de ${card.name}` });
+  }
   state.passCount = 0;
-  emit({ type: 'spellCast', player: controller, objectId: obj.id, cardName: card.name, targets: [] });
+  emit({ type: 'spellCast', player: controller, objectId: obj.id, cardName: card.name, targets: chosen });
   return true;
 }
 

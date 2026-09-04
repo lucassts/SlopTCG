@@ -352,6 +352,8 @@ export type PendingDecision =
       player: PlayerId;
       sourceId: number;
       cardName: string;
+      /** Free cast (cascade, suspend, Beseech the Mirror…): the spell is cast with these targets when they are chosen. */
+      freeCast?: { note: string };
       text: string;
       specs: import('./cards/types.js').TargetSpec[];
       effect: EffectStep[];

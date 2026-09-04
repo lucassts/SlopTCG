@@ -3240,6 +3240,14 @@ export class Game {
     const err = this.validateTargets(playerId, pending.specs, targets, s.objects[pending.sourceId]?.card.colors);
     if (err) { this.fail(playerId, err); return false; }
     s.pendingDecision = null;
+    if (pending.freeCast) {
+      const obj = s.objects[pending.sourceId];
+      if (!obj) return true;
+      castCardFree(s, obj, playerId, this.emit, pending.freeCast.note, targets);
+      this.fireCastTriggers(playerId, obj.card, obj, targets);
+      s.priority = playerId;
+      return true;
+    }
     s.stack.push({
       id: s.nextStackId++,
       kind: 'ability',
