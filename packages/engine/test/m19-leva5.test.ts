@@ -122,7 +122,7 @@ describe('M19 · compilação', () => {
     expect(attacksAlone.abilities?.[0]).toMatchObject({ condition: { kind: 'attackedAlone' } });
     expect(constellation.abilities?.[0]).toMatchObject({ trigger: { on: 'etb', what: { what: 'enchantment', controlledBy: 'you', other: true } } });
     expect(genericSearch.abilities?.[0].effect[0]).toMatchObject({ op: 'search', filter: { what: 'permanent', subtype: 'Bear', cmcAtMost: 2 }, to: 'battlefield' });
-    expect(lookTop.abilities?.[0].effect[0]).toEqual({ op: 'scry', count: 4 });
+    expect(lookTop.abilities?.[0].effect[0]).toEqual({ op: 'reorderTop', count: 4 });
     expect(delayedDraw.abilities?.[0].effect[0]).toMatchObject({ op: 'delayedEffect', at: 'nextUpkeep' });
     expect(mustBlock.spellEffect?.[0]).toEqual({ op: 'mustBlockSource', what: 'target:0' });
     expect(learnSpell.spellEffect?.[1]).toEqual({ op: 'learn' });

@@ -19,19 +19,19 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-04, v0.19.0 — Leva 6a parte 6, Legacy a 92,0%)
+## Estado (2026-09-04, v0.21.0 — Leva 6a parte 7, Legacy a 92,4%)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | **v0.19 (L6a·6)** |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | **13.250** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | **14.909** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | **4.921** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | **0** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | **v0.21 (L6a·7)** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | **13.277** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | **14.890** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | **4.913** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 
 **Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
 scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
 mede quanto do que se joga já é full (META% × cópias). Legacy: **43,7% →
-67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0 e **92,0%** na v0.19.0. Relatórios em `data/meta/<formato>-gap.md`.
+67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0 e **92,4%** na v0.21.0. Relatórios em `data/meta/<formato>-gap.md`.
 
 A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
 "outra face não modelada" restam 143 (versos cujo texto ainda não compila).
@@ -367,7 +367,32 @@ mana continuam permitidas durante a espera), e quando o pool cobre o custo a
 conjuração completa sozinha. "Cancelar pagamento" desiste e deixa a mana
 flutuando. A opção `manualMana` do `Game` liga o modo (o servidor liga; os
 testes e o auditor seguem no automático). No cliente, a carta grande do
-hover passou para um slot fixo no topo do painel lateral, acima do log/chat. Próximos pesos: Hexing Squelcher, Goblin Welder, Goblin
+hover passou para um slot fixo no topo do painel lateral, acima do log/chat.
+
+**Parte 7 (v0.21.0)** — pedido do Lucas: Ad Nauseam, Infernal Tutor,
+Wishclaw Talisman, Street Wraith, Thassa's Oracle, mais três correções.
+Novidades na engine: `reorderTop` (Ponder e "look at the top N… put them
+back in any order" deixam de ser vidência: o jogador clica as cartas na
+ordem, modo `order` no cliente); `adNauseam` (escolha que se repete
+enquanto o jogador disser sim); `revealFromHandRemember` + filtro de busca
+`sameNameAsRevealed` e a linha "If <cond>, instead <efeito>" em mágicas
+(Hellbent); `winGame`, condição `compare` e quantidades `devotion` /
+`librarySize` (Thassa's Oracle: `digTop` com contagem dinâmica, escolhidas
+ficam no topo, resto no fundo em ordem aleatória); `gainControl` para o
+oponente (Wishclaw); "Cycling—Pay N life"; "Activate only …" no fim de
+habilidade deixava ".." e derrubava a linha (Wishclaw e mais cinco cartas
+de cemitério com "Activate only if"). **Derrota por compra com biblioteca
+vazia** virou ação baseada em estado (regra 704.5b: marca o jogador, perde
+na próxima verificação) e Laboratory Maniac / Jace vencem em vez disso.
+**Bargain em conjuração de graça** (Beseech the Mirror buscando outro
+Beseech): a engine pergunta ao controlador qual artefato, encantamento ou
+ficha sacrificar (ou nenhum) antes de pôr a mágica na pilha — escolha
+`freeCastBargain`, interna. No cliente, todas as perguntas de conjuração e
+ataque (X, kicker, barganha, buyback, replicar, vida, casualty,
+planeswalker, exert) saíram do `confirm()`/`prompt()` do navegador para o
+modal padrão das decisões; a coluna principal do tabuleiro ficou
+`minmax(0, 1fr)` (o painel lateral não sai mais da tela quando a faixa de
+fases é larga). Próximos pesos: Hexing Squelcher, Goblin Welder, Goblin
 Engineer, Thundertrap Trainer, Magus of the Moon, Pinnacle Emissary,
 Damping Sphere, Eye of Ugin, Eldrazi Linebreaker, Thought-Knot Seer.
 

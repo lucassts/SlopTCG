@@ -21,6 +21,7 @@ import { cardMatchesFilter } from './cards/types.js';
 import {
   addPoison,
   changeLife,
+  lose,
   dealDamageToObject,
   dealDamageToPlayer,
   destroyObject,
@@ -48,7 +49,7 @@ import {
   type PendingDecision,
   type StackItem,
 } from './state.js';
-import { opponentOf, PLAYER_IDS, type PlayerId, type TargetChoice } from './types.js';
+import { opponentOf, PLAYER_IDS, type PlayerId, type TargetChoice, type Color } from './types.js';
 import { shuffle } from './rng.js';
 import { DUNGEONS } from './dungeons.js';
 import { canPay, parseCost, planPayment } from './mana.js';
@@ -128,6 +129,10 @@ export function condHolds(ctx: EffectContext, cond: import('./cards/types.js').C
     const src = ctx.state.objects[ctx.sourceId];
     return !!obj && manaValueOf(obj.card.manaCost) <= (src?.colorsSpent ?? 0);
   }
+  if (cond.kind === 'compare') {
+    const a = resolveAmount(ctx, cond.left), b = resolveAmount(ctx, cond.right);
+    return cond.cmp === 'gte' ? a >= b : cond.cmp === 'gt' ? a > b : cond.cmp === 'lte' ? a <= b : cond.cmp === 'lt' ? a < b : a === b;
+  }
   if (cond.kind === 'not') return !condHolds(ctx, cond.cond);
   if (cond.kind === 'and') return cond.conds.every((c) => condHolds(ctx, c));
   if (cond.kind === 'or') return cond.conds.some((c) => condHolds(ctx, c));
@@ -140,6 +145,26 @@ export function condHolds(ctx: EffectContext, cond: import('./cards/types.js').C
 /** Colors of the effect's source, for protection checks. */
 function sourceColors(ctx: EffectContext): import('./types.js').Color[] {
   return ctx.state.objects[ctx.sourceId]?.card.colors ?? [];
+}
+
+/** Devotion to a color: each mana symbol of that color (including hybrid) in the mana costs of permanents the player controls. */
+export function devotionTo(state: GameState, player: PlayerId, color: Color): number {
+  let n = 0;
+  for (const id of state.players[player].zones.battlefield) {
+    const cost = state.objects[id]?.card.manaCost ?? '';
+    for (const mm of cost.matchAll(/\{([^}]+)\}/g)) if (mm[1].split('/').includes(color)) n++;
+  }
+  return n;
+}
+
+/** "You may X" prompts come straight from the oracle text; the common ones get a Portuguese label, the rest are shown as a question. */
+function mayDoPrompt(raw: string): string {
+  const p = raw.replace(/^you may /i, '').replace(/\.$/, '').trim();
+  const low = p.toLowerCase();
+  if (low === 'shuffle' || low === 'shuffle your library') return 'embaralhar a biblioteca?';
+  if (low === 'draw a card') return 'comprar uma carta?';
+  if (low === 'sacrifice ~' || low === 'sacrifice it') return 'sacrificar?';
+  return `${p}?`;
 }
 
 export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
@@ -176,6 +201,8 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if ('lifeOf' in amount) return resolvePlayers(amount.lifeOf, ctx.controller).reduce((s, p) => s + ctx.state.players[p].life, 0);
   if ('times' in amount) return amount.times * resolveAmount(ctx, amount.of);
   if ('plus' in amount) return amount.plus + resolveAmount(ctx, amount.of);
+  if ('devotion' in amount) return devotionTo(ctx.state, ctx.controller, amount.devotion);
+  if ('librarySize' in amount) return ctx.state.players[amount.librarySize === 'opponent' ? opponentOf(ctx.controller) : ctx.controller].zones.library.length;
   if ('halfLibraryOf' in amount) { const n = ctx.state.players[amount.halfLibraryOf === 'opponent' ? opponentOf(ctx.controller) : ctx.controller].zones.library.length; return amount.round === 'up' ? Math.ceil(n / 2) : Math.floor(n / 2); }
   return battlefield(ctx.state).filter((o) =>
     matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId, state: ctx.state }, amount.per, o),
@@ -199,9 +226,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -213,7 +240,7 @@ interface ChoiceSetup {
   min: number;
   max: number;
   prompt: string;
-  mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
+  mode: 'cards' | 'scry' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
   /** 'confirm' with nothing to decide (target gone / can't pay) resolves immediately. */
   autoAnswer?: 'yes' | 'no' | 'skip';
 }
@@ -315,7 +342,7 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const who = searchPlayer(ctx, step.who);
       const options = state.players[who].zones.library
         .map((id) => state.objects[id])
-        .filter((o) => cardMatchesFilter(o.card, filter))
+        .filter((o) => cardMatchesFilter(o.card, filter) && (!filter?.sameNameAsRevealed || o.card.name === state.lastRevealedName))
         .map((o) => o.id);
       if (step.who && options.length === 0) return { player: who, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
       return {
@@ -354,7 +381,7 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         options: [],
         min: 0,
         max: 0,
-        prompt: `${ctx.sourceName}: ${step.prompt ?? 'aplicar o efeito opcional?'}`,
+        prompt: `${ctx.sourceName}: ${step.prompt ? mayDoPrompt(step.prompt) : 'aplicar o efeito opcional?'}`,
         mode: 'confirm',
       };
     case 'payOrElse': {
@@ -548,10 +575,32 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       return { player: controller, options, min: n, max: n, prompt: `${ctx.sourceName}: escolha ${step.count} carta(s) da mão para o topo da biblioteca (a primeira fica no topo)`, mode: 'cards' };
     }
     case 'digTop': {
-      const top = state.players[controller].zones.library.slice(0, step.count);
+      const top = state.players[controller].zones.library.slice(0, Math.max(0, resolveAmount(ctx, step.count)));
       const options = top.filter((id) => cardMatchesFilter(state.objects[id].card, step.filter));
       if (top.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
-      return { player: controller, options, min: 0, max: Math.min(step.pick, options.length), prompt: `${ctx.sourceName}: olhe as ${top.length} do topo — escolha até ${step.pick} para ${step.to === 'battlefield' ? 'o campo de batalha' : 'a mão'} (o resto vai para ${step.rest === 'graveyard' ? 'o cemitério' : step.rest === 'top' ? 'o topo' : 'o fundo'})`, mode: 'cards' };
+      const dest = step.to === 'battlefield' ? 'o campo de batalha' : step.to === 'top' ? 'manter no topo' : 'a mão';
+      const rest = step.rest === 'graveyard' ? 'o cemitério' : step.rest === 'top' ? 'o topo' : step.restRandom ? 'o fundo, em ordem aleatória' : 'o fundo';
+      return { player: controller, options, min: 0, max: Math.min(step.pick, options.length), prompt: `${ctx.sourceName}: olhe as ${top.length} do topo — escolha até ${step.pick} para ${dest} (o resto vai para ${rest})`, mode: 'cards' };
+    }
+    case 'reorderTop': {
+      const top = state.players[controller].zones.library.slice(0, step.count);
+      if (top.length <= 1) return { player: controller, options: top, min: top.length, max: top.length, prompt: '', mode: 'cards' };
+      return { player: controller, options: top, min: top.length, max: top.length, prompt: `${ctx.sourceName}: olhe as ${top.length} cartas do topo e clique nelas na ordem em que ficarão (a primeira clicada fica no topo)`, mode: 'order' };
+    }
+    case 'adNauseam': {
+      const ps = state.players[controller];
+      if (ps.zones.library.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'no' };
+      return { player: controller, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: revelar a carta do topo, colocá-la na mão e perder vida igual ao valor de mana dela? (biblioteca: ${ps.zones.library.length}, vida: ${ps.life})`, mode: 'confirm' };
+    }
+    case 'revealFromHandRemember': {
+      const options = [...state.players[controller].zones.hand];
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 1, max: 1, prompt: `${ctx.sourceName}: escolha uma carta da mão para revelar`, mode: 'cards' };
+    }
+    case 'freeCastBargain': {
+      const o = state.objects[step.objectId];
+      const options = state.players[controller].zones.battlefield.filter((id) => { const p = state.objects[id]; return !!p && (p.card.types.includes('Artifact') || p.card.types.includes('Enchantment') || p.isToken); });
+      return { player: controller, options, min: 0, max: 1, prompt: `${o?.card.name ?? '?'} (${step.note}): barganhar? Escolha um artefato, encantamento ou ficha para sacrificar — confirme sem escolher para conjurar sem barganha`, mode: 'cards' };
     }
     case 'chooseValue':
       return {
@@ -920,19 +969,62 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       return;
     }
     case 'digTop': {
-      const top = state.players[ctx.controller].zones.library.slice(0, step.count);
+      const top = state.players[ctx.controller].zones.library.slice(0, Math.max(0, resolveAmount(ctx, step.count)));
       const chosen = new Set(picks);
-      const rest: number[] = [];
+      let rest: number[] = [];
       for (const id of top) {
         const o = state.objects[id];
-        if (chosen.has(id)) moveWithEvent(state, o, step.to ?? 'hand', 'searched', emit);
+        if (chosen.has(id)) { if (step.to !== 'top') moveWithEvent(state, o, step.to ?? 'hand', 'searched', emit); }
         else rest.push(id);
       }
+      if (step.restRandom) { const r = shuffle(rest, state.rngState); rest = r.items; state.rngState = r.state; }
       for (const id of rest) {
         const o = state.objects[id];
         if (step.rest === 'graveyard') moveWithEvent(state, o, 'graveyard', 'milled', emit);
         else if (step.rest === 'bottom') moveWithEvent(state, o, 'library', 'returned', emit, 'bottom');
       }
+      if (step.to === 'top') emit({ type: 'fizzled', description: `${ctx.sourceName}: ${chosen.size} carta(s) ficaram no topo, ${rest.length} foram para o fundo` });
+      return;
+    }
+    case 'reorderTop': {
+      const lib = state.players[ctx.controller].zones.library;
+      const top = lib.slice(0, step.count);
+      const ordered = picks.filter((id) => top.includes(id));
+      const newTop = [...ordered, ...top.filter((id) => !ordered.includes(id))];
+      lib.splice(0, top.length, ...newTop);
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: as ${top.length} cartas do topo foram reordenadas` });
+      return;
+    }
+    case 'adNauseam': {
+      if (text !== 'yes') return;
+      const ps = state.players[ctx.controller];
+      const id = ps.zones.library[0];
+      const o = id !== undefined ? state.objects[id] : undefined;
+      if (!o) return;
+      const mv = manaValueOf(o.card.manaCost);
+      moveWithEvent(state, o, 'hand', 'returned', emit);
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${ps.name} revelou ${o.card.name} (valor de mana ${mv}) e a colocou na mão` });
+      if (mv > 0) changeLife(state, ctx.controller, -mv, ctx.sourceName, emit);
+      return;
+    }
+    case 'revealFromHandRemember': {
+      const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      if (!o || o.zone !== 'hand' || o.owner !== ctx.controller) { state.lastRevealedName = undefined; return; }
+      state.lastRevealedName = o.card.name;
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} revelou ${o.card.name} da mão` });
+      return;
+    }
+    case 'freeCastBargain': {
+      const o = state.objects[step.objectId];
+      if (!o) return;
+      const sac = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      let bargained = false;
+      if (sac && sac.zone === 'battlefield' && sac.controller === ctx.controller) {
+        moveWithEvent(state, sac, 'graveyard', 'sacrificed', emit);
+        emit({ type: 'fizzled', description: `${o.card.name}: barganha — ${sac.card.name} sacrificado` });
+        bargained = true;
+      }
+      castCardFree(state, o, ctx.controller, emit, step.note, undefined, { bargained, bargainDecided: true });
       return;
     }
     case 'chooseValue': {
@@ -1106,6 +1198,7 @@ function branchOf(step: ChoiceStep, outcome: boolean | void, text: string | unde
   if (step.op === 'mayDo') return text === 'yes' ? step.effect : step.else ?? [];
   if (step.op === 'payOrElse') return outcome === true ? step.then ?? [] : step.else;
   if (step.op === 'if') return outcome === true ? step.then : step.else ?? [];
+  if (step.op === 'adNauseam') return text === 'yes' ? [step] : [];
   return [];
 }
 
@@ -2169,20 +2262,29 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       return;
     }
 
-    case 'gainControl':
+    case 'gainControl': {
+      const newController = step.to === 'opponent' ? opponentOf(ctx.controller) : ctx.controller;
       for (const t of resolveSubject(ctx, step.what)) {
         const obj = objectAlive(state, t);
-        if (!obj || obj.zone !== 'battlefield' || obj.controller === ctx.controller) continue;
+        if (!obj || obj.zone !== 'battlefield' || obj.controller === newController) continue;
         const from = obj.controller;
         const fromArr = state.players[from].zones.battlefield;
         const i = fromArr.indexOf(obj.id);
         if (i >= 0) fromArr.splice(i, 1);
-        obj.controller = ctx.controller;
-        state.players[ctx.controller].zones.battlefield.push(obj.id);
+        obj.controller = newController;
+        state.players[newController].zones.battlefield.push(obj.id);
         if (step.untilEndOfTurn) state.controlReverts.push({ objectId: obj.id, to: from });
-        emit({ type: 'controlChanged', objectId: obj.id, cardName: obj.card.name, to: ctx.controller });
+        emit({ type: 'controlChanged', objectId: obj.id, cardName: obj.card.name, to: newController });
       }
       return;
+    }
+    case 'winGame': {
+      for (const p of resolvePlayers(step.who, ctx.controller)) {
+        lose(state, opponentOf(p), `perdeu — ${state.players[p].name} venceu o jogo com ${ctx.sourceName}`, emit);
+        return;
+      }
+      return;
+    }
 
     case 'copySpell':
       for (const t of resolveSubject(ctx, step.what)) {
@@ -2303,7 +2405,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
  * madness after paying). Only cards that need no targets — a free cast that
  * needs targets stays where it is and is logged.
  */
-export function castCardFree(state: GameState, obj: GameObject, controller: PlayerId, emit: Emit, note: string, targets?: TargetChoice[]): boolean {
+export function castCardFree(state: GameState, obj: GameObject, controller: PlayerId, emit: Emit, note: string, targets?: TargetChoice[], opts?: { bargained?: boolean; bargainDecided?: boolean }): boolean {
   const card = obj.card;
   if (card.types.includes('Land')) return false;
   const needsModes = !!card.enchant || (card.spellModes?.length ?? 0) > 0;
@@ -2311,10 +2413,27 @@ export function castCardFree(state: GameState, obj: GameObject, controller: Play
     emit({ type: 'fizzled', description: `${card.name}: precisa de modos/anexo — não pode ser conjurada automaticamente (${note})` });
     return false;
   }
+  // Bargain is decided as the spell is cast, even when it's cast for free (Beseech the Mirror into another Beseech):
+  // the controller picks an artifact, enchantment or token to sacrifice (or none), then the cast goes on.
+  if (card.kicker?.sacrifice && !opts?.bargainDecided) {
+    state.pendingDecision = {
+      type: 'effectChoice', player: controller, prompt: '', mode: 'cards', options: [], min: 0, max: 0,
+      resume: { controller, sourceId: obj.id, sourceName: card.name, targets: [], current: { op: 'freeCastBargain', objectId: obj.id, note }, remaining: [], finishSpellId: null },
+    };
+    const setup = setupChoice({ state, controller, sourceId: obj.id, sourceName: card.name, targets: [], emit }, { op: 'freeCastBargain', objectId: obj.id, note });
+    if (setup.options.length === 0) {
+      state.pendingDecision = null;
+      return castCardFree(state, obj, controller, emit, note, targets, { bargained: false, bargainDecided: true });
+    }
+    Object.assign(state.pendingDecision, { prompt: setup.prompt, options: setup.options, min: setup.min, max: setup.max });
+    emit({ type: 'fizzled', description: `${card.name} (${note}): decida a barganha` });
+    return true;
+  }
+  const bargained = !!opts?.bargained;
   const specs = card.spellTargets ?? [];
   if (specs.length > 0 && !targets) {
     // Targets are chosen by the controller; the cast completes in doChooseTargets (Tendrils via Beseech, cascade into a burn spell…).
-    state.pendingDecision = { type: 'chooseTargets', player: controller, sourceId: obj.id, cardName: card.name, specs, effect: card.spellEffect ?? [], text: note, freeCast: { note } };
+    state.pendingDecision = { type: 'chooseTargets', player: controller, sourceId: obj.id, cardName: card.name, specs, effect: card.spellEffect ?? [], text: note, freeCast: { note, bargained } };
     emit({ type: 'fizzled', description: `${card.name} (${note}): escolha os alvos` });
     return true;
   }
@@ -2324,8 +2443,9 @@ export function castCardFree(state: GameState, obj: GameObject, controller: Play
   obj.controller = controller;
   obj.wasCast = true;
   obj.castFromHand = false;
+  obj.kicked = bargained || undefined;
   const chosen = targets ?? [];
-  const effect = card.spellEffect ?? [];
+  const effect = bargained && card.kicker ? [...(card.spellEffect ?? []), ...card.kicker.effect] : card.spellEffect ?? [];
   state.stack.push({
     id: state.nextStackId++,
     kind: 'spell',

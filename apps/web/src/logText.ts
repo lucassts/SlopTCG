@@ -103,7 +103,7 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
     case 'scried':
       return `${name(ev.player)} olhou as ${ev.looked} carta(s) do topo e mandou ${ev.bottomed} para o fundo.`;
     case 'searched': {
-      const dest = ev.to === 'hand' ? 'mão' : ev.to === 'battlefield' ? 'campo de batalha' : 'topo da biblioteca';
+      const dest = ev.to === 'hand' ? 'mão' : ev.to === 'battlefield' ? 'campo de batalha' : ev.to === 'exile' ? 'exílio' : 'topo da biblioteca';
       return ev.found.length > 0
         ? `${name(ev.player)} buscou ${ev.found.join(', ')} (→ ${dest}).`
         : `${name(ev.player)} não encontrou nada na busca.`;

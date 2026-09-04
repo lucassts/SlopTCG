@@ -151,6 +151,18 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
   const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' | 'sideboard' } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  // Perguntas de conjuração/ataque (X, kicker, barganha, buyback, replicar, vida, casualty, exert…):
+  // modal no mesmo padrão das decisões da engine — nada de confirm()/prompt() do navegador.
+  const [ask, setAsk] = useState<{ title: string; text: string; kind: 'confirm' | 'number'; yes?: string; no?: string; resolve: (v: string | null) => void } | null>(null);
+  const [askValue, setAskValue] = useState('');
+  const askConfirm = (title: string, text: string, yes = 'Sim', no = 'Não') =>
+    new Promise<boolean>((resolve) => setAsk({ title, text, kind: 'confirm', yes, no, resolve: (v) => resolve(v === 'yes') }));
+  const askNumber = (title: string, text: string, defaultValue = '0') =>
+    new Promise<number | null>((resolve) => {
+      setAskValue(defaultValue);
+      setAsk({ title, text, kind: 'number', resolve: (v) => { if (v === null) return resolve(null); const n = parseInt(v, 10); resolve(Number.isInteger(n) && n >= 0 ? n : null); } });
+    });
+  const answerAsk = (v: string | null) => { if (!ask) return; const r = ask.resolve; setAsk(null); r(v); };
   const [actionMenu, setActionMenu] = useState<ActionMenu | null>(null);
   const [colorPick, setColorPick] = useState<{ objectId: number; abilityIndex: number; colors: string[]; name: string } | null>(null);
   const [nameText, setNameText] = useState('');
@@ -551,7 +563,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   };
 
   /** Start casting: asks for X/kicker, then sacrifices/targets, then sends. */
-  const beginCast = (
+  const beginCast = async (
     cv: CardView,
     mode: number | undefined,
     fromGraveyard = false,
@@ -561,28 +573,29 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     const def = (extra.face === 'back' || extra.method === 'disturb') && cv.card.backFace ? cv.card.backFace : cv.card;
     let x: number | undefined;
     if (def.manaCost && def.manaCost.includes('{X}')) {
-      const raw = prompt(`${def.name}: escolha o valor de X`, '1');
-      if (raw === null) return;
-      x = parseInt(raw, 10);
-      if (!Number.isInteger(x) || x < 0) return;
+      const n = await askNumber(def.name, 'Escolha o valor de X', '1');
+      if (n === null) return;
+      x = n;
     }
     let kicked: boolean | undefined;
     let kickerTimes: number | undefined;
     if (def.kicker && def.multikicker) {
-      const raw = prompt(`${def.name}: quantas vezes pagar ${def.kicker.cost}? (0 = nenhuma)`, '0');
-      if (raw === null) return;
-      kickerTimes = parseInt(raw, 10);
-      if (!Number.isInteger(kickerTimes) || kickerTimes < 0) return;
+      const n = await askNumber(def.name, `Quantas vezes pagar ${def.kicker.cost}? (0 = nenhuma)`, '0');
+      if (n === null) return;
+      kickerTimes = n;
       kicked = kickerTimes > 0;
-    } else if (def.kicker) kicked = confirm(`${def.name}: ${def.kicker.label ? `${def.kicker.label}?` : `pagar o kicker ${def.kicker.cost}?`}`);
+    } else if (def.kicker) {
+      kicked = def.kicker.sacrifice
+        ? await askConfirm(def.name, 'Barganhar? Você sacrifica um artefato, encantamento ou ficha ao conjurar (escolhido a seguir).', 'Barganhar', 'Sem barganha')
+        : await askConfirm(def.name, def.kicker.label ? `${def.kicker.label}?` : `Pagar o kicker ${def.kicker.cost}?`, 'Pagar', 'Não pagar');
+    }
     let buyback: boolean | undefined;
-    if (def.buyback && !extra.method) buyback = confirm(`${def.name}: pagar buyback ${def.buyback} (volta para a mão)?`);
+    if (def.buyback && !extra.method) buyback = await askConfirm(def.name, `Pagar buyback ${def.buyback}? (a mágica volta para a mão)`, 'Pagar', 'Não pagar');
     let replicateTimes: number | undefined;
     if (def.replicate && !extra.method) {
-      const raw = prompt(`${def.name}: quantas vezes pagar replicar ${def.replicate}? (0 = nenhuma; cada uma cria uma cópia)`, '0');
-      if (raw === null) return;
-      replicateTimes = parseInt(raw, 10);
-      if (!Number.isInteger(replicateTimes) || replicateTimes < 0) return;
+      const n = await askNumber(def.name, `Quantas vezes pagar replicar ${def.replicate}? (0 = nenhuma; cada uma cria uma cópia)`, '0');
+      if (n === null) return;
+      replicateTimes = n;
     }
     // Custo adicional de sacrifício (Fling; flashback da Cabal Therapy; emerge; bargain):
     // escolhido como os primeiros "alvos".
@@ -594,9 +607,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       what: def.additionalCost?.sacrifice?.what ?? fbSac?.what ?? emergeSac ?? bargainSac ?? 'permanent',
     }));
     // Custo adicional de vida (Leva 5): confirmação explícita.
-    if (def.additionalCost?.payLife && !confirm(`${def.name}: pagar ${def.additionalCost.payLife} pontos de vida como custo adicional?`)) return;
+    if (def.additionalCost?.payLife && !(await askConfirm(def.name, `Pagar ${def.additionalCost.payLife} pontos de vida como custo adicional?`, 'Pagar', 'Cancelar'))) return;
     // Casualty N (Leva 5b): sacrifício opcional para copiar a mágica.
-    const casualtyPick = def.casualty !== undefined && confirm(`${def.name}: casualty ${def.casualty} — sacrificar uma criatura com poder ${def.casualty} ou mais para copiar a mágica?`);
+    const casualtyPick = def.casualty !== undefined && (await askConfirm(def.name, `Casualty ${def.casualty}: sacrificar uma criatura com poder ${def.casualty} ou mais para copiar a mágica?`, 'Sacrificar', 'Não'));
     if (casualtyPick) sacSpecs.push({ what: `criatura com poder ${def.casualty} ou mais para sacrificar (casualty)` });
     // Retrace: uma carta de terreno da mão para descartar, antes de tudo. Custo adicional de descarte: N cartas da mão.
     const discardCost = extra.method !== 'retrace' ? def.additionalCost?.discard ?? 0 : 0;
@@ -814,19 +827,19 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     setMenu({ x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 320), card: cv });
   };
 
-  const confirmAttack = () => {
+  const confirmAttack = async () => {
     let defendTarget: number | undefined;
     const enemyWalkers = opp.battlefield.filter((c) => c.card.types.includes('Planeswalker'));
     if (attackSel.size > 0 && enemyWalkers.length > 0) {
       const pw = enemyWalkers[0];
-      if (confirm(`Atacar ${pw.card.name} em vez do jogador? (OK = planeswalker, Cancelar = jogador)`))
+      if (await askConfirm('Ataque', `Atacar ${pw.card.name} em vez do jogador?`, 'Planeswalker', 'Jogador'))
         defendTarget = pw.objectId;
     }
     // Exert: pergunta por atacante que permite ("you may exert ~ as it attacks").
     const exerted: number[] = [];
     for (const id of attackSel) {
       const c = me.battlefield.find((x) => x.objectId === id);
-      if (c?.card.canExert && confirm(`Exert ${c.card.name}? (não desvira no seu próximo turno)`)) exerted.push(id);
+      if (c?.card.canExert && (await askConfirm(c.card.name, 'Exert? (não desvira no seu próximo turno)', 'Exert', 'Não'))) exerted.push(id);
     }
     onAction({ type: 'declareAttackers', attackers: [...attackSel], defendTarget, exerted: exerted.length > 0 ? exerted : undefined });
   };
@@ -1307,6 +1320,33 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       )}
 
       {/* -------- sim/não (Mana Leak: pagar ou deixar anular) -------- */}
+      {/* -------- perguntas de conjuração/ataque (X, kicker, barganha, buyback…) -------- */}
+      {ask && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>{ask.title}</h2>
+            <div className="muted">{ask.text}</div>
+            {ask.kind === 'number' && (
+              <input
+                autoFocus
+                type="number"
+                min={0}
+                value={askValue}
+                onChange={(e) => setAskValue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && askValue.trim() !== '') answerAsk(askValue.trim()); }}
+                style={{ width: 'min(200px, 60vw)' }}
+              />
+            )}
+            <div className="row">
+              <button className="primary" disabled={ask.kind === 'number' && askValue.trim() === ''} onClick={() => answerAsk(ask.kind === 'number' ? askValue.trim() : 'yes')}>
+                {ask.kind === 'number' ? 'Confirmar' : ask.yes ?? 'Sim'}
+              </button>
+              <button onClick={() => answerAsk(ask.kind === 'number' ? null : 'no')}>{ask.kind === 'number' ? 'Cancelar' : ask.no ?? 'Não'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {myChoice && myChoice.mode === 'confirm' && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
@@ -1501,10 +1541,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       )}
 
       {/* -------- escolha de efeito (descarte, sacrifício, vidência, busca) -------- */}
-      {myChoice && (myChoice.mode === 'cards' || myChoice.mode === 'scry') && myChoice.options && (
+      {myChoice && (myChoice.mode === 'cards' || myChoice.mode === 'scry' || myChoice.mode === 'order') && myChoice.options && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>{myChoice.mode === 'scry' ? 'Vidência' : 'Escolha'}</h2>
+            <h2>{myChoice.mode === 'scry' ? 'Vidência' : myChoice.mode === 'order' ? 'Ordem' : 'Escolha'}</h2>
             <div className="muted">{myChoice.prompt}</div>
             <div className="mulligan-hand choice-hand">
               {myChoice.options.map((c) => (
@@ -1513,6 +1553,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
                   card={c}
                   size="hand"
                   selected={choiceSel.has(c.objectId)}
+                  badge={myChoice.mode === 'order' && choiceSel.has(c.objectId) ? String([...choiceSel].indexOf(c.objectId) + 1) : undefined}
                   onClick={(e) => {
                     e.stopPropagation();
                     const next = new Set(choiceSel);
@@ -1525,6 +1566,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
             </div>
             {myChoice.mode === 'scry' && (
               <div className="muted">Selecionadas vão para o fundo; as demais continuam no topo, na mesma ordem.</div>
+            )}
+            {myChoice.mode === 'order' && (
+              <div className="muted">Clique nas cartas na ordem em que ficarão: 1 é o topo da biblioteca.</div>
             )}
             <button
               className="primary"

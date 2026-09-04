@@ -612,6 +612,20 @@ function parseEffectText(
   }
   // Tamiyo +2.
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Ad Nauseam.
+  if (/^Reveal the top card of your library and put that card into your hand\. You lose life equal to its mana value\. You may repeat this process any number of times\.$/i.test(text)) return { steps: [{ op: 'adNauseam' }] };
+  // Infernal Tutor (linha 1; a linha Hellbent vira "If …, instead …" no parseLine).
+  if (/^Reveal a card from your hand\. Search your library for a card with the same name as that card, reveal it, put it into your hand, then shuffle\.$/i.test(text)) {
+    return { steps: [{ op: 'revealFromHandRemember' }, { op: 'search', filter: { sameNameAsRevealed: true }, count: 1, to: 'hand' }] };
+  }
+  // Thassa's Oracle.
+  if ((m = text.match(/^look at the top X cards of your library, where X is your devotion to (white|blue|black|red|green)\. Put up to one of them on top of your library and the rest on the bottom of your library in a random order\. If X is greater than or equal to the number of cards in your library, you win the game\.$/i))) {
+    const color = ({ white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' } as const)[m[1].toLowerCase() as 'white' | 'blue' | 'black' | 'red' | 'green'];
+    return { steps: [
+      { op: 'digTop', count: { devotion: color }, pick: 1, rest: 'bottom', to: 'top', restRandom: true },
+      { op: 'if', cond: { kind: 'compare', left: { devotion: color }, cmp: 'gte', right: { librarySize: 'controller' } }, then: [{ op: 'winGame', who: 'controller' }] },
+    ] };
+  }
   // Beseech the Mirror.
   if ((m = text.match(/^Search your library for a card, exile it face down, then shuffle\. If (?:this spell|~) was bargained, you may cast the exiled card without paying its mana cost if that spell's mana value is (\d+) or less\. Put the exiled card into your hand if it wasn't cast this way\.$/i))) {
     return { steps: [{ op: 'search', count: 1, to: 'exile' }, { op: 'castSearchedExiledOrHand', maxCmc: parseInt(m[1], 10), requiresKicked: true }] };
@@ -758,6 +772,7 @@ function parseEffectText(
       return null;
     }
     if (/^Spend this mana only /i.test(sentence)) continue;
+    if (/^An opponent gains control of ~$/i.test(sentence)) { steps.push({ op: 'gainControl', what: 'self', to: 'opponent' }); continue; }
     // Overlord of the Balemurk: "mill four cards, then you may return a non-Avatar creature card or a planeswalker card from your graveyard to your hand".
     if ((m = sentence.match(/^mill (\w+) cards?, then you may return (?:a|an) (.+?) from your graveyard to your hand$/i))) {
       const n = num(m[1]);
@@ -934,6 +949,8 @@ interface ParseState {
   protectionFrom: Color[];
   entersTapped: boolean;
   cyclingMana?: string;
+  /** Street Wraith: "Cycling—Pay 2 life." */
+  cyclingLife?: number;
   flashbackCost?: string;
   flashbackSacrifice?: FilterSpec;
   altCost?: CardDefinition['altCost'];
@@ -1003,7 +1020,7 @@ interface ParseState {
   /** Spree: modal spell whose modes carry their own costs. */
   spree?: boolean;
   /** Leva 6a (Legacy, parte 3). */
-  flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored'>>;
+  flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
   /** Leva 6a (Legacy): travas, substituições, uma mágica não-criatura por turno. */
@@ -1763,6 +1780,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   }
   // ---- Leva 6a (Legacy, parte 3): Quantum Riddler, Ascend, Omniscience, Aluren, Disruptor Flute, Boseiju, Amped Raptor, Ugin
   if (/^Ascend$/i.test(line)) { st.flags10.ascend = true; return true; }
+  if (/^If you would draw a card while your library has no cards in it, you win the game instead\.$/i.test(line)) { st.flags10.winOnDrawFromEmpty = true; return true; }
   if (/^You may cast spells from your hand without paying their mana costs\.$/i.test(line)) { st.flags10.freeSpellsFromHand = true; return true; }
   if (/^Any player may cast creature spells with mana value 3 or less without paying their mana costs and as though they had flash\.$/i.test(line)) { st.flags10.aluren = true; return true; }
   if ((m = line.match(/^Spells with the chosen name cost ((?:\{[^}]+\})+) more to cast\.$/i))) { (st.costModifiers ??= []).push({ amount: manaValueOfCost(m[1]), whose: 'any', chosenName: true }); return true; }
@@ -2272,6 +2290,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
 
   // ---- cycling / flashback / alt cost
   if ((m = line.match(/^Cycling (\{[^}]+\}(?:\{[^}]+\})*)$/i))) { st.cyclingMana = m[1]; return true; }
+  if ((m = line.match(/^Cycling—Pay (\d+) life\.?$/i))) { st.cyclingLife = parseInt(m[1], 10); return true; }
   if ((m = line.match(/^Kicker ((?:\{[^}]+\})+)$/i))) { st.kickerCost = m[1]; return true; }
   if ((m = line.match(/^Flashback ((?:\{[^}]+\})+)$/i))) { st.flashbackCost = m[1]; return true; }
   if (/^Flashback—Sacrifice a creature\.$/i.test(line)) { st.flashbackSacrifice = { what: 'creature' }; return true; }
@@ -2399,16 +2418,16 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
       rest = false;
       let am: RegExpMatchArray | null;
       if (/ Activate only as a sorcery\.$/i.test(body)) { sorceryOnly = true; body = body.replace(/\.? Activate only as a sorcery\.$/i, '.'); rest = true; }
-      else if (/ Activate only once each turn\.$/i.test(body)) { maxPerTurn = 1; body = body.replace(/ Activate only once each turn\.$/i, '.'); rest = true; }
-      else if ((am = body.match(/ Activate no more than (\w+) times? each turn\.$/i))) { maxPerTurn = num(am[1]) ?? undefined; body = body.replace(/ Activate no more than \w+ times? each turn\.$/i, '.'); rest = true; }
-      else if (/ Activate only during your turn\.$/i.test(body)) { actCond = { kind: 'yourTurn' }; body = body.replace(/ Activate only during your turn\.$/i, '.'); rest = true; }
-      else if (/ Activate only during combat\.$/i.test(body)) { body = body.replace(/ Activate only during combat\.$/i, '.'); rest = true; }
-      else if (/ Activate only as an instant\.$/i.test(body)) { body = body.replace(/ Activate only as an instant\.$/i, '.'); rest = true; }
+      else if (/ Activate only once each turn\.$/i.test(body)) { maxPerTurn = 1; body = body.replace(/\.? Activate only once each turn\.$/i, '.'); rest = true; }
+      else if ((am = body.match(/ Activate no more than (\w+) times? each turn\.$/i))) { maxPerTurn = num(am[1]) ?? undefined; body = body.replace(/\.? Activate no more than \w+ times? each turn\.$/i, '.'); rest = true; }
+      else if (/ Activate only during your turn\.$/i.test(body)) { actCond = { kind: 'yourTurn' }; body = body.replace(/\.? Activate only during your turn\.$/i, '.'); rest = true; }
+      else if (/ Activate only during combat\.$/i.test(body)) { body = body.replace(/\.? Activate only during combat\.$/i, '.'); rest = true; }
+      else if (/ Activate only as an instant\.$/i.test(body)) { body = body.replace(/\.? Activate only as an instant\.$/i, '.'); rest = true; }
       else if ((am = body.match(/ Activate only if (.+?)\.$/i))) {
         const c = parseCondG(am[1]);
         if (!c) return false;
         actCond = actCond ? { kind: 'and', conds: [actCond, c] } : c;
-        body = body.replace(/ Activate only if .+?\.$/i, '.');
+        body = body.replace(/\.? Activate only if .+?\.$/i, '.');
         rest = true;
       }
     }
@@ -2447,6 +2466,14 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
       if (st.spellTargets.length > 0) return false;
       st.spellTargets.push({ what: 'player' });
       st.spellEffect.push({ op: 'nameCardDiscard', who: 'target:0' });
+      return true;
+    }
+    // "Hellbent — If you have no cards in hand, instead <effect>": the alternative replaces everything parsed so far.
+    if (st.spellEffect.length > 0 && (m = line.match(/^If (.+?), instead (.+)$/i))) {
+      const cond = parseCondG(m[1]);
+      const alt = cond ? parseEffectText(m[2], { pronoun: 'self', pronounPlayer: 'controller', priorSpecs: st.spellTargets }) : null;
+      if (!cond || !alt || specsOf(alt)) return false;
+      st.spellEffect = [{ op: 'if', cond, then: alt.steps, else: [...st.spellEffect] }];
       return true;
     }
     const parsed = parseEffectText(line, { pronoun: st.spellTargets.length > 0 ? `target:${st.spellTargets.length - 1}` : 'self', pronounPlayer: 'controller', priorSpecs: st.spellTargets });
@@ -2615,7 +2642,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     entersTapped: st.entersTapped || undefined,
     entersWithCounters: st.entersWithCounters,
     additionalCost: st.additionalCost,
-    cycling: st.cyclingMana ? { mana: st.cyclingMana, effect: st.cyclingEffect } : undefined,
+    cycling: st.cyclingMana || st.cyclingLife ? { mana: st.cyclingMana, life: st.cyclingLife, effect: st.cyclingEffect } : undefined,
     loyalty: types.includes('Planeswalker') ? input.loyalty : undefined,
     crew: st.crew,
     evasionPowerAtMost: st.evasionPowerAtMost,

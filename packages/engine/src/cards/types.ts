@@ -25,6 +25,8 @@ export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | '
  */
 export type Cond =
   | { kind: 'yourTurn' }
+  /** Numeric comparison between two amounts ("If X is greater than or equal to the number of cards in your library"). */
+  | { kind: 'compare'; left: DynAmount; cmp: 'gte' | 'gt' | 'lte' | 'lt' | 'eq'; right: DynAmount }
   // ---- Leva 6a
   | { kind: 'topCardIs'; filter: FilterSpec }
   | { kind: 'firstSpellThisGame' }
@@ -134,6 +136,8 @@ export interface FilterSpec {
   controlledBy?: 'you' | 'opponent' | 'any';
   /** Exclude the effect's own source ("another creature…"). */
   other?: boolean;
+  /** Infernal Tutor: same name as the card revealed by the previous `revealFromHandRemember`. */
+  sameNameAsRevealed?: boolean;
   /** "artifact or enchantment" as a filter (overload, bargain). */
   typeAnyOf?: CardType[];
   /** Bargain: "an artifact, enchantment, or token" — a token also qualifies. */
@@ -217,7 +221,11 @@ export type DynAmount =
   /** Instant and sorcery cards exiled with delve when this was cast (Murktide Regent). */
   | 'delvedCount'
   /** "half the number of cards in your library, rounded up" (Tamiyo). */
-  | { halfLibraryOf: PlayerSel; round: 'up' | 'down' };
+  | { halfLibraryOf: PlayerSel; round: 'up' | 'down' }
+  /** Devotion to a color: mana symbols of that color in the mana costs of permanents you control (Thassa's Oracle). */
+  | { devotion: Color }
+  /** Number of cards in a library. */
+  | { librarySize: PlayerSel };
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
@@ -385,7 +393,17 @@ export type EffectStep =
   /** Flicker: exile the subject and return it to the battlefield under its owner's control. */
   | { op: 'blink'; what: SubjectRef }
   /** (choice) "Look at the top N cards. Put up to `pick` of them (matching filter) into your hand; the rest on the bottom / into your graveyard." */
-  | { op: 'digTop'; count: number; pick: number; filter?: FilterSpec; rest: 'bottom' | 'graveyard' | 'top'; to?: 'hand' | 'battlefield' }
+  | { op: 'digTop'; count: DynAmount; pick: number; filter?: FilterSpec; rest: 'bottom' | 'graveyard' | 'top'; /** 'top': the chosen cards stay on top (Thassa's Oracle). */ to?: 'hand' | 'battlefield' | 'top'; /** The rest goes to the bottom in a random order. */ restRandom?: boolean }
+  /** (choice) Ponder: look at the top N cards and put them back in any order (picks = the new order, first = top). */
+  | { op: 'reorderTop'; count: number }
+  /** (choice) Ad Nauseam: reveal the top card, put it into your hand, lose life equal to its mana value; may repeat. */
+  | { op: 'adNauseam' }
+  /** (choice) Infernal Tutor: reveal a card from your hand; a following search with `sameNameAsRevealed` matches that name. */
+  | { op: 'revealFromHandRemember' }
+  /** (choice, internal) Free cast of a bargain spell: pick an artifact, enchantment or token to sacrifice (none = not bargained), then cast. */
+  | { op: 'freeCastBargain'; objectId: number; note: string }
+  /** "You win the game." */
+  | { op: 'winGame'; who: PlayerSel }
   /** "Exile the top N cards of your library" (no play permission). */
   | { op: 'exileTopSelf'; count: number }
   // ---- Leva 5 (gramática 2)
@@ -594,7 +612,7 @@ export type EffectStep =
   | { op: 'regenerate'; what: SubjectRef }
   | { op: 'shuffle'; who: PlayerSel }
   /** Take control of a permanent (optionally until end of turn, Act of Treason-style). */
-  | { op: 'gainControl'; what: SubjectRef; untilEndOfTurn?: boolean }
+  | { op: 'gainControl'; what: SubjectRef; untilEndOfTurn?: boolean; /** Wishclaw Talisman: "An opponent gains control of ~". */ to?: 'opponent' }
   /** Copy a spell on the stack (the copy keeps the same targets). */
   | { op: 'copySpell'; what: SubjectRef }
   /** Fog: no combat damage is dealt for the rest of this turn. */
@@ -1096,6 +1114,8 @@ export interface CardDefinition {
   allLandsAreType?: 'Plains' | 'Island' | 'Swamp' | 'Mountain' | 'Forest';
   /** Emrakul: "protection from spells that are one or more colors". */
   protectionFromColored?: boolean;
+  /** Laboratory Maniac: "If you would draw a card while your library has no cards in it, you win the game instead." */
+  winOnDrawFromEmpty?: boolean;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy

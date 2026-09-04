@@ -3287,7 +3287,7 @@ export class Game {
     if (pending.freeCast) {
       const obj = s.objects[pending.sourceId];
       if (!obj) return true;
-      castCardFree(s, obj, playerId, this.emit, pending.freeCast.note, targets);
+      castCardFree(s, obj, playerId, this.emit, pending.freeCast.note, targets, { bargained: pending.freeCast.bargained, bargainDecided: true });
       this.fireCastTriggers(playerId, obj.card, obj, targets);
       s.priority = playerId;
       return true;

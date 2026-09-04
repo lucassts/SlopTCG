@@ -1055,7 +1055,8 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
       const n = num(m[1]);
       if (n === null) return null;
       const tail = (m[2] ?? '').trim().replace(/\.$/, '');
-      if (!tail || /^then put them back in any order$/i.test(tail) || /^you may put them back in any order$/i.test(tail)) return [{ op: 'scry', count: n }];
+      if (/^then put them back in any order$/i.test(tail) || /^you may put them back in any order$/i.test(tail)) return [{ op: 'reorderTop', count: n }];
+      if (!tail) return [{ op: 'scry', count: n }];
       if (/^you may put (?:it|that card|one of them) into your graveyard$/i.test(tail) || /^you may put any of them into your graveyard$/i.test(tail)) return [{ op: 'surveil', count: n }];
       let mm: RegExpMatchArray | null;
       if ((mm = tail.match(/^(?:you may )?put (?:one of them|up to (\w+) of them|(\w+) of them|(?:a|an) (.+?) card from among them) into your hand and the rest (?:on the bottom of your library in a random order|on the bottom of your library in any order|into your graveyard|on the bottom of your library)$/i))) {

@@ -289,6 +289,8 @@ export interface PlayerState {
   noMaxHandSize?: boolean;
   /** Ascend. */
   cityBlessing?: boolean;
+  /** Tried to draw from an empty library: loses at the next state-based check (rule 704.5b). */
+  drewFromEmptyLibrary?: boolean;
   /** Names of dungeons this player completed (Acererak). */
   completedDungeonNames?: string[];
   /** Colors of spells cast this turn (Veil of Summer). */
@@ -355,7 +357,7 @@ export type PendingDecision =
       sourceId: number;
       cardName: string;
       /** Free cast (cascade, suspend, Beseech the Mirror…): the spell is cast with these targets when they are chosen. */
-      freeCast?: { note: string };
+      freeCast?: { note: string; /** Bargain paid (sacrifice already done) before the targets were asked. */ bargained?: boolean };
       text: string;
       specs: import('./cards/types.js').TargetSpec[];
       effect: EffectStep[];
@@ -376,7 +378,7 @@ export type PendingDecision =
       player: PlayerId;
       prompt: string;
       /** 'cards' → pick objects; 'scry' → picks go to the bottom; text answers: 'nameCard', 'confirm' (yes/no), 'chooseColor' (WUBRG), 'chooseType' (creature type). */
-      mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
+      mode: 'cards' | 'scry' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
       options: number[];
       min: number;
       max: number;
@@ -458,6 +460,8 @@ export interface GameState {
   gambitPicks?: Partial<Record<PlayerId, number>>;
   /** Beseech the Mirror: the card exiled by the last search-to-exile. */
   lastSearchedExile?: number;
+  /** Infernal Tutor: name of the card revealed from hand by the last `revealFromHandRemember`. */
+  lastRevealedName?: string;
   /** Spells cast during the previous turn (all players / by its active player). */
   spellsCastLastTurn?: number;
   activeSpellsLastTurn?: number;
@@ -696,6 +700,7 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'escaped': return source.castMethod === 'escape';
     case 'sourceAttackedThisTurn': return !!source.attackedThisTurn;
     case 'targetCmcAtMostColorsSpent': return false; // needs the effect context (condHolds)
+    case 'compare': return false; // needs the effect context (condHolds)
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
     case 'opponentControlsMoreLands': {

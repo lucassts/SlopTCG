@@ -56,6 +56,10 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
         lose(state, p, 'recebeu 10 marcadores de veneno', emit);
         return true;
       }
+      if (state.players[p].drewFromEmptyLibrary) {
+        lose(state, p, 'tentou comprar uma carta com a biblioteca vazia', emit);
+        return true;
+      }
     }
 
     for (const obj of battlefield(state)) {

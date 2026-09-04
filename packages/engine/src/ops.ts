@@ -31,8 +31,15 @@ export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
   }
   const topId = player.zones.library[0];
   if (topId === undefined) {
-    // Drawing from an empty library loses the game (SBA, applied immediately).
-    lose(state, playerId, 'tentou comprar de uma biblioteca vazia', emit);
+    // Laboratory Maniac / Jace: "If you would draw a card while your library has no cards in it, you win the game instead."
+    if (player.zones.battlefield.some((id) => state.objects[id]?.card.winOnDrawFromEmpty)) {
+      const src = player.zones.battlefield.map((id) => state.objects[id]).find((o) => o?.card.winOnDrawFromEmpty)!;
+      lose(state, playerId === 'p1' ? 'p2' : 'p1', `perdeu — ${player.name} tentou comprar com a biblioteca vazia e venceu com ${src.card.name}`, emit);
+      return;
+    }
+    // Rule 704.5b: the player loses at the next state-based check, not immediately.
+    player.drewFromEmptyLibrary = true;
+    emit({ type: 'fizzled', description: `${player.name} tentou comprar uma carta com a biblioteca vazia` });
     return;
   }
   const obj = state.objects[topId];

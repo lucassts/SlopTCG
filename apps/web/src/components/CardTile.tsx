@@ -57,6 +57,8 @@ export interface CardTileProps {
   card: CardView;
   size?: 'hand' | 'field';
   selected?: boolean;
+  /** Small numbered/text badge in the corner (order of a pick, counts). */
+  badge?: string;
   targetable?: boolean;
   dimmed?: boolean;
   /** Rendered tucked behind the card it is attached to (aura/equipment). */
@@ -67,7 +69,7 @@ export interface CardTileProps {
 }
 
 /** A card on the table: Scryfall image when available, text frame as fallback. */
-export function CardTile({ card, size = 'field', selected, targetable, dimmed, attachment, onClick, onContextMenu, title }: CardTileProps) {
+export function CardTile({ card, size = 'field', selected, badge, targetable, dimmed, attachment, onClick, onContextMenu, title }: CardTileProps) {
   const [imgFailed, setImgFailed] = useState(false);
   const def = card.card;
   // Leva 5b: verso de cartas dupla-face (transform / MDFC / batalha) tem imagem própria no Scryfall.
@@ -119,6 +121,7 @@ export function CardTile({ card, size = 'field', selected, targetable, dimmed, a
         <div key={k} className="card-counter" title={`${v} marcador(es) de ${k}`}>{k}: {v}</div>
       ))}
       {card.blocking !== null && <div className="card-blocking">🛡</div>}
+      {badge && <div className="card-count-badge">{badge}</div>}
     </div>
   );
 }
