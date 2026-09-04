@@ -612,6 +612,10 @@ function parseEffectText(
   }
   // Tamiyo +2.
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Beseech the Mirror.
+  if ((m = text.match(/^Search your library for a card, exile it face down, then shuffle\. If (?:this spell|~) was bargained, you may cast the exiled card without paying its mana cost if that spell's mana value is (\d+) or less\. Put the exiled card into your hand if it wasn't cast this way\.$/i))) {
+    return { steps: [{ op: 'search', count: 1, to: 'exile' }, { op: 'castSearchedExiledOrHand', maxCmc: parseInt(m[1], 10), requiresKicked: true }] };
+  }
   // Prismatic Ending (Converge).
   if ((m = text.match(/^Exile target (.+?) if its mana value is less than or equal to the number of colors of mana spent to cast ~\.$/i))) {
     const info = parseNounG(m[1]);
@@ -2565,7 +2569,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   if (isSpell && st.spellModes.length > 0 && st.spellEffect.length > 0) return null; // modal + efeito solto: fora do escopo
   // Kicker sem efeito condicional reconhecido (ou vice-versa): fora do escopo.
   const hasKickerCost = st.kickerCost !== undefined;
-  const kickerHasEffect = st.kickerEffect.length > 0 || !!st.giftEffect || st.abilities.some((a) => a.kind === 'triggered' && a.requiresKicked) || st.spellTargets.some((t) => !!t.kickedSpec);
+  const kickerHasEffect = st.kickerEffect.length > 0 || !!st.giftEffect || st.abilities.some((a) => a.kind === 'triggered' && a.requiresKicked) || st.spellTargets.some((t) => !!t.kickedSpec) || st.spellEffect.some((e) => e.op === 'castSearchedExiledOrHand');
   if (isSpell && hasKickerCost !== kickerHasEffect) return null;
   if (!isSpell && hasKickerCost && !st.kickerEnters && !st.flags2.offspring && !st.flags2.squad && !kickerHasEffect) unparsed.push(`Kicker ${st.kickerCost} (efeito do kicker não reconhecido)`);
   if (isSpell && st.modalOpen && st.spellModes.length < 2) return null;

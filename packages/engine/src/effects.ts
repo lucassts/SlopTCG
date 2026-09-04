@@ -199,9 +199,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -485,6 +485,15 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const owner = state.players[target.owner];
       const options = [...owner.zones.graveyard, ...owner.zones.hand, ...owner.zones.library].filter((id) => state.objects[id].card.name === target.card.name);
       return { player: controller, options, min: 0, max: options.length, prompt: `${ctx.sourceName}: exile as cartas chamadas ${target.card.name} (cemitério, mão e biblioteca de ${owner.name})`, mode: 'cards' };
+    }
+    case 'castSearchedExiledOrHand': {
+      const id = state.lastSearchedExile;
+      const o = id !== undefined ? state.objects[id] : undefined;
+      if (!o || o.zone !== 'exile') return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'skip' };
+      const kicked = !!state.objects[ctx.sourceId]?.kicked;
+      const eligible = (!step.requiresKicked || kicked) && !o.card.types.includes('Land') && manaValueOf(o.card.manaCost) <= step.maxCmc;
+      if (!eligible) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'no' };
+      return { player: controller, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: conjurar ${o.card.name} sem pagar o custo de mana? (não: vai para a mão)`, mode: 'confirm' };
     }
     case 'discardUpToThenDraw': {
       const options = [...state.players[controller].zones.hand];
@@ -772,6 +781,15 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       moveWithEvent(state, o, 'hand', 'returned', emit);
       return;
     }
+    case 'castSearchedExiledOrHand': {
+      const id = state.lastSearchedExile;
+      const o = id !== undefined ? state.objects[id] : undefined;
+      state.lastSearchedExile = undefined;
+      if (!o || o.zone !== 'exile') return;
+      if (text === 'yes' && castCardFree(state, o, ctx.controller, emit, ctx.sourceName)) return;
+      moveWithEvent(state, o, 'hand', 'returned', emit);
+      return;
+    }
     case 'discardUpToThenDraw': {
       let n = 0;
       for (const id of picks) {
@@ -1049,6 +1067,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
           continue;
         }
         moveWithEvent(state, obj, step.to, 'searched', emit);
+        if (step.to === 'exile') state.lastSearchedExile = obj.id;
         if (step.to === 'battlefield' && step.tapped) setTapped(state, obj, true, emit);
         if (step.to === 'battlefield' && step.withCounters) {
           const { counter, count } = step.withCounters;

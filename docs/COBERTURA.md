@@ -351,7 +351,10 @@ P/T, cor e subtipo trocados), Red Elemental Blast (alvo de mágica por cor),
 Sewer-veillance Cam (gatilho "enters or leaves", virar ou desvirar),
 Broadside Bombardiers (**Boast**: só se atacou, uma vez por turno; dano
 igual a 2 mais o valor de mana do sacrificado). Legacy ponderado 90,5% →
-**92,0%**. Próximos pesos: Hexing Squelcher, Goblin Welder, Goblin
+**92,0%**. **v0.19.1**: Beseech the Mirror (busca para o exílio; com
+bargain, conjura a carta exilada de graça se valor de mana ≤ 4, senão vai
+para a mão) — confirmado a pedido do Lucas: Gaea's Will conjurada assim
+vai direto para a pilha, sem suspender. Próximos pesos: Hexing Squelcher, Goblin Welder, Goblin
 Engineer, Thundertrap Trainer, Magus of the Moon, Pinnacle Emissary,
 Damping Sphere, Eye of Ugin, Eldrazi Linebreaker, Thought-Knot Seer.
 

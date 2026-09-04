@@ -450,6 +450,8 @@ export interface GameState {
   lastMilled?: number[];
   /** Stronghold Gambit: each player's chosen card. */
   gambitPicks?: Partial<Record<PlayerId, number>>;
+  /** Beseech the Mirror: the card exiled by the last search-to-exile. */
+  lastSearchedExile?: number;
   /** Spells cast during the previous turn (all players / by its active player). */
   spellsCastLastTurn?: number;
   activeSpellsLastTurn?: number;

@@ -479,6 +479,8 @@ export type EffectStep =
   | { op: 'discardUpToThenDraw'; max: number }
   /** Sewer-veillance Cam: tap or untap (toggles). */
   | { op: 'tapOrUntap'; what: SubjectRef }
+  /** (choice) Beseech the Mirror: cast the card exiled by the previous search for free (if bargained and mana value ≤ max), else put it into your hand. */
+  | { op: 'castSearchedExiledOrHand'; maxCmc: number; requiresKicked?: boolean }
   /** (choice) Chrome Mox: exile a card from hand and remember it. */
   | { op: 'imprintFromHand'; filter: FilterSpec }
   /** (choice) Mox Diamond: discard a matching card or the source goes to the graveyard. */
@@ -579,7 +581,7 @@ export type EffectStep =
       op: 'search';
       filter?: FilterSpec;
       count: number;
-      to: 'hand' | 'battlefield' | 'libraryTop';
+      to: 'hand' | 'battlefield' | 'libraryTop' | 'exile';
       tapped?: boolean;
       /** Undercity's throne: enters with counters. */
       withCounters?: { counter: string; count: number };

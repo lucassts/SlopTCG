@@ -46,7 +46,9 @@ const desert = mk({ name: 'Desert of the Glorified', typeLine: 'Land — Desert'
 const blueBear = mk({ name: 'Blue Bear', manaCost: '{1}{U}', typeLine: 'Creature — Bear', power: 2, toughness: 2, colors: ['U'], oracleText: '' });
 const blueBolt = mk({ name: 'Blue Bolt', manaCost: '{U}', typeLine: 'Instant', colors: ['U'], oracleText: 'Blue Bolt deals 3 damage to any target.' });
 
-const ALL = [will, trap, ending, emrakul, fable, wight, phlage, quarry, reb, cam, bombardiers];
+const beseech = mk({ name: 'Beseech the Mirror', manaCost: '{1}{B}{B}{B}', typeLine: 'Sorcery', colors: ['B'], oracleText: "Bargain (You may sacrifice an artifact, enchantment, or token as you cast this spell.)\nSearch your library for a card, exile it face down, then shuffle. If this spell was bargained, you may cast the exiled card without paying its mana cost if that spell's mana value is 4 or less. Put the exiled card into your hand if it wasn't cast this way." });
+
+const ALL = [will, trap, ending, emrakul, fable, wight, phlage, quarry, reb, cam, bombardiers, beseech];
 
 describe('M28 · compilação', () => {
   it('as 11 cartas compilam como full', () => {
@@ -93,6 +95,53 @@ describe('M28 · jogo', () => {
     settle(game);
     expect(game.state.players.p2.life).toBe(17);
     expect(game.state.objects[bolt].zone).toBe('exile'); // iria para o cemitério: exilada
+  });
+
+  it("Beseech the Mirror com bargain conjura Gaea's Will de graça, sem suspender", () => {
+    const game = makeGame([...FILLER, beseech, will, idol, lightningBolt], FILLER, { topP1: [beseech.id, idol.id, 'lightning-bolt'] });
+    goToMain1(game);
+    const art = put(game, 'p1', idol.id);
+    const bolt = put(game, 'p1', 'lightning-bolt', 'graveyard');
+    for (let i = 0; i < 4; i++) put(game, 'p1', 'swamp');
+    let w: number;
+    try { w = findIn(game, 'p1', 'library', will.id); } catch { w = findIn(game, 'p1', 'hand', will.id); game.apply('p1', { type: 'manualMove', objectId: w, to: 'library', position: 'bottom' }); }
+    const rb = cast(game, 'p1', findIn(game, 'p1', 'hand', beseech.id), { kicked: true, sacrifices: [art] });
+    expect(rb.ok, JSON.stringify(rb.events)).toBe(true);
+    expect(game.state.objects[art].zone).toBe('graveyard');
+    untilChoice(game);
+    let pd = game.state.pendingDecision;
+    expect(pd?.type === 'effectChoice' && pd.mode).toBe('cards');
+    answer(game, 'p1', [w]);
+    untilChoice(game);
+    pd = game.state.pendingDecision;
+    expect(pd?.type === 'effectChoice' && pd.mode).toBe('confirm');
+    answer(game, 'p1', [], 'yes');
+    passUntil(game, (s) => s.stack.some((i) => i.sourceId === w) || (s.stack.length === 0 && s.pendingDecision === null), 50);
+    expect(game.state.objects[w].zone).toBe('stack'); // conjurada direto, sem marcadores de tempo
+    expect(game.state.objects[w].counters['time'] ?? 0).toBe(0);
+    settle(game);
+    expect(game.state.objects[w].zone).toBe('exile'); // resolveu; iria para o cemitério → exilada
+    expect(game.state.players.p1.graveyardCastPermission?.keep).toBe(true);
+    put(game, 'p1', 'mountain');
+    untapAll(game, 'p1');
+    expect(cast(game, 'p1', bolt, { targets: [{ kind: 'player', player: 'p2' }] }).ok).toBe(true);
+    settle(game);
+    expect(game.state.players.p2.life).toBe(17);
+    expect(game.state.objects[bolt].zone).toBe('exile');
+  });
+
+  it("Beseech the Mirror sem bargain só põe a carta na mão", () => {
+    const game = makeGame([...FILLER, beseech, will], FILLER, { topP1: [beseech.id] });
+    goToMain1(game);
+    for (let i = 0; i < 4; i++) put(game, 'p1', 'swamp');
+    let w: number;
+    try { w = findIn(game, 'p1', 'library', will.id); } catch { w = findIn(game, 'p1', 'hand', will.id); game.apply('p1', { type: 'manualMove', objectId: w, to: 'library', position: 'bottom' }); }
+    expect(cast(game, 'p1', findIn(game, 'p1', 'hand', beseech.id)).ok).toBe(true);
+    untilChoice(game);
+    answer(game, 'p1', [w]);
+    settle(game);
+    expect(game.state.objects[w].zone).toBe('hand');
+    expect(cast(game, 'p1', w).ok).toBe(false); // da mão, só suspendendo
   });
 
   it('Mindbreak Trap: de graça se o oponente conjurou 3+ mágicas; exila as mágicas-alvo', () => {

@@ -44,7 +44,7 @@ export type GameEvent =
   | { type: 'regenerated'; objectId: number; cardName: string }
   | { type: 'cycled'; player: PlayerId; cardName: string }
   | { type: 'controlChanged'; objectId: number; cardName: string; to: PlayerId }
-  | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' | 'libraryTop' }
+  | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' | 'libraryTop' | 'exile' }
   | { type: 'mulliganTaken'; player: PlayerId; taken: number }
   | { type: 'handKept'; player: PlayerId; bottomed: number }
   | { type: 'startingRoll'; rolls: Record<PlayerId, number>; rerolls: number; winner: PlayerId }
