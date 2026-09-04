@@ -60,15 +60,19 @@ export interface ManaProduction {
 }
 
 export function manaProduction(obj: GameObject): ManaProduction | null {
+  const found: ManaProduction[] = [];
   for (const a of obj.card.abilities ?? []) {
     if (a.kind !== 'activated' || !a.isManaAbility || !a.cost.tap) continue;
     if (a.cost.sacrificeSelf || a.cost.sacrifice || a.cost.payLife || a.cost.mana || a.condition) continue;
     const fixed = a.effect.find((e) => e.op === 'addMana');
-    if (fixed && fixed.op === 'addMana') return { symbols: fixed.mana, all: true };
+    if (fixed && fixed.op === 'addMana') { found.push({ symbols: fixed.mana, all: true }); continue; }
     const choice = a.effect.find((e) => e.op === 'addManaChoice');
-    if (choice && choice.op === 'addManaChoice') return { symbols: choice.colors ?? [...COLORS], all: false };
+    if (choice && choice.op === 'addManaChoice') found.push({ symbols: choice.colors ?? [...COLORS], all: false });
   }
-  return null;
+  if (found.length === 0) return null;
+  if (found.length === 1) return found[0];
+  // Several tap abilities (a Mountain that is also a Forest under Yavimaya): the player picks one symbol.
+  return { symbols: [...new Set(found.flatMap((f) => f.symbols))], all: false };
 }
 
 export interface PaymentPlan {

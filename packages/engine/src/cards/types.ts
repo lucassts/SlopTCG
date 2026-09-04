@@ -40,6 +40,8 @@ export type Cond =
   | { kind: 'opponentControlsMoreLands' }
   /** Acererak: "if you haven't completed Tomb of Annihilation". */
   | { kind: 'completedNamedDungeon'; name: string; negate?: boolean }
+  /** Carpet of Flowers: "if you haven't added mana with this ability this turn". */
+  | { kind: 'notUsedThisTurn' }
   // ---- Leva 5b
   | { kind: 'dayNight'; value: 'day' | 'night' }
   | { kind: 'noSpellsLastTurn' }
@@ -381,7 +383,7 @@ export type EffectStep =
   /** Learn (no sideboard here): may discard a card to draw a card. */
   | { op: 'learn' }
   /** (choice) "You may put a land card from your hand onto the battlefield (tapped)". */
-  | { op: 'putFromHand'; filter: FilterSpec; tapped?: boolean; who?: PlayerSel }
+  | { op: 'putFromHand'; filter: FilterSpec; tapped?: boolean; who?: PlayerSel; /** Sneak Attack. */ haste?: boolean; sacrificeAtEnd?: boolean }
   | { op: 'removeCounters'; what: SubjectRef; counter: string; count: DynAmount }
   /** "~ gains '<ability>'": the object gets extra abilities/keywords while it stays on the battlefield (Urza's Saga). */
   | { op: 'grantAbility'; what: SubjectRef; abilities: AbilityDef[]; keywords?: Keyword[] }
@@ -437,6 +439,19 @@ export type EffectStep =
   | { op: 'tokenUnlessSacrifice'; token: Extract<EffectStep, { op: 'token' }>; filter: FilterSpec }
   /** (choice) Surgical Extraction: exile any number of cards named like target 0 from its owner's graveyard, hand and library. */
   | { op: 'extractName' }
+  // ---- Leva 6a (Legacy, parte 5)
+  /** Thespian's Stage: the source becomes a copy of the target, keeping the ability that has this op. */
+  | { op: 'becomeCopy'; what: SubjectRef }
+  /** Raph & Mikey: reveal from the top until a matching card; it enters (tapped, attacking); the rest goes to the bottom in random order. */
+  | { op: 'revealUntil'; filter: FilterSpec; tapped?: boolean; attacking?: boolean }
+  /** Emry: the target card in your graveyard may be cast this turn. */
+  | { op: 'castableFromGraveyardThisTurn'; what: SubjectRef }
+  /** Endurance: that player's graveyard goes to the bottom of their library in a random order. */
+  | { op: 'graveyardToLibraryBottom'; who: WhoSel }
+  /** (choice) Stronghold Gambit: each player picks a card in hand … */
+  | { op: 'gambitPick'; who: PlayerSel }
+  /** … then the lowest-mana-value creature card(s) enter. */
+  | { op: 'gambitResolve' }
   /** (choice) Chrome Mox: exile a card from hand and remember it. */
   | { op: 'imprintFromHand'; filter: FilterSpec }
   /** (choice) Mox Diamond: discard a matching card or the source goes to the graveyard. */
@@ -556,7 +571,7 @@ export type EffectStep =
   | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean }
   /** "Add one mana of any color" (or "of these colors") — the activation
    *  carries the chosen color; `colors` restricts the legal choices. */
-  | { op: 'addManaChoice'; who: PlayerSel; count?: number; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean }
+  | { op: 'addManaChoice'; who: PlayerSel; count?: DynAmount; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean; /** Carpet of Flowers: remember the use for \"if you haven't added mana with this ability this turn\". */ markUsed?: boolean }
   /**
    * (choice) Cabal Therapy: the controller names a nonland card; the `who`
    * player reveals their hand and discards every card with that name.
@@ -580,6 +595,8 @@ export type EffectStep =
       sacrificeAtEnd?: boolean;
       /** Job select / For Mirrodin!: attach the source Equipment to the token. */
       attachSource?: boolean;
+      /** Marit Lage: legendary token. */
+      legendary?: boolean;
       /** Granted abilities ("It has 'Sacrifice this token: Add {C}.'"). */
       abilities?: AbilityDef[];
     };
@@ -598,6 +615,8 @@ export type TriggerSpec =
   | { on: 'transformsInto'; self: true }
   /** State trigger: "When you control no Islands, sacrifice ~." */
   | { on: 'controlsNone'; filter: FilterSpec }
+  /** Dark Depths: state trigger "When ~ has no ice counters on it". */
+  | { on: 'noCounters'; counter: string }
   | { on: 'etb'; self: true }
   /** Any object matching the filter enters the battlefield. */
   | { on: 'etb'; what: FilterSpec }
@@ -1037,6 +1056,8 @@ export interface CardDefinition {
   freeSpellsFromHand?: boolean;
   /** Aluren: any player may cast creature spells with mana value 3 or less for free, as though they had flash. */
   aluren?: boolean;
+  /** Yavimaya: "Each land is a Forest in addition to its other land types." */
+  allLandsAreType?: 'Plains' | 'Island' | 'Swamp' | 'Mountain' | 'Forest';
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy

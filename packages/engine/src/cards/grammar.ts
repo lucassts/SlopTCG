@@ -400,6 +400,7 @@ export function parseCondG(raw: string): Cond | null {
   if (low === 'you cast it from your hand') return { kind: 'castFromHand' };
   if (low === "you have the city's blessing") return { kind: 'cityBlessing' };
   if (low === 'an opponent controls more lands than you') return { kind: 'opponentControlsMoreLands' };
+  if (low === "you haven't added mana with this ability this turn") return { kind: 'notUsedThisTurn' };
   if ((m = t.match(/^you haven't completed (.+)$/i))) return { kind: 'completedNamedDungeon', name: m[1], negate: true };
   if ((m = t.match(/^you've completed (.+)$/i)) && !/^a dungeon$/i.test(m[1])) return { kind: 'completedNamedDungeon', name: m[1] };
   if ((m = low.match(/^an opponent has cast (?:a|an) (white|blue|black|red|green) or (white|blue|black|red|green) spell this turn$/))) return { kind: 'opponentCastColorThisTurn', colors: [COLOR_WORDS[m[1]], COLOR_WORDS[m[2]]] };
@@ -558,6 +559,15 @@ const TOKEN_NAMED = /^(?:a|an|\w+|X) (tapped )?(Treasure|Food|Clue|Blood|Powerst
 
 /** "create …" token phrase (without the verb). */
 export function parseTokenG(text: string, who: WhoSel = 'controller'): EffectStep[] | null {
+  // "Marit Lage, a legendary 20/20 black Avatar creature token with flying and indestructible".
+  {
+    const lm = text.match(/^([A-Z][\w' ,-]+?), a legendary (.+)$/);
+    if (lm) {
+      const inner = parseTokenG('a ' + lm[2], who);
+      if (!inner || inner.length !== 1 || inner[0].op !== 'token') return null;
+      return [{ ...inner[0], name: lm[1], legendary: true }];
+    }
+  }
   let m: RegExpMatchArray | null;
   let t = text.trim();
   let tappedAttacking = false;

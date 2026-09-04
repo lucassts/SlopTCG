@@ -68,6 +68,10 @@ export interface GameObject {
   extraSubtypes?: string[];
   /** Impending: cast for the impending cost (not a creature while it has time counters). */
   impending?: boolean;
+  /** Carpet of Flowers: turn this permanent's once-per-turn ability was used. */
+  usedOnTurn?: number;
+  /** Emry: castable from the graveyard this turn. */
+  castableFromGraveyardTurn?: number;
   /** Ugin −11 / Amped Raptor: castable from exile this turn without paying (or paying energy = mana value). */
   freeCastUntilTurn?: number;
   payWithEnergy?: boolean;
@@ -438,6 +442,8 @@ export interface GameState {
   lki?: Record<number, GameObject>;
   /** Cards milled by the last mill step (Barrowgoyf: "from among them"). */
   lastMilled?: number[];
+  /** Stronghold Gambit: each player's chosen card. */
+  gambitPicks?: Partial<Record<PlayerId, number>>;
   /** Spells cast during the previous turn (all players / by its active player). */
   spellsCastLastTurn?: number;
   activeSpellsLastTurn?: number;
@@ -671,6 +677,7 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'firstSpellThisGame': return (state.players[me].spellsCastThisGame ?? 0) === 0;
     case 'wasCast': return !!source.wasCast;
     case 'castFromHand': return !!source.castFromHand;
+    case 'notUsedThisTurn': return source.usedOnTurn !== state.turn;
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
     case 'opponentControlsMoreLands': {

@@ -31,6 +31,7 @@ import {
   transformObject,
 } from './ops.js';
 import {
+  moveObject,
   battlefield,
   cardTypesInGraveyards,
   createObject,
@@ -190,9 +191,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -477,6 +478,12 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const options = [...owner.zones.graveyard, ...owner.zones.hand, ...owner.zones.library].filter((id) => state.objects[id].card.name === target.card.name);
       return { player: controller, options, min: 0, max: options.length, prompt: `${ctx.sourceName}: exile as cartas chamadas ${target.card.name} (cemitério, mão e biblioteca de ${owner.name})`, mode: 'cards' };
     }
+    case 'gambitPick': {
+      const who = resolvePlayers(step.who, controller)[0];
+      const options = [...state.players[who].zones.hand];
+      if (options.length === 0) return { player: who, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: who, options, min: 1, max: 1, prompt: `${ctx.sourceName}: escolha uma carta da mão para revelar (a carta de criatura de menor valor de mana entre as reveladas entra no campo)`, mode: 'cards' };
+    }
     case 'pickFromMilled': {
       const options = (state.lastMilled ?? []).filter((id) => state.objects[id]?.zone === 'graveyard' && cardMatchesFilter(state.objects[id].card, step.filter));
       if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
@@ -704,13 +711,16 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (!o || o.zone !== 'hand') return;
       o.controller = step.who === 'opponent' ? opponentOf(ctx.controller) : ctx.controller;
       moveWithEvent(state, o, 'battlefield', 'resolved', emit);
+      if (step.haste && (o.zone as string) === 'battlefield') o.untilEot.keywords.push('haste');
+      if (step.sacrificeAtEnd && (o.zone as string) === 'battlefield') state.delayed.push({ at: 'endStep', objectId: o.id, action: 'sacrifice' });
       if (step.tapped) setTapped(state, o, true, emit);
       return;
     }
     case 'addManaChoice': {
       const sym = (ctx.chosenMana ?? text) as import('./types.js').ManaSymbol | undefined;
       if (!sym || !['W', 'U', 'B', 'R', 'G', 'C'].includes(sym)) return;
-      const count = step.count ?? 1;
+      const count = resolveAmount(ctx, step.count ?? 1);
+      if (step.markUsed) { const src = state.objects[ctx.sourceId]; if (src) src.usedOnTurn = state.turn; }
       for (const p of resolvePlayers(step.who, ctx.controller)) {
         state.players[p].manaPool[sym] += count;
         emit({ type: 'manaAdded', player: p, mana: Array(count).fill(sym), sourceName: ctx.sourceName });
@@ -747,6 +757,13 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
       if (!o || o.zone !== 'graveyard') return;
       moveWithEvent(state, o, 'hand', 'returned', emit);
+      return;
+    }
+    case 'gambitPick': {
+      const who = resolvePlayers(step.who, ctx.controller)[0];
+      const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      if (!o || o.zone !== 'hand' || o.owner !== who) return;
+      (state.gambitPicks ??= {})[who] = o.id;
       return;
     }
     case 'payEnergyDestroy': {
@@ -1574,6 +1591,66 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       }
       return;
 
+    case 'becomeCopy': {
+      const src = state.objects[ctx.sourceId];
+      const t = resolveSubject(ctx, step.what)[0];
+      const target = t !== undefined ? objectAlive(state, t) : undefined;
+      if (!src || src.zone !== 'battlefield' || !target) return;
+      const keep = (src.card.abilities ?? []).filter((ab) => JSON.stringify(ab).includes('"becomeCopy"'));
+      if (!src.printedCard) src.printedCard = src.card;
+      src.card = { ...target.card, abilities: [...(target.card.abilities ?? []), ...keep] };
+      emit({ type: 'fizzled', description: `${src.printedCard.name} vira uma cópia de ${target.card.name}` });
+      return;
+    }
+    case 'revealUntil': {
+      const lib = state.players[ctx.controller].zones.library;
+      const rest: number[] = [];
+      let found: GameObject | undefined;
+      while (lib.length > 0) {
+        const top = state.objects[lib[0]];
+        if (cardMatchesFilter(top.card, step.filter)) { found = top; break; }
+        rest.push(lib.shift()!);
+      }
+      if (found) {
+        moveWithEvent(state, found, 'battlefield', 'resolved', emit);
+        if (step.tapped) found.tapped = true;
+        if (step.attacking && state.activePlayer === ctx.controller && /declare|combat/i.test(state.step)) found.attacking = true;
+      }
+      const r = shuffle(rest, state.rngState);
+      state.rngState = r.state;
+      lib.push(...r.items);
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: revelou ${rest.length + (found ? 1 : 0)} carta(s)${found ? `; ${found.card.name} entra no campo` : ''}; o resto vai para o fundo em ordem aleatória` });
+      return;
+    }
+    case 'castableFromGraveyardThisTurn':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (obj && obj.zone === 'graveyard') { obj.castableFromGraveyardTurn = state.turn; emit({ type: 'fizzled', description: `${ctx.sourceName}: ${obj.card.name} pode ser conjurada do cemitério neste turno` }); }
+      }
+      return;
+    case 'graveyardToLibraryBottom':
+      for (const p of resolveWho(ctx, step.who)) {
+        const ps = state.players[p];
+        const cards = [...ps.zones.graveyard];
+        for (const id of cards) moveObject(state, state.objects[id], 'library', 'bottom');
+        const n = ps.zones.library.length;
+        const tail = ps.zones.library.splice(n - cards.length, cards.length);
+        const r = shuffle(tail, state.rngState);
+        state.rngState = r.state;
+        ps.zones.library.push(...r.items);
+        emit({ type: 'fizzled', description: `${ps.name}: ${cards.length} carta(s) do cemitério foram para o fundo da biblioteca em ordem aleatória` });
+      }
+      return;
+    case 'gambitResolve': {
+      const picks = PLAYER_IDS.map((p) => state.gambitPicks?.[p]).filter((id): id is number => id !== undefined).map((id) => state.objects[id]).filter((o) => o && o.zone === 'hand');
+      state.gambitPicks = undefined;
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: revelados ${picks.map((o) => `${o.card.name} (${state.players[o.owner].name})`).join(', ') || 'nada'}` });
+      const creatures = picks.filter((o) => o.card.types.includes('Creature'));
+      if (creatures.length === 0) return;
+      const min = Math.min(...creatures.map((o) => manaValueOf(o.card.manaCost)));
+      for (const o of creatures) if (manaValueOf(o.card.manaCost) === min) moveWithEvent(state, o, 'battlefield', 'resolved', emit);
+      return;
+    }
     case 'exileUntilNonlandFree': {
       const lib = state.players[ctx.controller].zones.library;
       while (lib.length > 0) {
@@ -2120,6 +2197,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
             toughness: step.toughness,
             keywords: step.keywords,
             abilities: step.abilities,
+            supertypes: step.legendary ? ['Legendary'] : undefined,
             automation: 'full',
           }, p);
           obj.isToken = true;

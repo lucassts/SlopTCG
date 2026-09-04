@@ -609,6 +609,44 @@ function parseEffectText(
   }
   // Tamiyo +2.
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Sneak Attack.
+  if ((m = text.match(/^You may put (?:a|an) (.+?) card from your hand onto the battlefield\. That (?:creature|permanent) gains haste\. Sacrifice (?:the|that) (?:creature|permanent) at the beginning of the next end step\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    return { steps: [{ op: 'putFromHand', filter: info.filter, haste: true, sacrificeAtEnd: true }] };
+  }
+  // Emry: "Choose target artifact card in your graveyard. You may cast that card this turn."
+  if ((m = text.match(/^Choose target (.+?) card in your graveyard\. You may cast that card this turn\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    const spec = filterToTargetSpec(info);
+    if (!spec) return null;
+    return { steps: [{ op: 'castableFromGraveyardThisTurn', what: 'target:0' }], specs: [{ ...spec, zone: 'graveyard', ownedBy: 'you' }] };
+  }
+  // Endurance.
+  if (/^up to one target player puts all the cards from their graveyard on the bottom of their library in a random order\.$/i.test(text)) {
+    return { steps: [{ op: 'graveyardToLibraryBottom', who: 'target:0' }], specs: [{ what: 'player', optional: true }] };
+  }
+  // Raph & Mikey.
+  if ((m = text.match(/^reveal cards from the top of your library until you reveal (?:a|an) (.+?) card\. Put that card onto the battlefield( tapped)?( and attacking)? and the rest on the bottom of your library in a random order\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    return { steps: [{ op: 'revealUntil', filter: info.filter, tapped: m[2] ? true : undefined, attacking: m[3] ? true : undefined }] };
+  }
+  // Carpet of Flowers.
+  if ((m = text.match(/^you may add X mana of any one color, where X is the number of (.+?) target opponent controls\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    return { steps: [{ op: 'mayDo', prompt: 'add X mana of any one color', effect: [{ op: 'addManaChoice', who: 'controller', count: { per: { ...info.filter, controlledBy: 'opponent' } }, markUsed: true }] }], specs: [{ what: 'player', controlledBy: 'opponent' }] };
+  }
+  // Thespian's Stage.
+  if (/^~ becomes a copy of target land, except it has this ability\.$/i.test(text)) {
+    return { steps: [{ op: 'becomeCopy', what: 'target:0' }], specs: [{ what: 'land' }] };
+  }
+  // Stronghold Gambit.
+  if (/^Each player chooses a card in their hand\. Then each player reveals their chosen card\. The owner of each creature card revealed this way with the lowest mana value puts it onto the battlefield\.$/i.test(text)) {
+    return { steps: [{ op: 'gambitPick', who: 'controller' }, { op: 'gambitPick', who: 'opponent' }, { op: 'gambitResolve' }] };
+  }
   // Wrath of the Skies.
   if ((m = text.match(/^You get X \{E\}, then you may pay any amount of \{E\}\. Destroy each artifact, creature, and enchantment with mana value less than or equal to the amount of \{E\} paid this way\.$/i))) {
     return { steps: [{ op: 'energy', who: 'controller', amount: 'X' }, { op: 'payEnergyDestroy', filter: { what: 'permanent', typeAnyOf: ['Artifact', 'Creature', 'Enchantment'] } }] };
@@ -730,7 +768,7 @@ function parseEffectText(
     if ((m = sentence.match(/^you may (.+)$/i))) { optional = true; sentence = m[1]; }
     else if ((m = sentence.match(/^(?:If|When) you do, (.+)$/i))) {
       // "When you do" after a non-optional action (Ajani 0) is a reflexive trigger: sequential here.
-      if (!lastMayDo && !/^If you do/i.test(sentence)) sentence = m[1];
+      if (!lastMayDo && (!/^If you do/i.test(sentence) || /sacrifice/i.test(String(steps[steps.length - 1]?.op)))) sentence = m[1];
       else {
         if (!lastMayDo) return null;
         ifYouDo = true;
@@ -917,7 +955,7 @@ interface ParseState {
   /** Spree: modal spell whose modes carry their own costs. */
   spree?: boolean;
   /** Leva 6a (Legacy, parte 3). */
-  flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren'>>;
+  flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType'>>;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
   /** Leva 6a (Legacy): travas, substituições, uma mágica não-criatura por turno. */
@@ -1069,7 +1107,8 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever ~ becomes the target of a spell or ability$/i.test(head)) return { trigger: { on: 'becomesTargeted', self: true } };
   if (/^Whenever ~ becomes the target of a spell or ability an opponent controls$/i.test(head)) return { trigger: { on: 'becomesTargeted', self: true, byOpponent: true } };
   if (/^Whenever you draw a card$/i.test(head)) return { trigger: { on: 'youDrawCard' } };
-  if (/^Whenever ~ attacks$/i.test(head)) return { trigger: { on: 'attacks', self: true } };
+  if (/^Whenever ~ attacks?$/i.test(head)) return { trigger: { on: 'attacks', self: true } };
+  if ((m = head.match(/^When ~ has no ([\w+/-]+) counters on it$/i))) return { trigger: { on: 'noCounters', counter: m[1] } };
   if (/^Whenever ~ blocks$/i.test(head)) return { trigger: { on: 'blocks', self: true } };
   if (/^Whenever ~ attacks or blocks$/i.test(head)) return { trigger: { on: 'attacks', self: true }, extraSelf: { on: 'blocks', self: true } };
   if (/^Whenever ~ enters or attacks$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'attacks', self: true } };
@@ -1219,7 +1258,7 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
 function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: string[]): boolean {
   let m: RegExpMatchArray | null;
   // Palavra de habilidade ("Metalcraft — ", "Landfall — ") é rótulo, não regra.
-  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [a-z]+)* — (?=\{|~|[A-Z])/, '');
+  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [a-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".');
 
   // ---- modal spells: "Choose one —" (or "one or both", "two", "up to one/two", "any number") + "• …" lines
   if (isSpell && (m = line.match(/^Choose (one|two|three|one or both|one or more|up to one|up to two|up to three|any number) —$/i))) {
@@ -1633,6 +1672,11 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
 
+  // ---- Leva 6a (Legacy, parte 5): Yavimaya, Carpet of Flowers
+  if ((m = line.match(/^Each land is a (Plains|Island|Swamp|Mountain|Forest) in addition to its other land types\.$/i))) { st.flags10.allLandsAreType = m[1] as CardDefinition['allLandsAreType']; return true; }
+  if ((m = line.match(/^At the beginning of each of your main phases, (.+)$/i))) {
+    return parseLine(`At the beginning of your precombat main phase, ${m[1]}`, st, isSpell, subtypes) && parseLine(`At the beginning of your postcombat main phase, ${m[1]}`, st, isSpell, subtypes);
+  }
   // ---- Leva 6a (Legacy, parte 4): Up the Beanstalk, Sand Scout, Leyline Binding, Overlord (Impending)
   if ((m = line.match(/^When ~ enters and whenever (.+?), (.+)$/i)) && !/except/i.test(m[1])) { // Orcish Bowmasters has its own handler
     return parseLine(`When ~ enters, ${m[2]}`, st, isSpell, subtypes) && parseLine(`Whenever ${m[1]}, ${m[2]}`, st, isSpell, subtypes);

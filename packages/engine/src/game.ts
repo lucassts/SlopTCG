@@ -719,6 +719,8 @@ export class Game {
     const viaAftermath = !!card.aftermath && obj.transformed === true && obj.zone === 'graveyard';
     const gyPerm = s.players[playerId].graveyardCastPermission;
     const viaGraveyardPermission = !!gyPerm && gyPerm.untilTurn === s.turn && obj.zone === 'graveyard' && !method && cardMatchesFilter(card, gyPerm.filter);
+    // Emry: "You may cast that card this turn" (a single card in the graveyard).
+    const viaGraveyardCard = obj.zone === 'graveyard' && obj.castableFromGraveyardTurn === s.turn && !method;
     if (card.aftermath && obj.transformed && obj.zone !== 'graveyard') { this.fail(playerId, 'aftermath: essa metade só pode ser conjurada do cemitério'); return false; }
     const replicateTimes = Math.max(0, extra.replicateTimes ?? 0);
     if (replicateTimes > 0 && !card.replicate) { this.fail(playerId, 'essa mágica não tem replicar'); return false; }
@@ -727,7 +729,7 @@ export class Game {
         { this.fail(playerId, 'essa carta não está exilada para isso'); return false; }
       if (obj.exiledOnTurn === s.turn && method !== 'warp')
         { this.fail(playerId, 'não pode ser conjurada no mesmo turno em que foi exilada'); return false; }
-    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse && !viaLibraryTop && !viaAdventure && !viaAftermath && !viaGraveyardPermission) {
+    } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse && !viaLibraryTop && !viaAdventure && !viaAftermath && !viaGraveyardPermission && !viaGraveyardCard) {
       { this.fail(playerId, 'carta inválida'); return false; }
     }
     if (kicked && !card.kicker)
@@ -2414,6 +2416,35 @@ export class Game {
   /** State triggers ("When you control no Islands, sacrifice ~"): checked whenever triggers are scanned. */
   private checkStateTriggers(): void {
     const s = this.state;
+    // Grants end when their source leaves the battlefield (Yavimaya, Petrified Hamlet); the loops below re-apply the live ones.
+    for (const p of PLAYER_IDS) {
+      for (const id of s.players[p].zones.battlefield) {
+        const o = s.objects[id];
+        if (!o?.grantedFrom?.some((sid) => s.objects[sid]?.zone !== 'battlefield')) continue;
+        if (o.printedCard) { o.card = o.printedCard; o.printedCard = undefined; }
+        o.grantedFrom = undefined;
+      }
+    }
+    // Yavimaya: every land is also a Forest (with the intrinsic mana ability, 305.6).
+    for (const p of PLAYER_IDS) {
+      for (const id of s.players[p].zones.battlefield) {
+        const src = s.objects[id];
+        const type = src?.card.allLandsAreType;
+        if (!type) continue;
+        const mana = ({ Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' } as const)[type];
+        for (const q of PLAYER_IDS) for (const lid of s.players[q].zones.battlefield) {
+          const land = s.objects[lid];
+          if (!land || !land.card.types.includes('Land') || land.grantedFrom?.includes(src.id)) continue;
+          (land.grantedFrom ??= []).push(src.id);
+          if (!land.printedCard) land.printedCard = land.card;
+          land.card = {
+            ...land.card,
+            subtypes: land.card.subtypes.includes(type) ? land.card.subtypes : [...land.card.subtypes, type],
+            abilities: [...(land.card.abilities ?? []), { kind: 'activated', cost: { tap: true }, effect: [{ op: 'addMana', who: 'controller', mana: [mana] }], text: `Adicionar {${mana}}`, isManaAbility: true }],
+          };
+        }
+      }
+    }
     // Petrified Hamlet: lands with the chosen name gain the granted abilities.
     for (const p of PLAYER_IDS) {
       for (const id of s.players[p].zones.battlefield) {
@@ -2433,7 +2464,14 @@ export class Game {
         const o = s.objects[id];
         if (!o || o.stateTriggerPending) continue;
         (o.card.abilities ?? []).forEach((ab, idx) => {
-          if (ab.kind !== 'triggered' || ab.trigger.on !== 'controlsNone' || o.stateTriggerPending) return;
+          if (ab.kind !== 'triggered' || o.stateTriggerPending) return;
+          if (ab.trigger.on === 'noCounters') {
+            if ((o.counters[ab.trigger.counter] ?? 0) > 0) return;
+            o.stateTriggerPending = true;
+            this.pushTrigger(o, ab, undefined, undefined, { abilityIndex: idx });
+            return;
+          }
+          if (ab.trigger.on !== 'controlsNone') return;
           const f = ab.trigger.filter;
           if (s.players[o.controller].zones.battlefield.some((oid) => oid !== o.id && matchFilter({ controller: o.controller, sourceId: o.id, state: s }, f, s.objects[oid]))) return;
           o.stateTriggerPending = true;
