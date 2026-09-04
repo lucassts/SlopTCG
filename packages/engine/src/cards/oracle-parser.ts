@@ -14,7 +14,7 @@
  */
 import type { CardType, Color, Keyword } from '../types.js';
 import { BASIC_TYPES, COLOR_WORDS, KEYWORDS, NUMBER_WORDS, TYPE_WORD, keywordList, num } from './lexicon.js';
-import { filterToTargetSpec, parseAmountG, parseCondG, parseNounG, parseSentenceG, parseStaticG, setAbilityTextCompiler, type GCtx } from './grammar.js';
+import { filterToTargetSpec, parseAmountG, parseCondG, parseNounG, parseSentenceG, parseStaticG, parseTokenG, setAbilityTextCompiler, type GCtx } from './grammar.js';
 import type {
   AbilityDef,
   CardDefinition,
@@ -72,7 +72,7 @@ function filterFromNoun(noun: string): FilterSpec | null {
   if (TYPE_WORD[n]) return { what: TYPE_WORD[n] };
   if (n === 'nonland permanent') return { what: 'permanent', nonland: true };
   if (n === 'noncreature permanent') return { what: 'permanent', noncreature: true };
-  if (n === 'creature or planeswalker') return { what: 'creature' }; // sem planeswalkers automatizados: aproximação
+  if (n === 'creature or planeswalker') return { what: 'permanent', typeAnyOf: ['Creature', 'Planeswalker'] };
   if (n === 'artifact or enchantment') return { what: 'permanent' };
   return null;
 }
@@ -609,6 +609,14 @@ function parseEffectText(
   }
   // Tamiyo +2.
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Wrath of the Skies.
+  if ((m = text.match(/^You get X \{E\}, then you may pay any amount of \{E\}\. Destroy each artifact, creature, and enchantment with mana value less than or equal to the amount of \{E\} paid this way\.$/i))) {
+    return { steps: [{ op: 'energy', who: 'controller', amount: 'X' }, { op: 'payEnergyDestroy', filter: { what: 'permanent', typeAnyOf: ['Artifact', 'Creature', 'Enchantment'] } }] };
+  }
+  // Surgical Extraction.
+  if (/^Choose target card in a graveyard other than a basic land card\. Search its owner's graveyard, hand, and library for any number of cards with the same name as that card and exile them\. Then that player shuffles\.$/i.test(text)) {
+    return { steps: [{ op: 'extractName' }], specs: [{ what: 'permanent', zone: 'graveyard', notBasicLand: true }] };
+  }
   // Karn −2: sideboard ou exílio.
   if ((m = text.match(/^You may reveal an? (.+?) card you own from outside the game or choose a face-up (.+?) card you own in exile\. Put that card into your hand\.$/i))) {
     const info = parseNounG(m[2]);
@@ -664,6 +672,33 @@ function parseEffectText(
       return null;
     }
     if (/^Spend this mana only /i.test(sentence)) continue;
+    // Overlord of the Balemurk: "mill four cards, then you may return a non-Avatar creature card or a planeswalker card from your graveyard to your hand".
+    if ((m = sentence.match(/^mill (\w+) cards?, then you may return (?:a|an) (.+?) from your graveyard to your hand$/i))) {
+      const n = num(m[1]);
+      const info = parseNounG(m[2]) ?? parseNounG(m[2].replace(/\b(?:a|an) /gi, ''));
+      if (n === null || !info || info.player) return null;
+      steps.push({ op: 'mill', who: 'controller', count: n }, { op: 'mayDo', prompt: `return ${m[2]} from your graveyard to your hand`, effect: [{ op: 'returnFromGraveyardChoice', filter: info.filter, to: 'hand' }] });
+      lastMayDo = null;
+      continue;
+    }
+    // Acererak: "for each opponent, you create a 2/2 black Zombie creature token unless that player sacrifices a creature of their choice".
+    if ((m = sentence.match(/^for each opponent, you create (.+?) unless that player sacrifices (?:a|an) (.+?)(?: of their choice)?$/i))) {
+      const tok = parseTokenG(m[1], 'controller');
+      const info = parseNounG(m[2]);
+      if (!tok || tok.length !== 1 || tok[0].op !== 'token' || !info || info.player) return null;
+      steps.push({ op: 'tokenUnlessSacrifice', token: tok[0], filter: info.filter });
+      lastMayDo = null;
+      continue;
+    }
+    // Bloodchief's Thirst: "If this spell was kicked, instead destroy target creature or planeswalker" — same effect, wider target.
+    if ((m = sentence.match(/^If (?:this spell|~) was kicked, instead (.+)$/i))) {
+      const g = parseSentenceG(m[1], { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: 0, priorSpecs: [] });
+      const altSpec = g && g.specs.length === 1 ? g.specs[0] : parseTargetedEffect(m[1])?.spec;
+      const base = spec ?? (specs && specs.length === 1 ? specs[0] : undefined);
+      if (!altSpec || !base) return null;
+      base.kickedSpec = altSpec;
+      continue;
+    }
     // Boseiju: "That player may search their library for a land card with a basic land type, put it onto the battlefield, then shuffle."
     if ((m = sentence.match(/^(?:That player|Its controller) may search their library for (?:a|an) (.+?), put it onto the battlefield( tapped)?, then shuffle$/i))) {
       const info = parseNounG(m[1]);
@@ -716,7 +751,7 @@ function parseEffectText(
     }
     if (!parsed) {
       // "X and Y" / "X, then Y": cada parte simples, no máximo um alvo no todo.
-      const parts = /"/.test(sentence) ? [sentence] : sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b|it\b)/i).map((p) => p.trim());
+      const parts = /"/.test(sentence) ? [sentence] : sentence.split(/,? then |,? and (?!gains?\b(?! \d+ life)|have\b|has\b|it\b)|, (?=(?:draws?|discards?|loses?|gains?|sacrifices?|mills?|scries|creates?|exiles?|reveals?)\b)/i).map((p) => p.trim());
       if (parts.length >= 2) {
         const acc: EffectStep[] = [];
         let partSpec: TargetSpec | undefined;
@@ -744,16 +779,23 @@ function parseEffectText(
       let g = tryG(sentence);
       if (!g) {
         // Compostos "X and Y" / "X, then Y" pela gramática, parte a parte (alvos acumulam; "and it …" é frase própria).
-        const parts = /"/.test(sentence) ? [sentence] : sentence.split(/,? then |,? and (?!gains?\b|have\b|has\b)/i).map((p) => p.trim());
+        const parts = /"/.test(sentence) ? [sentence] : sentence.split(/,? then |,? and (?!gains?\b(?! \d+ life)|have\b|has\b)|, (?=(?:draws?|discards?|loses?|gains?|sacrifices?|mills?|scries|creates?|exiles?|reveals?)\b)/i).map((p) => p.trim());
         if (parts.length >= 2) {
           const acc: EffectStep[] = [];
           const accSpecs: TargetSpec[] = [];
           let ok = true;
+          // "You draw a card and gain 3 life": an imperative tail after a "you" head keeps "you" as subject.
+          const IMPERATIVE = /^(draw|discard|gain|lose|create|exile|mill|scry|sacrifice|reveal|search|shuffle|get|put|return)\b/i;
+          const firstIsYou = /^you /i.test(parts[0]) || IMPERATIVE.test(parts[0]);
           for (let p of parts) {
             // "Target player scries 2, then draws a card": a verb-first tail after a player target keeps that player as subject.
             const lastSpec = [...prior, ...accSpecs].slice(-1)[0];
-            if (acc.length > 0 && lastSpec?.what === 'player' && /^(draws?|discards?|loses?|gains?|scries|mills?|sacrifices?|creates?|exiles?|reveals?)\b/i.test(p)) p = 'that player ' + p;
-            const pg = parseSentenceG(p, { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length + accSpecs.length, priorSpecs: [...prior, ...accSpecs] });
+            // Third-person verb only: "gain 3 life" (after "You draw a card and …") keeps "you" as subject.
+            if (acc.length > 0 && lastSpec?.what === 'player' && /^(draws|discards|loses|gains|scries|mills|sacrifices|creates|exiles|reveals)\b/i.test(p)) p = 'that player ' + p;
+            const gopts = { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length + accSpecs.length, priorSpecs: [...prior, ...accSpecs] };
+            let pg = parseSentenceG(p, gopts);
+            // "You draw a card and gain 3 life": the imperative tail reads as "you gain 3 life" when it fails on its own.
+            if (!pg && acc.length > 0 && firstIsYou && IMPERATIVE.test(p)) pg = parseSentenceG('you ' + p, gopts);
             if (!pg) { ok = false; break; }
             acc.push(...pg.steps);
             accSpecs.push(...pg.specs);
@@ -1062,6 +1104,7 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever you cast a creature spell$/i.test(head)) return { trigger: { on: 'youCastSpellOf', filter: { what: 'creature' } } };
   if (/^Whenever you cast or copy an instant or sorcery spell$/i.test(head)) return { trigger: { on: 'youCastSpell', instantSorceryOnly: true } };
   if (/^Whenever you cast a colorless spell$/i.test(head)) return { trigger: { on: 'youCastSpellOf', filter: { colorless: true } } };
+  if ((m = head.match(/^Whenever you cast a spell with mana value (\d+) or greater$/i))) return { trigger: { on: 'youCastSpellOf', filter: { cmcAtLeast: parseInt(m[1], 10) } } };
   if ((m = head.match(/^Whenever you cast (?:a|an) ([A-Z][a-z]+(?: or [A-Z][a-z]+)*|artifact|enchantment|instant|sorcery|noncreature) spell$/))) {
     const w = m[1];
     if (/^(artifact|enchantment|instant|sorcery)$/i.test(w)) return { trigger: { on: 'youCastSpellOf', filter: { what: w.toLowerCase() as 'artifact' } } };
@@ -1231,7 +1274,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if ((m = line.match(new RegExp(`^(${ROMAN_RE}(?:, ${ROMAN_RE})*) — (.+)$`)))) {
     const chapters = m[1].split(', ').map((r) => ROMAN[r]);
     st.sagaChapters = Math.max(st.sagaChapters ?? 0, ...chapters);
-    const parsed = parseEffectText(m[2].replace(/\.?$/, '.'));
+    const parsed = parseEffectText(m[2].replace(/^[A-Z][a-z]+(?: [A-Z][a-z]+)* — /, '').replace(/\.?$/, '.'));
     if (!parsed) return false;
     st.abilities.push({ kind: 'triggered', trigger: { on: 'chapter', chapters }, targets: specsOf(parsed), effect: parsed.steps, text: line });
     return true;
@@ -1417,6 +1460,10 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     (st.costModifiers ??= []).push({ amount: manaValueOfCost(m[1]), whose: 'opponent', targetsSelf: true });
     return true;
   }
+  if ((m = line.match(/^(?:Domain — )?~ costs ((?:\{[^}]+\})+) less to cast for each basic land type among lands you control\.$/i))) {
+    (st.costModifiers ??= []).push({ amount: -manaValueOfCost(m[1]), whose: 'you', self: true, perDomain: true });
+    return true;
+  }
   if ((m = line.match(/^~ costs ((?:\{[^}]+\})+) less to cast for each (.+)\.$/i))) {
     const gy = m[2].match(/^(.+?) card in your graveyard$/i);
     const info = parseNounG(gy ? gy[1] : m[2].replace(/ you control$/i, ''));
@@ -1586,6 +1633,21 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
 
+  // ---- Leva 6a (Legacy, parte 4): Up the Beanstalk, Sand Scout, Leyline Binding, Overlord (Impending)
+  if ((m = line.match(/^When ~ enters and whenever (.+?), (.+)$/i)) && !/except/i.test(m[1])) { // Orcish Bowmasters has its own handler
+    return parseLine(`When ~ enters, ${m[2]}`, st, isSpell, subtypes) && parseLine(`Whenever ${m[1]}, ${m[2]}`, st, isSpell, subtypes);
+  }
+  if ((m = line.match(/^(.+) This ability triggers only once each turn\.$/i))) {
+    const before = st.abilities.length;
+    if (!parseLine(m[1], st, isSpell, subtypes)) return false;
+    const last = st.abilities[st.abilities.length - 1];
+    if (st.abilities.length > before && last?.kind === 'triggered') last.oncePerTurn = true;
+    return true;
+  }
+  if ((m = line.match(/^Impending (\d+)—((?:\{[^}]+\})+)$/i))) {
+    st.altCost = { label: `Impending ${m[1]} (${m[2]})`, manaCost: m[2], impending: parseInt(m[1], 10) };
+    return true;
+  }
   // ---- Leva 6a (Legacy, parte 3): Quantum Riddler, Ascend, Omniscience, Aluren, Disruptor Flute, Boseiju, Amped Raptor, Ugin
   if (/^Ascend$/i.test(line)) { st.flags10.ascend = true; return true; }
   if (/^You may cast spells from your hand without paying their mana costs\.$/i.test(line)) { st.flags10.freeSpellsFromHand = true; return true; }
@@ -2307,7 +2369,8 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   const isSpell = types.includes('Instant') || types.includes('Sorcery');
 
   // Normalize: strip reminder text, replace the card's own name with ~.
-  const shortName = input.name.split(',')[0];
+  // "Acererak the Archlich" → "Acererak"; "Karn, the Great Creator" → "Karn".
+  const shortName = input.name.includes(',') ? input.name.split(',')[0] : (input.name.match(/^(\w{4,}) the /)?.[1] ?? input.name);
   let text = (input.oracleText ?? '')
     .replace(/\([^)]*\)/g, '')
     .split(input.name).join('~')
@@ -2315,6 +2378,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     .replace(/\bThis (creature|land|artifact|enchantment|permanent|Aura|Equipment|Vehicle|Saga|Class|Spacecraft|spell|Siege|battle)\b/gi, '~')
     .replace(/[ \t]+/g, ' ')
     .replace(/ \./g, '.')
+    .replace(/ ,/g, ',')
     .trim();
 
   const st = newParseState();
@@ -2390,7 +2454,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
   if (isSpell && st.spellModes.length > 0 && st.spellEffect.length > 0) return null; // modal + efeito solto: fora do escopo
   // Kicker sem efeito condicional reconhecido (ou vice-versa): fora do escopo.
   const hasKickerCost = st.kickerCost !== undefined;
-  const kickerHasEffect = st.kickerEffect.length > 0 || !!st.giftEffect || st.abilities.some((a) => a.kind === 'triggered' && a.requiresKicked);
+  const kickerHasEffect = st.kickerEffect.length > 0 || !!st.giftEffect || st.abilities.some((a) => a.kind === 'triggered' && a.requiresKicked) || st.spellTargets.some((t) => !!t.kickedSpec);
   if (isSpell && hasKickerCost !== kickerHasEffect) return null;
   if (!isSpell && hasKickerCost && !st.kickerEnters && !st.flags2.offspring && !st.flags2.squad && !kickerHasEffect) unparsed.push(`Kicker ${st.kickerCost} (efeito do kicker não reconhecido)`);
   if (isSpell && st.modalOpen && st.spellModes.length < 2) return null;

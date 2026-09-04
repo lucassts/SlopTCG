@@ -66,6 +66,8 @@ export interface GameObject {
   enteredOnTurn?: number;
   /** "It becomes an Angel in addition to its other types." */
   extraSubtypes?: string[];
+  /** Impending: cast for the impending cost (not a creature while it has time counters). */
+  impending?: boolean;
   /** Ugin −11 / Amped Raptor: castable from exile this turn without paying (or paying energy = mana value). */
   freeCastUntilTurn?: number;
   payWithEnergy?: boolean;
@@ -171,6 +173,8 @@ export interface DelayedAction {
 
 /** Creature on the battlefield — printed type, a crewed vehicle, or a face-down 2/2. */
 export function isCreature(obj: GameObject): boolean {
+  // Impending: not a creature while it has time counters.
+  if (obj.impending && (obj.counters['time'] ?? 0) > 0) return false;
   // Bestowed auras and attached reconfigure equipment aren't creatures while attached.
   if (obj.attachedTo !== undefined && (obj.bestowed || obj.card.reconfigure)) return false;
   if (obj.card.station && (obj.counters['charge'] ?? 0) >= obj.card.station.threshold) return true;
@@ -275,6 +279,8 @@ export interface PlayerState {
   noMaxHandSize?: boolean;
   /** Ascend. */
   cityBlessing?: boolean;
+  /** Names of dungeons this player completed (Acererak). */
+  completedDungeonNames?: string[];
   /** Colors of spells cast this turn (Veil of Summer). */
   colorsCastThisTurn?: import('./types.js').Color[];
   /** Veil of Summer: you and your permanents can't be targeted by spells of these colors while turn < untilTurn. */
@@ -356,7 +362,7 @@ export type PendingDecision =
       player: PlayerId;
       prompt: string;
       /** 'cards' → pick objects; 'scry' → picks go to the bottom; text answers: 'nameCard', 'confirm' (yes/no), 'chooseColor' (WUBRG), 'chooseType' (creature type). */
-      mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType';
+      mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
       options: number[];
       min: number;
       max: number;
@@ -667,6 +673,14 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'castFromHand': return !!source.castFromHand;
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
+    case 'opponentControlsMoreLands': {
+      const lands = (p: PlayerId) => state.players[p].zones.battlefield.filter((id) => state.objects[id].card.types.includes('Land')).length;
+      return lands(opp) > lands(me);
+    }
+    case 'completedNamedDungeon': {
+      const done = (state.players[me].completedDungeonNames ?? []).includes(cond.name);
+      return cond.negate ? !done : done;
+    }
     case 'beingAttacked': return state.step === 'declareAttackers' && state.combatAwaiting === null && state.activePlayer !== me && battlefield(state).some((o) => o.attacking);
     case 'topCardSharesCreatureType': {
       const top = state.objects[state.players[me].zones.library[0]];

@@ -47,7 +47,7 @@ import {
   type PendingDecision,
   type StackItem,
 } from './state.js';
-import { opponentOf, type PlayerId, type TargetChoice } from './types.js';
+import { opponentOf, PLAYER_IDS, type PlayerId, type TargetChoice } from './types.js';
 import { shuffle } from './rng.js';
 import { DUNGEONS } from './dungeons.js';
 import { canPay, parseCost, planPayment } from './mana.js';
@@ -155,6 +155,11 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if ('powerOf' in amount) { const obj = subj(amount.powerOf); return obj ? Math.max(0, effectivePower(ctx.state, obj)) : 0; }
   if ('toughnessOf' in amount) { const obj = subj(amount.toughnessOf); return obj ? Math.max(0, effectiveToughness(ctx.state, obj)) : 0; }
   if ('cmcOf' in amount) { const obj = subj(amount.cmcOf); return obj ? manaValueOf(obj.card.manaCost) : 0; }
+  if ('sumManaValue' in amount) {
+    return PLAYER_IDS.flatMap((p) => ctx.state.players[p].zones.battlefield).map((id) => ctx.state.objects[id])
+      .filter((o) => matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId, state: ctx.state }, amount.sumManaValue, o))
+      .reduce((acc, o) => acc + manaValueOf(o.card.manaCost), 0);
+  }
   if ('countersOn' in amount) { const obj = subj(amount.countersOn); return obj ? obj.counters[amount.counter] ?? 0 : 0; }
   if ('handSize' in amount) return resolvePlayers(amount.handSize, ctx.controller).reduce((s, p) => s + ctx.state.players[p].zones.hand.length, 0);
   if ('graveyardCount' in amount)
@@ -185,9 +190,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -199,7 +204,7 @@ interface ChoiceSetup {
   min: number;
   max: number;
   prompt: string;
-  mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType';
+  mode: 'cards' | 'scry' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
   /** 'confirm' with nothing to decide (target gone / can't pay) resolves immediately. */
   autoAnswer?: 'yes' | 'no' | 'skip';
 }
@@ -447,6 +452,30 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const types = new Set(top.flatMap((id) => state.objects[id].card.types));
       if (top.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
       return { player: controller, options: top, min: 0, max: types.size, prompt: `${ctx.sourceName}: revele ${top.length} do topo — escolha até uma carta de cada tipo para a mão (o resto vai para o fundo)`, mode: 'cards' };
+    }
+    case 'payEnergyDestroy': {
+      const energy = state.players[controller].energy;
+      if (energy <= 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'number', autoAnswer: 'skip' };
+      return { player: controller, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: quantos {E} pagar? (0 a ${energy}) — destrói cada permanente com valor de mana até esse número`, mode: 'number' };
+    }
+    case 'returnFromGraveyardChoice': {
+      const options = state.players[controller].zones.graveyard.filter((id) => cardMatchesFilter(state.objects[id].card, step.filter));
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: escolha uma carta do cemitério para a mão`, mode: 'cards' };
+    }
+    case 'tokenUnlessSacrifice': {
+      const opp = opponentOf(controller);
+      const options = state.players[opp].zones.battlefield.filter((id) => matchFilter({ controller: opp, sourceId: ctx.sourceId, state }, step.filter, state.objects[id]));
+      if (options.length === 0) return { player: opp, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: opp, options, min: 0, max: 1, prompt: `${ctx.sourceName}: sacrifique uma permanente ou ${state.players[controller].name} cria ${step.token.name}`, mode: 'cards' };
+    }
+    case 'extractName': {
+      const t = ctx.targets[0];
+      const target = t?.kind === 'object' ? state.objects[t.id] : undefined;
+      if (!target) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      const owner = state.players[target.owner];
+      const options = [...owner.zones.graveyard, ...owner.zones.hand, ...owner.zones.library].filter((id) => state.objects[id].card.name === target.card.name);
+      return { player: controller, options, min: 0, max: options.length, prompt: `${ctx.sourceName}: exile as cartas chamadas ${target.card.name} (cemitério, mão e biblioteca de ${owner.name})`, mode: 'cards' };
     }
     case 'pickFromMilled': {
       const options = (state.lastMilled ?? []).filter((id) => state.objects[id]?.zone === 'graveyard' && cardMatchesFilter(state.objects[id].card, step.filter));
@@ -720,6 +749,49 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       moveWithEvent(state, o, 'hand', 'returned', emit);
       return;
     }
+    case 'payEnergyDestroy': {
+      const ps = state.players[ctx.controller];
+      const n = Math.max(0, Math.min(ps.energy, parseInt(text ?? '0', 10) || 0));
+      if (n > 0) { ps.energy -= n; emit({ type: 'energyChanged', player: ctx.controller, delta: -n, total: ps.energy }); }
+      for (const p of PLAYER_IDS) {
+        for (const id of [...state.players[p].zones.battlefield]) {
+          const o = state.objects[id];
+          if (!o || o.zone !== 'battlefield') continue;
+          if (!matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId, state }, step.filter, o)) continue;
+          if (manaValueOf(o.card.manaCost) > n) continue;
+          destroyObject(state, o, emit);
+        }
+      }
+      return;
+    }
+    case 'returnFromGraveyardChoice': {
+      const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      if (!o || o.zone !== 'graveyard' || o.owner !== ctx.controller) return;
+      moveWithEvent(state, o, 'hand', 'returned', emit);
+      return;
+    }
+    case 'tokenUnlessSacrifice': {
+      const opp = opponentOf(ctx.controller);
+      const o = picks[0] !== undefined ? state.objects[picks[0]] : undefined;
+      if (o && o.zone === 'battlefield' && o.controller === opp) { moveWithEvent(state, o, 'graveyard', 'sacrificed', emit); return; }
+      runStep(ctx, step.token);
+      return;
+    }
+    case 'extractName': {
+      const t = ctx.targets[0];
+      const target = t?.kind === 'object' ? state.objects[t.id] : undefined;
+      const owner = target?.owner ?? ctx.controller;
+      for (const id of picks) {
+        const o = state.objects[id];
+        if (!o || o.owner !== owner || !['graveyard', 'hand', 'library'].includes(o.zone)) continue;
+        moveWithEvent(state, o, 'exile', 'exiled', emit);
+      }
+      const r = shuffle(state.players[owner].zones.library, state.rngState);
+      state.players[owner].zones.library = r.items;
+      state.rngState = r.state;
+      emit({ type: 'shuffled', player: owner });
+      return;
+    }
     case 'searchExileCastFree': {
       for (const id of picks) {
         const o = state.objects[id];
@@ -987,7 +1059,7 @@ function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep
     }
   }
   // Text answers always need the round-trip (the answer is text, not picks).
-  if (setup.mode !== 'nameCard' && setup.mode !== 'confirm' && setup.mode !== 'chooseColor' && setup.mode !== 'chooseType') {
+  if (setup.mode !== 'nameCard' && setup.mode !== 'confirm' && setup.mode !== 'chooseColor' && setup.mode !== 'chooseType' && setup.mode !== 'number') {
     // Forced choice (all options must be picked) or nothing to pick → no round-trip.
     if (setup.mode === 'cards' && setup.options.length <= setup.min) {
       executeChoice(ctx, step, setup.options);
@@ -1760,13 +1832,15 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       return;
     }
 
-    case 'energy':
+    case 'energy': {
+      const amt = resolveAmount(ctx, step.amount);
       for (const p of resolveWho(ctx, step.who)) {
         const ps = state.players[p];
-        ps.energy = Math.max(0, ps.energy + step.amount);
-        emit({ type: 'energyChanged', player: p, delta: step.amount, total: ps.energy });
+        ps.energy = Math.max(0, ps.energy + amt);
+        emit({ type: 'energyChanged', player: p, delta: amt, total: ps.energy });
       }
       return;
+    }
 
     case 'exileTop':
       for (const p of resolveWho(ctx, step.who)) {
@@ -1855,7 +1929,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       if (!dungeon || !room) return;
       const completed = room.next.length === 0;
       ps.dungeon = completed ? undefined : { name: dungeon.name, room: step.room };
-      if (completed) ps.completedDungeons += 1;
+      if (completed) { ps.completedDungeons += 1; (ps.completedDungeonNames ??= []).push(dungeon.name); }
       emit({ type: 'ventured', player: ctx.controller, dungeon: dungeon.name, room: room.name, completed, note: room.note });
       return;
     }
@@ -2260,6 +2334,7 @@ export function targetMatchesSpec(
   if (spec.untapped && obj.tapped) return false;
   if (spec.legendary && !obj.card.supertypes?.includes('Legendary')) return false;
   if (spec.nonbasic && obj.card.supertypes?.includes('Basic')) return false;
+  if (spec.notBasicLand && obj.card.types.includes('Land') && obj.card.supertypes?.includes('Basic')) return false;
   if (spec.colored && obj.card.colors.length === 0) return false;
   if (spec.cmcAtMostX && xValue !== undefined && manaValueOf(obj.card.manaCost) > xValue) return false;
   switch (spec.what) {

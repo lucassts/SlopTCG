@@ -1362,6 +1362,38 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       )}
 
       {/* -------- nomear uma carta (Cabal Therapy) -------- */}
+      {myChoice && myChoice.mode === 'number' && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>Escolha um número</h2>
+            <div className="muted">{myChoice.prompt}</div>
+            <input
+              autoFocus
+              type="number"
+              min={0}
+              value={nameText}
+              onChange={(e) => setNameText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && nameText.trim() !== '') {
+                  onAction({ type: 'effectChoice', picks: [], text: nameText.trim() });
+                  setNameText('');
+                }
+              }}
+              style={{ width: 'min(200px, 60vw)' }}
+            />
+            <button
+              className="primary"
+              disabled={nameText.trim() === ''}
+              onClick={() => {
+                onAction({ type: 'effectChoice', picks: [], text: nameText.trim() });
+                setNameText('');
+              }}
+            >
+              Confirmar
+            </button>
+          </div>
+        </div>
+      )}
       {myChoice && myChoice.mode === 'nameCard' && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">

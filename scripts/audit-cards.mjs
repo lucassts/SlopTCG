@@ -153,6 +153,7 @@ function settle(game, log, maxSteps = 60) {
         else if (pd.mode === 'confirm') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'yes' });
         else if (pd.mode === 'chooseColor') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'G' });
         else if (pd.mode === 'chooseType') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: 'Bear' });
+        else if (pd.mode === 'number') r = game.apply(pd.player, { type: 'effectChoice', picks: [], text: '0' });
         else r = game.apply(pd.player, { type: 'effectChoice', picks: pd.options.slice(0, pd.min) });
       } else if (pd.type === 'chooseMode') {
         r = game.apply(pd.player, { type: 'chooseMode', mode: 0 });

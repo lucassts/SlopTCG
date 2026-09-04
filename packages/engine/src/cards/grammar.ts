@@ -90,6 +90,8 @@ export function parseNounG(raw: string): NounInfo | null {
     else if (/your/i.test(raw)) filter.controlledBy = 'you';
   }
   n = n.replace(/ cards?$/i, '');
+  // "creature card or a planeswalker card" → "creature or planeswalker".
+  n = n.replace(/ cards? (or|and) (?:a |an )?/gi, ' $1 ');
   // "nonartifact, nonland card" → prefixes without the comma.
   n = n.replace(/\b(non\w+),\s+(?=non\w+)/gi, '$1 ');
   // "creature card with mana value 3 or less" → "creature with…" (the word "card" is not a type).
@@ -97,6 +99,9 @@ export function parseNounG(raw: string): NounInfo | null {
   if (/^multicolored( |$)/i.test(n)) { n = n.replace(/^multicolored ?/i, ''); filter.multicolored = true; }
   if (/^colorless( |$)/i.test(n) && !/^colorless (?:spell|mana)/i.test(n)) { n = n.replace(/^colorless ?/i, ''); filter.colorless = true; }
   if (/ other than ~$/i.test(n)) { n = n.replace(/ other than ~$/i, ''); filter.other = true; }
+  { const ns = n.match(/^non-([A-Z][a-z]+) /); if (ns) { n = n.slice(ns[0].length); filter.notSubtype = ns[1]; } }
+  // Land types used as nouns ("Desert card", "Gate").
+  if (/^(?:Desert|Gate|Cave|Lair|Locus|Mine|Power-Plant|Tower|Sphere|Urza's)$/i.test(n)) return { filter: { ...filter, what: 'land', subtype: n.replace(/^urza's$/i, "Urza's") }, zone };
 
   // "spell or nonland permanent an opponent controls" (Sink into Stupor).
   let orSpell = false;
@@ -188,11 +193,13 @@ export function parseNounG(raw: string): NounInfo | null {
     }
     if (alts.every((a) => SUBTYPE_RE.test(a))) return { filter: { ...filter, what: 'creature', subtypeAnyOf: alts }, zone };
     // "artifact, enchantment, or nonbasic land": each alternative is a single-type noun with its own prefixes.
-    const parsedAlts = alts.map((a) => parseNounG(a));
-    if (parsedAlts.every((p) => p && !p.player && !p.zone && !p.spell && p.filter.what && p.filter.what !== 'permanent')) {
-      const types = parsedAlts.map((p) => typeWord(p!.filter.what!)!).filter(Boolean);
+    const parsedAlts = alts.map((a) => ({ a, p: parseNounG(a) }));
+    const altType = ({ a, p }: { a: string; p: NounInfo | null }): CardType | null =>
+      !p ? typeWord(a) ?? null : p.player || p.zone || p.spell ? null : p.filter.what && p.filter.what !== 'permanent' ? typeWord(p.filter.what) ?? null : p.filter.typeAnyOf?.length === 1 ? p.filter.typeAnyOf[0] : null;
+    if (parsedAlts.every((x) => altType(x) !== null)) {
+      const types = parsedAlts.map((x) => altType(x)!);
       const merged: FilterSpec = { ...filter, what: 'permanent', typeAnyOf: types };
-      for (const p of parsedAlts) { if (p!.filter.nonbasic) merged.nonbasic = true; }
+      for (const { p } of parsedAlts) { if (p?.filter.nonbasic) merged.nonbasic = true; if (p?.filter.notSubtype) merged.notSubtype = p.filter.notSubtype; }
       return { filter: merged, zone, ...(orSpell ? { orSpell: true } : {}) };
     }
     // "creature or planeswalker" → creature (planeswalkers automated partially).
@@ -296,6 +303,11 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
     const k = m[1];
     return k === 'power' ? { powerOf: subject } : k === 'toughness' ? { toughnessOf: subject } : { cmcOf: subject };
   }
+  if ((m = t.match(/^the total mana value of (.+?) you control$/))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    return { sumManaValue: { ...info.filter, controlledBy: 'you' } };
+  }
   if ((m = t.match(/^the number of (.+?) (?:you control|on the battlefield)$/))) {
     const info = parseNounG(m[1]);
     if (!info || info.player) return null;
@@ -387,6 +399,9 @@ export function parseCondG(raw: string): Cond | null {
   if (low === 'you cast it' || low === 'it was cast') return { kind: 'wasCast' };
   if (low === 'you cast it from your hand') return { kind: 'castFromHand' };
   if (low === "you have the city's blessing") return { kind: 'cityBlessing' };
+  if (low === 'an opponent controls more lands than you') return { kind: 'opponentControlsMoreLands' };
+  if ((m = t.match(/^you haven't completed (.+)$/i))) return { kind: 'completedNamedDungeon', name: m[1], negate: true };
+  if ((m = t.match(/^you've completed (.+)$/i)) && !/^a dungeon$/i.test(m[1])) return { kind: 'completedNamedDungeon', name: m[1] };
   if ((m = low.match(/^an opponent has cast (?:a|an) (white|blue|black|red|green) or (white|blue|black|red|green) spell this turn$/))) return { kind: 'opponentCastColorThisTurn', colors: [COLOR_WORDS[m[1]], COLOR_WORDS[m[2]]] };
   if ((m = low.match(/^an opponent has cast (?:a|an) (white|blue|black|red|green) spell this turn$/))) return { kind: 'opponentCastColorThisTurn', colors: [COLOR_WORDS[m[1]]] };
   if (low === 'there is an instant card and a sorcery card in your graveyard') return { kind: 'and', conds: [{ kind: 'graveyardAtLeast', count: 1, filter: { what: 'instant' } }, { kind: 'graveyardAtLeast', count: 1, filter: { what: 'sorcery' } }] };
@@ -563,10 +578,10 @@ export function parseTokenG(text: string, who: WhoSel = 'controller'): EffectSte
     const count: DynAmount = n ? (n[1] === 'X' ? 'X' : num(n[1]) ?? 1) : 1;
     return [{ op: 'namedToken', who, kind: m[2] as 'Treasure', count, tapped: !!m[1] || undefined }];
   }
-  if ((m = t.match(/^(\w+|X) (\d+)\/(\d+) ((?:white|blue|black|red|green|colorless)(?:(?: and |, )(?:white|blue|black|red|green))*) ([\w\s'-]+?) ((?:artifact |enchantment )?creature) tokens?(?: named ([\w\s',]+?))?(?: with (\w[\w\s,]*?))?$/i))) {
+  if ((m = t.match(/^(\w+|X) (\d+)\/(\d+) ((?:white|blue|black|red|green|colorless)(?:(?: and |, and |, )(?:white|blue|black|red|green))*) ([\w\s'-]+?) ((?:artifact |enchantment )?creature) tokens?(?: named ([\w\s',]+?))?(?: with (\w[\w\s,]*?))?$/i))) {
     const count: DynAmount = m[1] === 'X' ? 'X' : num(m[1]) ?? -1;
     if (count === -1) return null;
-    const colors = m[4].toLowerCase().split(/ and |, /).filter((c) => c !== 'colorless').map((c) => COLOR_WORDS[c]);
+    const colors = m[4].toLowerCase().split(/, and |, | and /).filter((c) => c !== 'colorless').map((c) => COLOR_WORDS[c]);
     const kws = m[8] ? keywordList(m[8]) : undefined;
     if (m[8] && !kws) return null;
     const subtypes = m[5].trim().split(/\s+/);

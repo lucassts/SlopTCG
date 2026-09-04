@@ -481,6 +481,7 @@ export class Game {
     if (card.bloodthirst && s.players[opponentOf(obj.controller)].damagedThisTurn) add('+1/+1', card.bloodthirst);
     if (obj.kicked && card.kicker?.entersWithCounters) add(card.kicker.entersWithCounters.counter, card.kicker.entersWithCounters.count * Math.max(1, obj.kickerTimes ?? 1));
     if (card.vanishing) add('time', card.vanishing);
+    if (obj.impending && card.altCost?.impending) add('time', card.altCost.impending);
     if (card.fading) add('fade', card.fading);
     if (card.echo) obj.echoPending = true;
     if (card.livingWeapon) {
@@ -588,8 +589,10 @@ export class Game {
     targets: TargetChoice[],
     srcColors?: import('./types.js').Color[],
     xValue?: number,
+    kicked?: boolean,
   ): string | null {
-    const required = specs ?? [];
+    // "If this spell was kicked, instead <target …>": the kicked spec replaces the base one.
+    const required = (specs ?? []).map((t) => (kicked && t.kickedSpec ? t.kickedSpec : t));
     const mandatory = required.filter((t) => !t.optional).length;
     if (targets.length < mandatory || targets.length > required.length)
       return 'número de alvos incorreto';
@@ -803,7 +806,7 @@ export class Game {
           : card.enchant
             ? [{ what: card.enchant.what, controlledBy: card.enchant.controlledBy, typeAnyOf: card.enchant.typeAnyOf, zone: card.enchant.zone }]
             : card.spellTargets;
-    const targetErr = this.validateTargets(playerId, specs, targets, card.colors, x);
+    const targetErr = this.validateTargets(playerId, specs, targets, card.colors, x, kicked);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
     for (const t of targets) if (t.kind === 'object') this.emit({ type: 'targeted', objectId: t.id, by: playerId });
     // Ward — Pay N life: paid up front when targeting an opponent's warded permanent.
@@ -913,13 +916,13 @@ export class Game {
 
     let xValue: number | undefined;
     const kickerTimes = card.multikicker ? Math.max(0, extra.kickerTimes ?? (kicked ? 1 : 0)) : kicked ? 1 : 0;
-    if (alt) {
+    if (alt && !alt.manaCost) {
       // X with an alternative cost is untypical; treat as 0 when present.
       if (alt.payLife) changeLife(s, playerId, -alt.payLife, `custo de ${card.name}`, this.emit);
       for (const id of exiles) moveWithEvent(s, s.objects[id], 'exile', 'exiled', this.emit);
       if (altLand) moveWithEvent(s, altLand, 'hand', 'returned', this.emit);
     } else {
-      const baseCost = extra.faceDown ? '{3}' : cm ? cm.cost : viaFlashback ? card.flashback!.cost : card.manaCost;
+      const baseCost = extra.faceDown ? '{3}' : cm ? cm.cost : viaFlashback ? card.flashback!.cost : alt?.manaCost ?? card.manaCost;
       const cost = parseCost(baseCost);
       if (extra.fuse && obj.baseCard?.backFace) {
         const bc = parseCost(obj.baseCard.backFace.manaCost);
@@ -1060,6 +1063,7 @@ export class Game {
     removeFromCurrentZone(s, obj);
     obj.zone = 'stack';
     obj.kicked = kickerTimes > 0;
+    obj.impending = !!alt?.impending;
     obj.kickerTimes = kickerTimes;
     obj.castMethod = cm?.kind;
     obj.buybackPaid = !!extra.buyback;
@@ -1265,10 +1269,21 @@ export class Game {
       PLAYER_IDS.flatMap((p) => s.players[p].zones.battlefield).map((id) => s.objects[id]).filter((o) => matchFilter({ controller, sourceId: obj.id, state: s }, filter, o)).length;
     const countGy = (filter: import('./cards/types.js').FilterSpec, controller: PlayerId) =>
       s.players[controller].zones.graveyard.filter((id) => cardMatchesFilter(s.objects[id].card, filter)).length;
+    const domain = (controller: PlayerId) => {
+      const basics = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
+      const types = new Set<string>();
+      for (const id of s.players[controller].zones.battlefield) {
+        const o = s.objects[id];
+        if (!o.card.types.includes('Land')) continue;
+        for (const st of o.card.subtypes) if (basics.includes(st)) types.add(st);
+        if (o.card.everyNonbasicLandType) { /* Planar Nexus: only nonbasic types */ }
+      }
+      return types.size;
+    };
     // The card's own "~ costs {N} less for each X".
     for (const m of card.costModifiers ?? []) {
       if (!m.self) continue;
-      const scale = m.per ? countOn(m.per, playerId) : m.perGraveyard ? countGy(m.perGraveyard, playerId) : 1;
+      const scale = m.per ? countOn(m.per, playerId) : m.perGraveyard ? countGy(m.perGraveyard, playerId) : m.perDomain ? domain(playerId) : 1;
       delta += m.amount * scale;
     }
     // Permanents on the battlefield.
@@ -1284,7 +1299,7 @@ export class Game {
           if (m.notFromHand && !notFromHand) continue;
           if (m.chosenName && src.chosenName !== card.name) continue;
           if (m.targetsSelf && !targets.some((t) => t.kind === 'object' && t.id === src.id)) continue;
-          const scale = m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : 1;
+          const scale = m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : m.perDomain ? domain(src.controller) : 1;
           delta += m.amount * scale;
         }
       }
@@ -1803,6 +1818,12 @@ export class Game {
     if (pending.mode === 'chooseColor') {
       if (!text || !['W', 'U', 'B', 'R', 'G'].includes(text)) { this.fail(playerId, 'escolha uma cor'); return false; }
       applyEffectChoice(s, pending, [], this.emit, text);
+      return true;
+    }
+    if (pending.mode === 'number') {
+      const n = parseInt((text ?? '').trim(), 10);
+      if (!Number.isFinite(n) || n < 0) { this.fail(playerId, 'digite um número'); return false; }
+      applyEffectChoice(s, pending, [], this.emit, String(n));
       return true;
     }
     if (pending.mode === 'chooseType') {
@@ -2960,6 +2981,15 @@ export class Game {
 
   private fireStepTriggers(on: 'upkeep' | 'endStep' | 'beginCombat' | 'main1' | 'main2'): void {
     const s = this.state;
+    if (on === 'endStep') {
+      // Impending: "At the beginning of your end step, remove a time counter from it."
+      for (const id of [...s.players[s.activePlayer].zones.battlefield]) {
+        const obj = s.objects[id];
+        if (!obj?.impending || (obj.counters['time'] ?? 0) <= 0) continue;
+        obj.counters['time'] -= 1;
+        this.emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: 'time', delta: -1, total: obj.counters['time'] });
+      }
+    }
     for (const p of PLAYER_IDS) {
       for (const id of [...s.players[p].zones.battlefield]) {
         const obj = s.objects[id];

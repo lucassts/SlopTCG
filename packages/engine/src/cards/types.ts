@@ -36,6 +36,10 @@ export type Cond =
   | { kind: 'cityBlessing' }
   /** Veil of Summer: "if an opponent has cast a blue or black spell this turn". */
   | { kind: 'opponentCastColorThisTurn'; colors: Color[] }
+  /** Sand Scout: "if an opponent controls more lands than you". */
+  | { kind: 'opponentControlsMoreLands' }
+  /** Acererak: "if you haven't completed Tomb of Annihilation". */
+  | { kind: 'completedNamedDungeon'; name: string; negate?: boolean }
   // ---- Leva 5b
   | { kind: 'dayNight'; value: 'day' | 'night' }
   | { kind: 'noSpellsLastTurn' }
@@ -173,6 +177,8 @@ export interface FilterSpec {
 export type DynAmount =
   | number
   | 'X'
+  /** "the total mana value of other permanents you control" (Summon: Bahamut). */
+  | { sumManaValue: FilterSpec }
   | { per: FilterSpec }
   /** Power of the creature sacrificed as an additional cost (Fling). */
   | 'sacrificedPower'
@@ -212,6 +218,10 @@ export interface TargetSpec {
   colored?: boolean;
   /** "target spell or nonland permanent an opponent controls" (Sink into Stupor): a spell on the stack also qualifies. */
   orSpell?: boolean;
+  /** Surgical Extraction: "card in a graveyard other than a basic land card". */
+  notBasicLand?: boolean;
+  /** Bloodchief's Thirst: "If this spell was kicked, instead destroy target creature or planeswalker" — the spec used when kicked. */
+  kickedSpec?: TargetSpec;
   /** For 'spell' targets: restrict by the spell's type (Negate, Essence Scatter…). */
   spellType?: 'creature' | 'noncreature' | 'instantSorcery';
   /** "artifact or enchantment": the object must have at least one of these types. */
@@ -296,7 +306,7 @@ export type EffectStep =
   /** (choice) "You may <effect>" — yes runs `effect`, no runs `else` (if any). */
   | { op: 'mayDo'; prompt?: string; effect: EffectScript; else?: EffectScript; who?: 'opponent' }
   /** Energy: "you get {E}{E}" (negative = pay). */
-  | { op: 'energy'; who: WhoSel; amount: number }
+  | { op: 'energy'; who: WhoSel; amount: DynAmount }
   /** (choice) Explore: reveal top; land → hand, else +1/+1 counter and may put it into the graveyard. */
   | { op: 'explore'; what: SubjectRef }
   /** (choice) Exploit: may sacrifice a creature; if so, "exploits" triggers fire. */
@@ -418,6 +428,15 @@ export type EffectStep =
   /** Veil of Summer. */
   | { op: 'hexproofFromColorsUntilEot'; colors: Color[] }
   | { op: 'uncounterableThisTurn' }
+  // ---- Leva 6a (Legacy, parte 4)
+  /** (choice, number) Wrath of the Skies: pay any amount of {E}; destroy each matching permanent with mana value ≤ that amount. */
+  | { op: 'payEnergyDestroy'; filter: FilterSpec }
+  /** (choice) "you may return a <filter> card from your graveyard to your hand" (no target). */
+  | { op: 'returnFromGraveyardChoice'; filter: FilterSpec; to: 'hand' }
+  /** (choice) Acererak: each opponent sacrifices a matching permanent or you create the token. */
+  | { op: 'tokenUnlessSacrifice'; token: Extract<EffectStep, { op: 'token' }>; filter: FilterSpec }
+  /** (choice) Surgical Extraction: exile any number of cards named like target 0 from its owner's graveyard, hand and library. */
+  | { op: 'extractName' }
   /** (choice) Chrome Mox: exile a card from hand and remember it. */
   | { op: 'imprintFromHand'; filter: FilterSpec }
   /** (choice) Mox Diamond: discard a matching card or the source goes to the graveyard. */
@@ -936,6 +955,8 @@ export interface CardDefinition {
     notFromHand?: boolean;
     /** Disruptor Flute: only spells with the chosen name. */
     chosenName?: boolean;
+    /** Domain (Leyline Binding): scaled by the number of basic land types among lands you control. */
+    perDomain?: boolean;
   }[];
   /** "If ~ would die, exile it instead." */
   exileInsteadOfDying?: boolean;
@@ -1086,7 +1107,7 @@ export interface CardDefinition {
    * Alternative cost (Force of Will): instead of the mana cost, pay life
    * and/or exile matching cards from your hand.
    */
-  altCost?: { payLife?: number; exileFromHand?: { count: number; filter: FilterSpec }; label: string; /** Daze: return a land you control to hand. */ returnLand?: FilterSpec; /** "pay {0}" / "cast it without paying its mana cost". */ free?: boolean; /** "If it's not your turn, …" */ condition?: Cond };
+  altCost?: { payLife?: number; exileFromHand?: { count: number; filter: FilterSpec }; label: string; /** Impending: alternative mana cost; enters with N time counters and isn't a creature while it has any. */ manaCost?: string; impending?: number; /** Daze: return a land you control to hand. */ returnLand?: FilterSpec; /** "pay {0}" / "cast it without paying its mana cost". */ free?: boolean; /** "If it's not your turn, …" */ condition?: Cond };
   /**
    * Alternative casting methods with their own mana cost and side effects.
    * The client offers each as a cast option; the engine applies the rules.
