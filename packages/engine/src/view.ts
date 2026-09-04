@@ -43,6 +43,7 @@ export interface CardView {
 
 export type PendingDecisionView =
   | { type: 'discardToHandSize'; player: PlayerId; count: number }
+  | { type: 'payMana'; player: PlayerId; cardName: string; cost: string }
   | { type: 'chooseMode'; player: PlayerId; cardName: string; modes: string[] }
   | {
       type: 'chooseTargets';
@@ -129,6 +130,7 @@ function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisio
   const pd = state.pendingDecision;
   if (!pd) return null;
   if (pd.type === 'discardToHandSize') return { type: 'discardToHandSize', player: pd.player, count: pd.count };
+  if (pd.type === 'payMana') return { type: 'payMana', player: pd.player, cardName: pd.cardName, cost: pd.cost };
   if (pd.type === 'chooseMode') return { type: 'chooseMode', player: pd.player, cardName: pd.cardName, modes: pd.options.map((o) => o.label) };
   if (pd.type === 'chooseTargets')
     return { type: 'chooseTargets', player: pd.player, cardName: pd.cardName, text: pd.text, specs: pd.specs };

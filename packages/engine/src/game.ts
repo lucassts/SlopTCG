@@ -18,7 +18,7 @@ import {
   targetMatchesSpec,
 } from './effects.js';
 import type { GameEvent } from './events.js';
-import { canPay, costCmc, parseCost, planPayment } from './mana.js';
+import { canPay, costCmc, costLabel, parseCost, planPayment } from './mana.js';
 import { castCardFree } from './effects.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
@@ -53,6 +53,8 @@ export interface ApplyResult {
 }
 
 export interface GameOptions {
+  /** Manual mana: spells and abilities wait for the player to float the mana (no automatic tapping). */
+  manualMana?: boolean;
   /** Force who goes first, skipping the roll AND the choice (tests). */
   firstPlayer?: PlayerId;
   /**
@@ -240,10 +242,14 @@ export class Game {
     return true;
   }
 
+  /** The action being applied (stored for manual-mana deferral). */
+  private currentAction: PlayerAction | null = null;
+
   apply(playerId: PlayerId, action: PlayerAction): ApplyResult {
     this.buf = [];
     this.triggerCursor = 0;
     const s = this.state;
+    this.currentAction = action;
     // Miracle: the window closes as soon as its owner does anything else.
     if (action.type !== 'chat' && !(action.type === 'castSpell' && action.method === 'miracle'))
       for (const id of s.players[playerId].zones.hand) s.objects[id].miracleAvailable = undefined;
@@ -271,6 +277,8 @@ export class Game {
       const isManual = action.type.startsWith('manual');
       const ok = this.execute(playerId, action);
       if (!ok) return { ok: false, events: this.flush() };
+      // Manual mana: after a mana ability, retry the spell/ability waiting for payment.
+      if (ok && s.pendingPayment && action.type === 'activateAbility') this.retryPendingPayment();
       if (!isManual && action.type !== 'chat' && s.status === 'playing') {
         checkStateBasedActions(s, this.emit);
         this.scanTriggers();
@@ -357,14 +365,48 @@ export class Game {
         return this.doDeclareBlockers(playerId, action.blocks);
       case 'chooseDiscard':
         return this.doChooseDiscard(playerId, action.objectIds);
+      case 'cancelPayment':
+        return this.doCancelPayment(playerId);
       default:
         return this.doManual(playerId, action);
     }
   }
 
-  private requirePriority(playerId: PlayerId): string | null {
+  /** Manual mana: park the action until the player floats the mana. Returns true so the action is not an error. */
+  private deferPayment(playerId: PlayerId, cardName: string, cost: import('./mana.js').ParsedCost): boolean {
     const s = this.state;
-    if (s.pendingDecision) return 'há uma decisão pendente';
+    if (!this.currentAction) { this.fail(playerId, 'mana insuficiente'); return false; }
+    const label = costLabel(cost);
+    s.pendingPayment = { player: playerId, action: this.currentAction, cardName, cost: label };
+    s.pendingDecision = { type: 'payMana', player: playerId, cardName, cost: label };
+    this.emit({ type: 'fizzled', description: `${cardName}: pague ${label} — ative suas fontes de mana (ou cancele)` });
+    return true;
+  }
+
+  private retryPendingPayment(): void {
+    const s = this.state;
+    const pp = s.pendingPayment;
+    if (!pp) return;
+    s.pendingPayment = undefined;
+    s.pendingDecision = null;
+    this.currentAction = pp.action;
+    const ok = this.execute(pp.player, pp.action);
+    if (!ok && !s.pendingPayment) this.emit({ type: 'fizzled', description: `${pp.cardName}: a conjuração foi cancelada (a mana continua flutuando)` });
+  }
+
+  private doCancelPayment(playerId: PlayerId): boolean {
+    const s = this.state;
+    if (!s.pendingPayment || s.pendingPayment.player !== playerId) { this.fail(playerId, 'nada aguardando pagamento'); return false; }
+    const name = s.pendingPayment.cardName;
+    s.pendingPayment = undefined;
+    s.pendingDecision = null;
+    this.emit({ type: 'fizzled', description: `${name}: pagamento cancelado (a mana continua flutuando)` });
+    return true;
+  }
+
+  private requirePriority(playerId: PlayerId, opts: { manaAbility?: boolean } = {}): string | null {
+    const s = this.state;
+    if (s.pendingDecision && !(opts.manaAbility && s.pendingDecision.type === 'payMana' && s.pendingDecision.player === playerId)) return 'há uma decisão pendente';
     if (s.combatAwaiting) return 'aguardando declaração de combate';
     if (s.priority !== playerId) return 'você não tem a prioridade';
     return null;
@@ -1005,7 +1047,7 @@ export class Game {
         s.players[playerId].energy -= need;
         cost.generic = 0; cost.colorless = 0; cost.colored = []; cost.hybrid = []; cost.phyrexian = [];
       }
-      let plan = planPayment(s, playerId, cost);
+      let plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana });
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
       // tap creatures / artifacts, exile graveyard cards, one generic each.
       const helpers: { kind: 'convoke' | 'improvise' | 'delve'; ids: number[] }[] = [];
@@ -1026,6 +1068,7 @@ export class Game {
           if (plan) break;
         }
       }
+      if (!plan && this.options.manualMana) return this.deferPayment(playerId, card.name, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
       // Sunburst / converge: distinct colors of mana actually spent.
@@ -1368,11 +1411,11 @@ export class Game {
       { this.fail(playerId, `${obj.card.name}: habilidades com esse nome estão travadas`); return false; }
     // Mana abilities may be activated at any time; others need priority.
     if (!ability.isManaAbility && !ability.immediate) {
-      const err = this.requirePriority(playerId);
+      const err = this.requirePriority(playerId, { manaAbility: !!ability.isManaAbility });
       if (err) { this.fail(playerId, err); return false; }
       if (ability.sorceryOnly && !this.sorceryTiming(playerId))
         { this.fail(playerId, 'só na sua fase principal com a pilha vazia (como uma feitiçaria)'); return false; }
-    } else if (s.pendingDecision || s.status !== 'playing') {
+    } else if ((s.pendingDecision && !(s.pendingDecision.type === 'payMana' && s.pendingDecision.player === playerId)) || s.status !== 'playing') {
       { this.fail(playerId, 'agora não'); return false; }
     }
 
@@ -1495,7 +1538,8 @@ export class Game {
       cost.generic += abilityTax;
       if (cost.xCount > 0) { if (x === undefined || x < 0) { this.fail(playerId, 'escolha o valor de X'); return false; } cost.generic += x * cost.xCount; }
       if (ability.costLessPer) cost.generic = Math.max(0, cost.generic - s.players[playerId].zones.battlefield.filter((id) => matchFilter({ controller: playerId, sourceId: obj.id, state: s }, ability.costLessPer!, s.objects[id])).length);
-      const plan = planPayment(s, playerId, cost);
+      const plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana });
+      if (!plan && this.options.manualMana) return this.deferPayment(playerId, obj.card.name, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
     }

@@ -174,6 +174,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const effectChoice = view.pendingDecision?.type === 'effectChoice' ? view.pendingDecision : null;
   const myChoice = effectChoice !== null && effectChoice.player === you ? effectChoice : null;
   const triggerTargets = view.pendingDecision?.type === 'chooseTargets' ? view.pendingDecision : null;
+  const payment = view.pendingDecision?.type === 'payMana' ? view.pendingDecision : null;
+  const myPayment = payment && payment.player === you ? payment : null;
   const myMulligan = view.mulligan?.phase[you] === 'deciding';
   const mullTaken = view.mulligan?.taken[you] ?? 0;
 
@@ -853,6 +855,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     }
     if (view.pendingDecision?.type === 'chooseMode' && view.pendingDecision.player !== you) return 'Aguardando o oponente escolher um modo…';
     if (targeting) return `${targeting.label}: escolha o alvo (${targeting.chosen.length + 1}/${targeting.specs.length}) — Esc cancela`;
+    if (myPayment) return `Pague ${myPayment.cost} para ${myPayment.cardName}: clique nas suas fontes de mana`;
+    if (payment) return 'Aguardando o oponente pagar a mana…';
     if (myChoice) return myChoice.prompt;
     if (effectChoice) return 'Aguardando a escolha do oponente…';
     if (triggerTargets && triggerTargets.player !== you) return 'Aguardando o oponente escolher alvos…';
@@ -943,6 +947,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         <div className="phase-actions">
           {promptText && <span className="prompt-banner">{promptText}</span>}
           {targeting && <button onClick={() => setTargeting(null)}>Cancelar</button>}
+          {myPayment && <button onClick={() => onAction({ type: 'cancelPayment' })}>Cancelar pagamento</button>}
           {awaitingMyAttack && (
             <button className="primary" onClick={confirmAttack}>
               {attackSel.size > 0 ? `Atacar com ${attackSel.size}` : 'Não atacar'}
@@ -1136,6 +1141,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
             {concedeArmed ? 'Confirmar?' : 'Conceder'}
           </button>
         </div>
+        <HoverPreview />
         {showManual && (
           <div className="stack-panel">
             <div className="panel-title">Modo manual — tudo fica no log</div>
@@ -1725,8 +1731,6 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           </div>
         </div>
       )}
-
-      <HoverPreview />
 
       {view.status === 'finished' && (
         <div className="game-over-overlay">

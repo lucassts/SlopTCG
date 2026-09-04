@@ -24,6 +24,17 @@ export interface ParsedCost {
 const COLORS = ['W', 'U', 'B', 'R', 'G'] as const;
 const isColor = (s: string): s is Color => (COLORS as readonly string[]).includes(s);
 
+/** Render a parsed cost back to oracle syntax ({2}{B}{B}). */
+export function costLabel(cost: ParsedCost): string {
+  const parts: string[] = [];
+  if (cost.generic > 0) parts.push(`{${cost.generic}}`);
+  for (let i = 0; i < cost.colorless; i++) parts.push('{C}');
+  for (const c of cost.colored) parts.push(`{${c}}`);
+  for (const h of cost.hybrid) parts.push(`{${h.join('/')}}`);
+  for (const p of cost.phyrexian) parts.push(`{${p}/P}`);
+  return parts.length > 0 ? parts.join('') : '{0}';
+}
+
 export function parseCost(cost: string | undefined): ParsedCost {
   const parsed: ParsedCost = { generic: 0, colored: [], colorless: 0, hybrid: [], phyrexian: [], xCount: 0 };
   if (!cost) return parsed;
@@ -89,14 +100,15 @@ export interface PaymentPlan {
  * Greedy: colored requirements claim matching sources first, then generic
  * consumes whatever is left. Correct for single-color producers (MVP).
  */
-export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCost): PaymentPlan | null {
+export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCost, opts: { poolOnly?: boolean } = {}): PaymentPlan | null {
   const player = state.players[playerId];
   const pool: Record<ManaSymbol, number> = { ...player.manaPool };
   const taps: PaymentPlan['taps'] = [];
   const fromPool: ManaSymbol[] = [];
   let lifePaid = 0;
 
-  const sources = player.zones.battlefield
+  // Manual mana: only floating mana pays; the player taps sources themselves.
+  const sources = (opts.poolOnly ? [] : player.zones.battlefield)
     .map((id) => state.objects[id])
     .filter((o) => !o.tapped)
     .map((o) => ({ obj: o, produces: manaProduction(o) }))

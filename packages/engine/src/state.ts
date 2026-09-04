@@ -347,6 +347,8 @@ export interface QueuedTrigger {
 
 export type PendingDecision =
   | { type: 'discardToHandSize'; player: PlayerId; count: number }
+  /** Manual mana: the spell/ability waits until the player floats enough mana (or cancels). */
+  | { type: 'payMana'; player: PlayerId; cardName: string; cost: string }
   | {
       type: 'chooseTargets';
       player: PlayerId;
@@ -428,6 +430,8 @@ export interface GameState {
   } | null;
   /** Mana taps that can still be undone (nothing consumed the mana yet). */
   reversibleTaps: { objectId: number; mana: ManaSymbol[] }[];
+  /** Manual mana: the action waiting for payment (re-run whenever mana is added). */
+  pendingPayment?: { player: PlayerId; action: import('./actions.js').PlayerAction; cardName: string; cost: string };
   /** Non-null while opening hands are being decided (before turn 1). */
   mulligan: MulliganState | null;
   /** Scheduled end-step / next-upkeep actions (dash, blitz, unearth, rebound, suspend…). */

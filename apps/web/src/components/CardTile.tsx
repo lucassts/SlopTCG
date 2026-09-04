@@ -20,10 +20,10 @@ export function HoverPreview() {
     window.addEventListener(HOVER_EVENT, onHover);
     return () => window.removeEventListener(HOVER_EVENT, onHover);
   }, []);
-  if (!url) return null;
+  // Slot fixo no topo do painel lateral (acima do log/chat): a carta grande aparece aqui.
   return (
-    <div className="hover-preview">
-      <img src={url} alt="" draggable={false} />
+    <div className="preview-slot" title={url ? '' : 'Passe o mouse sobre uma carta'}>
+      {url && <img src={url} alt="" draggable={false} />}
     </div>
   );
 }

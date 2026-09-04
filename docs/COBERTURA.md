@@ -357,7 +357,17 @@ para a mão) — confirmado a pedido do Lucas: Gaea's Will conjurada assim
 vai direto para a pilha, sem suspender. **v0.19.2**: conjuração de graça
 com alvos — a carta que precisa de alvo (Tendrils of Agony via Beseech,
 cascade em queimadura, suspend de Lightning…) abre a escolha de alvos e é
-conjurada com eles, por zero, contando para o Storm e com as cópias. Próximos pesos: Hexing Squelcher, Goblin Welder, Goblin
+conjurada com eles, por zero, contando para o Storm e com as cópias.
+
+**v0.20.0 — mana manual e preview no painel lateral** (pedido do Lucas):
+o pagamento automático de mana foi desligado nas partidas. A mágica ou
+habilidade é escolhida primeiro; o engine para com a decisão `payMana`
+("pague {1}{G} para X"), o jogador vira as fontes que quiser (habilidades de
+mana continuam permitidas durante a espera), e quando o pool cobre o custo a
+conjuração completa sozinha. "Cancelar pagamento" desiste e deixa a mana
+flutuando. A opção `manualMana` do `Game` liga o modo (o servidor liga; os
+testes e o auditor seguem no automático). No cliente, a carta grande do
+hover passou para um slot fixo no topo do painel lateral, acima do log/chat. Próximos pesos: Hexing Squelcher, Goblin Welder, Goblin
 Engineer, Thundertrap Trainer, Magus of the Moon, Pinnacle Emissary,
 Damping Sphere, Eye of Ugin, Eldrazi Linebreaker, Thought-Knot Seer.
 

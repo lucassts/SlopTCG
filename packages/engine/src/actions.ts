@@ -105,6 +105,8 @@ export type PlayerAction =
   /** Answer to a pending effectChoice (discard/sacrifice/scry/search/nameCard…). */
   | { type: 'effectChoice'; picks: number[]; text?: string }
   | { type: 'concede' }
+  /** Manual mana: give up on the spell/ability waiting for payment (floating mana stays). */
+  | { type: 'cancelPayment' }
   | { type: 'chat'; text: string }
   // --- manual mode (Tier 3) ---
   | { type: 'manualMove'; objectId: number; to: Exclude<ZoneName, 'stack'>; position?: 'top' | 'bottom' }
