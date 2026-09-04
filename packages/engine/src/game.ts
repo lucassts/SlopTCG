@@ -19,7 +19,7 @@ import {
 } from './effects.js';
 import type { GameEvent } from './events.js';
 import { canPay, costCmc, costLabel, parseCost, planPayment } from './mana.js';
-import { castCardFree } from './effects.js';
+import { applyEnterTapRules, castCardFree } from './effects.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
 import { DUNGEONS } from './dungeons.js';
@@ -591,39 +591,10 @@ export class Game {
     if (enterScript.length > 0) this.pushTrigger(obj, { text: 'ao entrar', effect: enterScript });
   }
 
-  /** entersTapped / checklands & fastlands / shocklands, as a permanent enters. */
+  /** Keyword enter rules, then the shared enter-tapped rules (effects.applyEnterTapRules — idempotent per stay on the battlefield). */
   private applyEnterTapRules(obj: GameObject): void {
-    const s = this.state;
-    const card = obj.card;
     this.applyEnterKeywords(obj);
-    if (card.entersTapped) { setTapped(s, obj, true, this.emit); return; }
-    if (card.entersTappedUnless) {
-      const mine = s.players[obj.controller].zones.battlefield.map((id) => s.objects[id]).filter((o) => o.id !== obj.id);
-      const u = card.entersTappedUnless;
-      let ok = true;
-      if (u.controlsAtLeast) {
-        const n = mine.filter((o) => matchFilter({ controller: obj.controller, sourceId: obj.id }, u.controlsAtLeast!.filter, o)).length;
-        ok = n >= u.controlsAtLeast.count;
-      }
-      if (ok && u.controlsAtMost) {
-        const n = mine.filter((o) => matchFilter({ controller: obj.controller, sourceId: obj.id }, u.controlsAtMost!.filter, o)).length;
-        ok = n <= u.controlsAtMost.count;
-      }
-      if (ok && u.controlsSubtypeAnyOf) ok = mine.some((o) => u.controlsSubtypeAnyOf!.some((t) => o.card.subtypes.includes(t)));
-      if (!ok) setTapped(s, obj, true, this.emit);
-      return;
-    }
-    if (card.entersTappedUnlessCond && !staticConditionHolds(s, obj, card.entersTappedUnlessCond)) { setTapped(s, obj, true, this.emit); return; }
-    if (card.entersTappedIf && staticConditionHolds(s, obj, card.entersTappedIf)) { setTapped(s, obj, true, this.emit); return; }
-    // "Creatures your opponents control enter tapped."
-    if (isCreature(obj) && s.players[opponentOf(obj.controller)].zones.battlefield.some((id) => s.objects[id].card.opponentsCreaturesEnterTapped)) { setTapped(s, obj, true, this.emit); return; }
-    if (card.shockLife) {
-      // "You may pay N life. If you don't, it enters tapped." — pergunta ao controlador.
-      runEffectScript(
-        { state: s, controller: obj.controller, sourceId: obj.id, sourceName: card.name, targets: [], emit: this.emit },
-        [{ op: 'mayDo', prompt: `pagar ${card.shockLife} de vida para ${card.name} entrar desvirado?`, effect: [{ op: 'loseLife', who: 'controller', amount: card.shockLife }], else: [{ op: 'tap', what: 'self' }] }],
-      );
-    }
+    applyEnterTapRules(this.state, obj, this.emit);
   }
 
   private validateTargets(
@@ -1332,7 +1303,7 @@ export class Game {
     // The card's own "~ costs {N} less for each X".
     for (const m of card.costModifiers ?? []) {
       if (!m.self) continue;
-      const scale = m.per ? countOn(m.per, playerId) : m.perGraveyard ? countGy(m.perGraveyard, playerId) : m.perDomain ? domain(playerId) : 1;
+      const scale = m.perSpellsCastThisTurn ? (s.players[playerId].spellsCastThisTurn ?? 0) : m.per ? countOn(m.per, playerId) : m.perGraveyard ? countGy(m.perGraveyard, playerId) : m.perDomain ? domain(playerId) : 1;
       delta += m.amount * scale;
     }
     // Permanents on the battlefield.
@@ -1348,7 +1319,7 @@ export class Game {
           if (m.notFromHand && !notFromHand) continue;
           if (m.chosenName && src.chosenName !== card.name) continue;
           if (m.targetsSelf && !targets.some((t) => t.kind === 'object' && t.id === src.id)) continue;
-          const scale = m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : m.perDomain ? domain(src.controller) : 1;
+          const scale = m.perSpellsCastThisTurn ? (s.players[playerId].spellsCastThisTurn ?? 0) : m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : m.perDomain ? domain(src.controller) : 1;
           delta += m.amount * scale;
         }
       }
@@ -1586,6 +1557,15 @@ export class Game {
         { state: s, controller: playerId, sourceId: obj.id, sourceName: obj.card.name, targets, chosenMana: manaColor, emit: this.emit },
         ability.effect,
       );
+      // Badgermole Cub: "Whenever you tap a creature for mana, add an additional {G}."
+      if (ability.isManaAbility && ability.cost.tap && isCreature(obj)) {
+        for (const id of s.players[playerId].zones.battlefield) {
+          const extra = s.objects[id]?.card.extraManaOnCreatureTap;
+          if (!extra) continue;
+          s.players[playerId].manaPool[extra] += 1;
+          this.emit({ type: 'manaAdded', player: playerId, mana: [extra], sourceName: s.objects[id].card.name });
+        }
+      }
       if (ability.immediate) return true;
       // A tap for mana can be undone until the mana is spent or priority
       // moves — but never when other costs were paid (sacrifice, life).

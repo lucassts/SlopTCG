@@ -27,6 +27,8 @@ export function App() {
   const [log, setLog] = useState<string[]>([]);
   const [match, setMatch] = useState<MatchStateMsg | null>(null);
   const [sideboard, setSideboard] = useState<SideboardInfo | null>(null);
+  /** Número do último jogo cujo resultado o jogador já viu (o sideboard só abre depois). */
+  const [resultSeen, setResultSeen] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const viewRef = useRef<GameView | null>(null);
 
@@ -167,7 +169,7 @@ export function App() {
           onStart={() => netRef.current?.send({ type: 'startGame' })}
         />
       )}
-      {screen === 'game' && match?.phase === 'sideboarding' && sideboard && session && (
+      {screen === 'game' && match?.phase === 'sideboarding' && sideboard && session && resultSeen >= match.gameNumber && (
         <Sideboard
           info={sideboard}
           match={match}
@@ -176,7 +178,7 @@ export function App() {
           onReady={() => netRef.current?.send({ type: 'readyNextGame' })}
         />
       )}
-      {screen === 'game' && match?.phase !== 'sideboarding' && view && (
+      {screen === 'game' && (match?.phase !== 'sideboarding' || resultSeen < match.gameNumber) && view && (
         <GameBoard
           view={view}
           syncSeq={syncSeq}
@@ -184,6 +186,7 @@ export function App() {
           match={match ? { wins: match.wins, gameNumber: match.gameNumber } : null}
           onAction={sendAction}
           onExit={exitToHome}
+          onContinue={match?.phase === 'sideboarding' ? () => setResultSeen(match.gameNumber) : undefined}
         />
       )}
       {error && <div className="error-toast">{error}</div>}

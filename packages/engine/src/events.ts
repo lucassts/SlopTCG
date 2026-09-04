@@ -19,7 +19,7 @@ export type GameEvent =
       from: ZoneName;
       to: ZoneName;
       player: PlayerId;
-      reason?: 'destroyed' | 'sacrificed' | 'discarded' | 'milled' | 'exiled' | 'returned' | 'resolved' | 'searched' | 'manual';
+      reason?: 'destroyed' | 'sacrificed' | 'discarded' | 'milled' | 'exiled' | 'returned' | 'resolved' | 'searched' | 'manual' | 'legendRule';
       hiddenFrom?: PlayerId;
     }
   | { type: 'landPlayed'; player: PlayerId; objectId: number; cardName: string }

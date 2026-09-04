@@ -612,6 +612,8 @@ function parseEffectText(
   }
   // Tamiyo +2.
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Earthbend N (Badgermole Cub): target land you control.
+  if ((m = text.match(/^earthbend (\d+)\.?$/i))) return { steps: [{ op: 'earthbend', what: 'target:0', count: parseInt(m[1], 10) }], spec: { what: 'land', controlledBy: 'you' } };
   // Peer into the Abyss.
   if (/^Target player draws cards equal to half the number of cards in their library and loses half their life\. Round up each time\.$/i.test(text)) {
     return { steps: [
@@ -780,6 +782,7 @@ function parseEffectText(
     }
     if (/^Spend this mana only /i.test(sentence)) continue;
     if (/^An opponent gains control of ~$/i.test(sentence)) { steps.push({ op: 'gainControl', what: 'self', to: 'opponent' }); continue; }
+    if (/^You gain life equal to the life lost this way$/i.test(sentence)) { steps.push({ op: 'gainLife', who: 'controller', amount: 'lifeLostThisWay' }); continue; }
     // Overlord of the Balemurk: "mill four cards, then you may return a non-Avatar creature card or a planeswalker card from your graveyard to your hand".
     if ((m = sentence.match(/^mill (\w+) cards?, then you may return (?:a|an) (.+?) from your graveyard to your hand$/i))) {
       const n = num(m[1]);
@@ -1036,6 +1039,7 @@ interface ParseState {
   spree?: boolean;
   /** Leva 6a (Legacy, parte 3). */
   flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
+  flags11: Partial<Pick<CardDefinition, 'landsMultiManaColorless' | 'extraManaOnCreatureTap'>>;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
   /** Leva 6a (Legacy): travas, substituições, uma mágica não-criatura por turno. */
@@ -1796,6 +1800,11 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // ---- Leva 6a (Legacy, parte 3): Quantum Riddler, Ascend, Omniscience, Aluren, Disruptor Flute, Boseiju, Amped Raptor, Ugin
   if (/^Ascend$/i.test(line)) { st.flags10.ascend = true; return true; }
   if (/^If you would draw a card while your library has no cards in it, you win the game instead\.$/i.test(line)) { st.flags10.winOnDrawFromEmpty = true; return true; }
+  // Damping Sphere.
+  if (/^If a land is tapped for two or more mana, it produces \{C\} instead of any other type and amount\.$/i.test(line)) { st.flags11.landsMultiManaColorless = true; return true; }
+  if (/^Each spell a player casts costs \{1\} more to cast for each other spell that player has cast this turn\.$/i.test(line)) { (st.costModifiers ??= []).push({ amount: 1, whose: 'any', perSpellsCastThisTurn: true }); return true; }
+  // Badgermole Cub.
+  if ((m = line.match(/^Whenever you tap a creature for mana, add an additional \{([WUBRG])\}\.$/i))) { st.flags11.extraManaOnCreatureTap = m[1].toUpperCase() as Color; return true; }
   if (/^You may cast spells from your hand without paying their mana costs\.$/i.test(line)) { st.flags10.freeSpellsFromHand = true; return true; }
   if (/^Any player may cast creature spells with mana value 3 or less without paying their mana costs and as though they had flash\.$/i.test(line)) { st.flags10.aluren = true; return true; }
   if ((m = line.match(/^Spells with the chosen name cost ((?:\{[^}]+\})+) more to cast\.$/i))) { (st.costModifiers ??= []).push({ amount: manaValueOfCost(m[1]), whose: 'any', chosenName: true }); return true; }
@@ -2542,6 +2551,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     .replace(/[ \t]+/g, ' ')
     .replace(/ \./g, '.')
     .replace(/ ,/g, ',')
+    .replace(/ and\/or /g, ' or ')
     .trim();
 
   const st = newParseState();
@@ -2684,6 +2694,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags8,
     ...st.flags9,
     ...st.flags10,
+    ...st.flags11,
     costModifiers: st.costModifiers,
     spellModeChoice: st.spellModeChoice,
     saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
@@ -2803,6 +2814,7 @@ function newParseState(): ParseState {
     flags8: {},
     flags9: {},
     flags10: {},
+    flags11: {},
     levels: [],
     softNotes: [],
   };

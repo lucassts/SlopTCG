@@ -81,6 +81,10 @@ export interface GameObject {
   delvedCount?: number;
   /** Was kicked when cast (permanents). */
   kicked?: boolean;
+  /** Earthbend: if it dies or is exiled, it returns to the battlefield tapped. */
+  earthbendReturn?: boolean;
+  /** Enter-tapped rules (entersTapped, checklands, shocklands) already applied for this stay on the battlefield. */
+  enterTapDone?: boolean;
   /** Echo: came under control this turn (pay on next upkeep). */
   echoPending?: boolean;
   /** Renown already happened. */
@@ -602,6 +606,7 @@ export function moveObject(
     // Double-faced cards leave the battlefield front face up (711.4 / 712.8).
     if (obj.baseCard && obj.transformed) { obj.card = obj.baseCard; obj.transformed = false; }
     obj.extraSubtypes = undefined;
+    obj.enterTapDone = undefined;
   } else {
     // Vale para tudo que entra: um veículo tripulado no turno em que entrou
     // também tem "enjoo" (302.6). Só criaturas consultam a flag.

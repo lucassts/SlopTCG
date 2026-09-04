@@ -60,6 +60,8 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       switch (ev.reason) {
         case 'destroyed':
           return `${card} foi destruída.`;
+        case 'legendRule':
+          return `${card} foi para o cemitério (regra das lendárias).`;
         case 'sacrificed':
           return `${card} foi sacrificada.`;
         case 'discarded':

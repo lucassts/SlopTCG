@@ -104,9 +104,14 @@ describe('M27 · jogo', () => {
     game.state.objects[d].counters['ice'] = 10;
     put(game, 'p1', 'plains'); put(game, 'p1', 'plains');
     expect(game.apply('p1', { type: 'activateAbility', objectId: st, abilityIndex: 1, targets: [{ kind: 'object', id: d }] }).ok).toBe(true);
+    // Regra das lendárias: dois "Dark Depths" — fica com a cópia (sem gelo); a original vai para o cemitério.
+    passUntil(game, (s) => s.pendingDecision?.type === 'effectChoice' && /lendárias/.test(s.pendingDecision.prompt), 50);
+    const pd = game.state.pendingDecision;
+    expect(pd?.type === 'effectChoice' && pd.options.sort()).toEqual([st, d].sort());
+    expect(game.apply('p1', { type: 'effectChoice', picks: [st] }).ok).toBe(true);
+    expect(game.state.objects[d].zone).toBe('graveyard');
     settle(game);
     expect(game.state.objects[st].zone).toBe('graveyard'); // a cópia sem gelo se sacrifica
-    expect(game.state.objects[d].zone).toBe('battlefield'); // a original continua com 10
     expect(tokens(game, 'p1')[0]?.card.name).toBe('Marit Lage');
   });
 

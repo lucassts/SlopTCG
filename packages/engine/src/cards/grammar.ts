@@ -330,6 +330,7 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
   if ((m = t.match(/^half the number of cards in your library, rounded (up|down)$/))) return { halfLibraryOf: 'controller', round: m[1] as 'up' | 'down' };
   if (t === 'that number') return null;
   if ((m = t.match(/^twice (.+)$/))) { const inner = parseAmountG(m[1], subject); return inner === null ? null : { times: 2, of: inner }; }
+  if ((m = t.match(/^(\w+) times (.+)$/))) { const k = num(m[1]); const inner = k === null ? null : parseAmountG(m[2], subject); return k === null || inner === null ? null : { times: k, of: inner }; }
   return null;
 }
 

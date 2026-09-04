@@ -222,6 +222,8 @@ export type DynAmount =
   | 'delvedCount'
   /** "half the number of cards in your library, rounded up" (Tamiyo). */
   | { halfLibraryOf: WhoSel; round: 'up' | 'down' }
+  /** Debt to the Deathless: "life equal to the life lost this way" (accumulated by loseLife steps of the same script). */
+  | 'lifeLostThisWay'
   /** Devotion to a color: mana symbols of that color in the mana costs of permanents you control (Thassa's Oracle). */
   | { devotion: Color }
   /** Number of cards in a library. */
@@ -404,6 +406,10 @@ export type EffectStep =
   | { op: 'freeCastBargain'; objectId: number; note: string }
   /** "You win the game." */
   | { op: 'winGame'; who: PlayerSel }
+  /** (choice, internal) Legend rule: the controller keeps one of the same-named legendary permanents; the rest go to the graveyard. */
+  | { op: 'legendRuleKeep'; ids: number[] }
+  /** Earthbend N: target land becomes a 0/0 creature with haste (still a land), gets N +1/+1 counters, and returns tapped if it dies or is exiled. */
+  | { op: 'earthbend'; what: SubjectRef; count: number }
   /** "Exile the top N cards of your library" (no play permission). */
   | { op: 'exileTopSelf'; count: number }
   // ---- Leva 5 (gramática 2)
@@ -1026,6 +1032,8 @@ export interface CardDefinition {
     targetsSelf?: boolean;
     /** Bilbo: only spells cast from anywhere other than the hand. */
     notFromHand?: boolean;
+    /** Damping Sphere: scaled by the number of other spells the caster has cast this turn. */
+    perSpellsCastThisTurn?: boolean;
     /** Disruptor Flute: only spells with the chosen name. */
     chosenName?: boolean;
     /** Domain (Leyline Binding): scaled by the number of basic land types among lands you control. */
@@ -1116,6 +1124,10 @@ export interface CardDefinition {
   protectionFromColored?: boolean;
   /** Laboratory Maniac: "If you would draw a card while your library has no cards in it, you win the game instead." */
   winOnDrawFromEmpty?: boolean;
+  /** Damping Sphere: "If a land is tapped for two or more mana, it produces {C} instead of any other type and amount." */
+  landsMultiManaColorless?: boolean;
+  /** Badgermole Cub: "Whenever you tap a creature for mana, add an additional {G}." */
+  extraManaOnCreatureTap?: Color;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy

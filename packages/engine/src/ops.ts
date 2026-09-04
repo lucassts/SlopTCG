@@ -10,6 +10,10 @@ import { shuffle } from './rng.js';
 
 export type Emit = (ev: GameEvent) => void;
 
+/** Runs when an object enters the battlefield through moveWithEvent (effects.ts registers the enter-tapped rules here). */
+let enterHook: ((state: GameState, obj: GameObject, emit: Emit) => void) | null = null;
+export function setEnterHook(fn: (state: GameState, obj: GameObject, emit: Emit) => void): void { enterHook = fn; }
+
 export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
   const player = state.players[playerId];
   player.drawsThisTurn += 1;
@@ -329,6 +333,16 @@ export function moveWithEvent(
     reason,
     hiddenFrom: hidden && from !== 'battlefield' && from !== 'graveyard' && from !== 'stack' ? (obj.owner === 'p1' ? 'p2' : 'p1') : undefined,
   });
+  // Lands (and everything else) put onto the battlefield by an effect follow the same enter-tapped rules as a played/cast one.
+  if (to === 'battlefield' && from !== 'battlefield' && reason !== 'manual') enterHook?.(state, obj, emit);
+  // Earthbend: "When it dies or is exiled, return it to the battlefield tapped."
+  if (obj.earthbendReturn && from === 'battlefield' && (to === 'graveyard' || to === 'exile')) {
+    obj.earthbendReturn = undefined;
+    moveObject(state, obj, 'battlefield');
+    obj.tapped = true;
+    emit({ type: 'zoneChanged', objectId: obj.id, cardName: obj.card.name, from: to, to: 'battlefield', player: obj.owner, reason: 'returned' });
+    emit({ type: 'fizzled', description: `${obj.card.name} volta ao campo de batalha virado (earthbend)` });
+  }
 }
 
 function removeToken(state: GameState, obj: GameObject): void {

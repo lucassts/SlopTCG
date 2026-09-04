@@ -158,5 +158,28 @@ export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
       }
     }
   }
+  // Legend rule (704.5j): two or more legendary permanents with the same name under one controller — they choose one, the rest go to the graveyard.
+  if (state.status === 'playing' && !state.pendingDecision) {
+    for (const p of PLAYER_IDS) {
+      const groups = new Map<string, number[]>();
+      for (const id of state.players[p].zones.battlefield) {
+        const o = state.objects[id];
+        if (!o?.card.supertypes?.includes('Legendary')) continue;
+        const list = groups.get(o.card.name) ?? [];
+        list.push(id);
+        groups.set(o.card.name, list);
+      }
+      for (const [name, ids] of groups) {
+        if (ids.length < 2) continue;
+        state.pendingDecision = {
+          type: 'effectChoice', player: p, mode: 'cards', options: ids, min: 1, max: 1,
+          prompt: `Regra das lendárias: você controla ${ids.length} permanentes chamadas ${name} — escolha a que fica (as outras vão para o cemitério)`,
+          resume: { controller: p, sourceId: ids[ids.length - 1], sourceName: 'Regra das lendárias', targets: [], current: { op: 'legendRuleKeep', ids }, remaining: [], finishSpellId: null },
+        };
+        emit({ type: 'fizzled', description: `Regra das lendárias: ${state.players[p].name} controla ${ids.length} ${name} — escolha qual fica` });
+        return anyChange;
+      }
+    }
+  }
   return anyChange;
 }

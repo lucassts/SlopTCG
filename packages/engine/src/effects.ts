@@ -27,6 +27,7 @@ import {
   destroyObject,
   draw,
   moveWithEvent,
+  setEnterHook,
   setTapped,
   type Emit,
   transformObject,
@@ -74,8 +75,49 @@ export interface EffectContext {
   triggerAmount?: number;
   /** forEach: the current object. */
   iterId?: number;
+  /** Life lost by loseLife steps of this script (Debt to the Deathless). */
+  lifeLostThisWay?: number;
   emit: Emit;
 }
+
+/**
+ * entersTapped / checklands & fastlands / shocklands, as a permanent enters — one path for lands played,
+ * permanents resolved and anything put onto the battlefield by an effect (fetchlands into shock/surveil lands).
+ */
+export function applyEnterTapRules(state: GameState, obj: GameObject, emit: Emit): void {
+  if (obj.zone !== 'battlefield' || obj.enterTapDone) return;
+  obj.enterTapDone = true;
+  const card = obj.card;
+  if (card.entersTapped) { setTapped(state, obj, true, emit); return; }
+  if (card.entersTappedUnless) {
+    const mine = state.players[obj.controller].zones.battlefield.map((id) => state.objects[id]).filter((o) => o.id !== obj.id);
+    const u = card.entersTappedUnless;
+    let ok = true;
+    if (u.controlsAtLeast) {
+      const n = mine.filter((o) => matchFilter({ controller: obj.controller, sourceId: obj.id }, u.controlsAtLeast!.filter, o)).length;
+      ok = n >= u.controlsAtLeast.count;
+    }
+    if (ok && u.controlsAtMost) {
+      const n = mine.filter((o) => matchFilter({ controller: obj.controller, sourceId: obj.id }, u.controlsAtMost!.filter, o)).length;
+      ok = n <= u.controlsAtMost.count;
+    }
+    if (ok && u.controlsSubtypeAnyOf) ok = mine.some((o) => u.controlsSubtypeAnyOf!.some((t) => o.card.subtypes.includes(t)));
+    if (!ok) setTapped(state, obj, true, emit);
+    return;
+  }
+  if (card.entersTappedUnlessCond && !staticConditionHolds(state, obj, card.entersTappedUnlessCond)) { setTapped(state, obj, true, emit); return; }
+  if (card.entersTappedIf && staticConditionHolds(state, obj, card.entersTappedIf)) { setTapped(state, obj, true, emit); return; }
+  // "Creatures your opponents control enter tapped."
+  if (isCreature(obj) && state.players[opponentOf(obj.controller)].zones.battlefield.some((id) => state.objects[id].card.opponentsCreaturesEnterTapped)) { setTapped(state, obj, true, emit); return; }
+  if (card.shockLife) {
+    // "You may pay N life. If you don't, it enters tapped." — pergunta ao controlador.
+    runEffectScript(
+      { state, controller: obj.controller, sourceId: obj.id, sourceName: card.name, targets: [], emit },
+      [{ op: 'mayDo', prompt: `pagar ${card.shockLife} de vida para ${card.name} entrar desvirado?`, effect: [{ op: 'loseLife', who: 'controller', amount: card.shockLife }], else: [{ op: 'tap', what: 'self' }] }],
+    );
+  }
+}
+setEnterHook(applyEnterTapRules);
 
 function resolvePlayers(sel: PlayerSel, controller: PlayerId): PlayerId[] {
   if (sel === 'controller') return [controller];
@@ -147,6 +189,15 @@ function sourceColors(ctx: EffectContext): import('./types.js').Color[] {
   return ctx.state.objects[ctx.sourceId]?.card.colors ?? [];
 }
 
+/** Damping Sphere: a land tapped for two or more mana produces that much {C} instead. */
+function dampingMana(state: GameState, sourceId: number, mana: import('./types.js').ManaSymbol[]): import('./types.js').ManaSymbol[] {
+  if (mana.length < 2) return mana;
+  const src = state.objects[sourceId];
+  if (!src?.card.types.includes('Land')) return mana;
+  const sphere = PLAYER_IDS.some((p) => state.players[p].zones.battlefield.some((id) => state.objects[id]?.card.landsMultiManaColorless));
+  return sphere ? mana.map(() => 'C' as const) : mana;
+}
+
 /** Devotion to a color: each mana symbol of that color (including hybrid) in the mana costs of permanents the player controls. */
 export function devotionTo(state: GameState, player: PlayerId, color: Color): number {
   let n = 0;
@@ -164,12 +215,13 @@ function mayDoPrompt(raw: string): string {
   if (low === 'shuffle' || low === 'shuffle your library') return 'embaralhar a biblioteca?';
   if (low === 'draw a card') return 'comprar uma carta?';
   if (low === 'sacrifice ~' || low === 'sacrifice it') return 'sacrificar?';
-  return `${p}?`;
+  return p.endsWith('?') ? p : `${p}?`;
 }
 
 export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if (typeof amount === 'number') return amount;
   if (amount === 'X') return ctx.xValue ?? 0;
+  if (amount === 'lifeLostThisWay') return ctx.lifeLostThisWay ?? 0;
   if (amount === 'sacrificedPower') return ctx.sacrificedPower ?? 0;
   if (amount === 'delvedCount') return ctx.state.objects[ctx.sourceId]?.delvedCount ?? 0;
   if (typeof amount === 'object' && 'cardTypesInGraveyard' in amount)
@@ -226,9 +278,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -597,6 +649,12 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
       return { player: controller, options, min: 1, max: 1, prompt: `${ctx.sourceName}: escolha uma carta da mão para revelar`, mode: 'cards' };
     }
+    case 'legendRuleKeep': {
+      const options = step.ids.filter((id) => state.objects[id]?.zone === 'battlefield');
+      const name = options[0] !== undefined ? state.objects[options[0]].card.name : '?';
+      if (options.length <= 1) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 1, max: 1, prompt: `Regra das lendárias: você controla ${options.length} permanentes chamadas ${name} — escolha a que fica (as outras vão para o cemitério)`, mode: 'cards' };
+    }
     case 'freeCastBargain': {
       const o = state.objects[step.objectId];
       const options = state.players[controller].zones.battlefield.filter((id) => { const p = state.objects[id]; return !!p && (p.card.types.includes('Artifact') || p.card.types.includes('Enchantment') || p.isToken); });
@@ -792,9 +850,10 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (!sym || !['W', 'U', 'B', 'R', 'G', 'C'].includes(sym)) return;
       const count = resolveAmount(ctx, step.count ?? 1);
       if (step.markUsed) { const src = state.objects[ctx.sourceId]; if (src) src.usedOnTurn = state.turn; }
+      const produced = dampingMana(state, ctx.sourceId, Array(count).fill(sym));
       for (const p of resolvePlayers(step.who, ctx.controller)) {
-        state.players[p].manaPool[sym] += count;
-        emit({ type: 'manaAdded', player: p, mana: Array(count).fill(sym), sourceName: ctx.sourceName });
+        for (const m of produced) state.players[p].manaPool[m] += 1;
+        emit({ type: 'manaAdded', player: p, mana: produced, sourceName: ctx.sourceName });
       }
       return;
     }
@@ -1012,6 +1071,15 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (!o || o.zone !== 'hand' || o.owner !== ctx.controller) { state.lastRevealedName = undefined; return; }
       state.lastRevealedName = o.card.name;
       emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} revelou ${o.card.name} da mão` });
+      return;
+    }
+    case 'legendRuleKeep': {
+      const keep = picks[0];
+      for (const id of step.ids) {
+        const o = state.objects[id];
+        if (!o || o.zone !== 'battlefield' || id === keep) continue;
+        moveWithEvent(state, o, 'graveyard', 'legendRule', emit);
+      }
       return;
     }
     case 'freeCastBargain': {
@@ -1608,9 +1676,25 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
 
     case 'loseLife': {
       const amount = resolveAmount(ctx, step.amount);
-      for (const p of resolveWho(ctx, step.who)) changeLife(state, p, -amount, ctx.sourceName, emit);
+      for (const p of resolveWho(ctx, step.who)) {
+        const before = state.players[p].life;
+        changeLife(state, p, -amount, ctx.sourceName, emit);
+        ctx.lifeLostThisWay = (ctx.lifeLostThisWay ?? 0) + Math.max(0, before - state.players[p].life);
+      }
       return;
     }
+    case 'earthbend':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const obj = objectAlive(state, t);
+        if (!obj || obj.zone !== 'battlefield' || !obj.card.types.includes('Land')) continue;
+        if (!obj.printedCard) obj.printedCard = obj.card;
+        obj.card = { ...obj.card, types: [...obj.card.types.filter((x) => x !== 'Creature'), 'Creature'], power: 0, toughness: 0, keywords: [...(obj.card.keywords ?? []).filter((k) => k !== 'haste'), 'haste'] };
+        obj.earthbendReturn = true;
+        obj.counters['+1/+1'] = (obj.counters['+1/+1'] ?? 0) + step.count;
+        emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: '+1/+1', delta: step.count, total: obj.counters['+1/+1'] });
+        emit({ type: 'fizzled', description: `${obj.card.name}: earthbend ${step.count} — vira uma criatura 0/0 com ímpeto (continua sendo um terreno) e volta virada se morrer ou for exilada` });
+      }
+      return;
 
     case 'destroy':
       for (const t of resolveSubject(ctx, step.what)) {
@@ -2346,18 +2430,20 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       }
       return;
 
-    case 'addMana':
+    case 'addMana': {
+      const mana = dampingMana(state, ctx.sourceId, step.mana);
       for (const p of resolvePlayers(step.who, ctx.controller)) {
-        for (const sym of step.mana) state.players[p].manaPool[sym] += 1;
+        for (const sym of mana) state.players[p].manaPool[sym] += 1;
         if (step.untilEndOfCombat) {
           // Firebending: this mana survives step changes until the end of combat.
           const ps = state.players[p];
           ps.stickyPool = ps.stickyPool ?? { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
-          for (const sym of step.mana) ps.stickyPool[sym] += 1;
+          for (const sym of mana) ps.stickyPool[sym] += 1;
         }
-        emit({ type: 'manaAdded', player: p, mana: step.mana, sourceName: ctx.sourceName });
+        emit({ type: 'manaAdded', player: p, mana, sourceName: ctx.sourceName });
       }
       return;
+    }
 
 
 

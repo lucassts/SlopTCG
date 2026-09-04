@@ -131,9 +131,11 @@ export interface GameBoardProps {
   match: { wins: Record<PlayerId, number>; gameNumber: number } | null;
   onAction: (action: PlayerAction) => void;
   onExit: () => void;
+  /** Fim de um jogo da série: o jogador leu o resultado e segue para o sideboard. */
+  onContinue?: () => void;
 }
 
-export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameBoardProps) {
+export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onContinue }: GameBoardProps) {
   const you = view.you;
   const oppId: PlayerId = you === 'p1' ? 'p2' : 'p1';
   const me = view.players[you];
@@ -1360,7 +1362,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       )}
 
       {myChoice && myChoice.mode === 'confirm' && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay light">
           <div className="mulligan-box">
             <h2>Decisão</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1421,7 +1423,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
 
       {/* -------- nomear uma carta (Cabal Therapy) -------- */}
       {myChoice && myChoice.mode === 'number' && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay light">
           <div className="mulligan-box">
             <h2>Escolha um número</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1788,28 +1790,45 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         </div>
       )}
 
-      {view.status === 'finished' && (
-        <div className="game-over-overlay">
-          <div>
-            {view.winner === 'draw'
-              ? 'Empate!'
-              : view.winner === you
-                ? '🏆 Você venceu este jogo!'
-                : `${opp.name} venceu este jogo.`}
+      {view.status === 'finished' && (() => {
+        const decided = !!match && (match.wins[you] >= 2 || match.wins[oppId] >= 2);
+        const gameNo = match?.gameNumber ?? 1;
+        return (
+          <div className="game-over-overlay">
+            {decided ? (
+              <>
+                <div>
+                  {match!.wins[you] >= 2 ? '🏆 Você venceu a partida!' : `${opp.name} venceu a partida.`}
+                </div>
+                <div style={{ fontSize: 18 }}>
+                  Resultado final: você {match!.wins[you]} × {match!.wins[oppId]} {opp.name}
+                </div>
+                <button className="primary" onClick={onExit}>Voltar ao início</button>
+              </>
+            ) : (
+              <>
+                <div>
+                  {view.winner === 'draw'
+                    ? `Jogo ${gameNo}: empate.`
+                    : view.winner === you
+                      ? `🏆 Você venceu o jogo ${gameNo}!`
+                      : `Você perdeu o jogo ${gameNo} — ${opp.name} venceu.`}
+                </div>
+                {match && (
+                  <div style={{ fontSize: 18 }}>
+                    Placar: você {match.wins[you]} × {match.wins[oppId]} {opp.name}
+                  </div>
+                )}
+                {onContinue ? (
+                  <button className="primary" onClick={onContinue}>Ir para o sideboard</button>
+                ) : (
+                  <div className="muted">Preparando o sideboard…</div>
+                )}
+              </>
+            )}
           </div>
-          {match && (
-            <div style={{ fontSize: 18 }}>
-              Placar: você {match.wins[you]} × {match.wins[oppId]} {opp.name}
-            </div>
-          )}
-          {(!match || match.wins[you] >= 2 || match.wins[oppId] >= 2) && (
-            <button className="primary" onClick={onExit}>Voltar ao início</button>
-          )}
-          {match && match.wins[you] < 2 && match.wins[oppId] < 2 && (
-            <div className="muted">Preparando o sideboard…</div>
-          )}
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 
