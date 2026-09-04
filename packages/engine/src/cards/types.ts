@@ -30,6 +30,12 @@ export type Cond =
   | { kind: 'firstSpellThisGame' }
   /** "if you cast it" (The One Ring). */
   | { kind: 'wasCast' }
+  /** "if you cast it from your hand" (Amped Raptor). */
+  | { kind: 'castFromHand' }
+  /** Ascend: "if you have the city's blessing". */
+  | { kind: 'cityBlessing' }
+  /** Veil of Summer: "if an opponent has cast a blue or black spell this turn". */
+  | { kind: 'opponentCastColorThisTurn'; colors: Color[] }
   // ---- Leva 5b
   | { kind: 'dayNight'; value: 'day' | 'night' }
   | { kind: 'noSpellsLastTurn' }
@@ -126,6 +132,11 @@ export interface FilterSpec {
   nonbasic?: boolean;
   /** "nonartifact, nonland card". */
   notTypes?: CardType[];
+  /** "permanent that's one or more colors" / "colorless spell". */
+  colored?: boolean;
+  colorless?: boolean;
+  /** "land card with a basic land type". */
+  basicLandType?: boolean;
   /** "with mana value X or less" (X of the spell being resolved). */
   cmcAtMostX?: boolean;
   /** "with mana value equal to the number of <counter> counters on ~" (Aether Vial). */
@@ -197,6 +208,10 @@ export interface TargetSpec {
   /** "with mana value X or less" / "up to X target …" (X chosen at cast time). */
   cmcAtMostX?: boolean;
   upToX?: boolean;
+  /** "permanent that's one or more colors". */
+  colored?: boolean;
+  /** "target spell or nonland permanent an opponent controls" (Sink into Stupor): a spell on the stack also qualifies. */
+  orSpell?: boolean;
   /** For 'spell' targets: restrict by the spell's type (Negate, Essence Scatter…). */
   spellType?: 'creature' | 'noncreature' | 'instantSorcery';
   /** "artifact or enchantment": the object must have at least one of these types. */
@@ -262,7 +277,7 @@ export type EffectStep =
   | { op: 'discard'; who: WhoSel; count: number; chooser?: 'caster'; filter?: FilterSpec }
   /** The whole hand goes to the graveyard (wheels). */
   | { op: 'discardHand'; who: WhoSel }
-  | { op: 'mill'; who: WhoSel; count: number }
+  | { op: 'mill'; who: WhoSel; count: DynAmount }
   | { op: 'damage'; to: SubjectRef; amount: DynAmount; /** "If that creature would die this turn, exile it instead." */ exileIfDies?: boolean }
   | { op: 'gainLife'; who: WhoSel; amount: DynAmount }
   | { op: 'loseLife'; who: WhoSel; amount: DynAmount }
@@ -385,6 +400,24 @@ export type EffectStep =
   | { op: 'animateArtifactUntilNextTurn'; what: SubjectRef }
   /** (choice) Karn −2: put an artifact card you own from exile into your hand. */
   | { op: 'returnFromExileToHand'; filter: FilterSpec }
+  /** (choice) Wishes / Karn −2: put a card you own from outside the game (sideboard; optionally face-up exile) into your hand. */
+  | { op: 'wish'; filter?: FilterSpec; fromExile?: boolean }
+  // ---- Leva 6a (Legacy, parte 3)
+  /** (choice) Barrowgoyf: among the cards milled by the previous mill of this script, put one matching card into your hand. */
+  | { op: 'pickFromMilled'; filter: FilterSpec }
+  /** Amped Raptor: exile from the top until a nonland card; it may be cast this turn (paying {E} equal to its mana value). */
+  | { op: 'exileUntilNonlandFree'; payEnergy?: boolean }
+  /** (choice) Ugin −11: search any number of matching cards, exile them; castable free this turn. */
+  | { op: 'searchExileCastFree'; filter: FilterSpec }
+  /** "It becomes an Angel in addition to its other types." */
+  | { op: 'becomesSubtype'; what: SubjectRef; subtype: string }
+  /** (choice) Ajani −4: each opponent keeps one artifact, creature, enchantment and planeswalker; sacrifices the rest. */
+  | { op: 'keepOnePerTypeSacrificeRest'; who: PlayerSel }
+  /** Ocelot Pride: for each token you control that entered this turn, create a copy. */
+  | { op: 'copyTokensEnteredThisTurn' }
+  /** Veil of Summer. */
+  | { op: 'hexproofFromColorsUntilEot'; colors: Color[] }
+  | { op: 'uncounterableThisTurn' }
   /** (choice) Chrome Mox: exile a card from hand and remember it. */
   | { op: 'imprintFromHand'; filter: FilterSpec }
   /** (choice) Mox Diamond: discard a matching card or the source goes to the graveyard. */
@@ -487,6 +520,8 @@ export type EffectStep =
       tapped?: boolean;
       /** Undercity's throne: enters with counters. */
       withCounters?: { counter: string; count: number };
+      /** Boseiju: the controller of the first target searches (optional). */
+      who?: 'controllerOfTarget';
     }
   /** Reanimation: move a (graveyard) target onto the battlefield. */
   | { op: 'returnToBattlefield'; what: SubjectRef; tapped?: boolean; /** "under its owner's control". */ owner?: boolean }
@@ -534,6 +569,8 @@ export type EffectScript = EffectStep[];
 
 /** Trigger conditions for triggered abilities. */
 export type TriggerSpec =
+  /** Murktide Regent: a (matching) card leaves your graveyard. */
+  | { on: 'cardLeavesYourGraveyard'; filter?: FilterSpec }
   /** Moonshadow: one or more (matching) cards were put into your graveyard from anywhere (fires once per batch). */
   | { on: 'cardsToYourGraveyard'; filter?: FilterSpec }
   /** Orcish Bowmasters: an opponent draws a card except the first in their draw step. */
@@ -547,7 +584,7 @@ export type TriggerSpec =
   | { on: 'etb'; what: FilterSpec }
   | { on: 'dies'; self: true }
   /** Any object matching the filter dies (battlefield → graveyard). */
-  | { on: 'dies'; what: FilterSpec }
+  | { on: 'dies'; what: FilterSpec; /** "Whenever one or more … die": fires once per batch. */ oncePerBatch?: boolean }
   | { on: 'attacks'; self: true }
   | { on: 'blocks'; self: true }
   /** Leaves the battlefield to any zone (dies is the graveyard subset). */
@@ -711,6 +748,8 @@ export interface ActivatedAbility extends LevelGate {
   immediate?: boolean;
   /** "Activate only once each turn" / "no more than twice each turn". */
   maxPerTurn?: number;
+  /** Boseiju: \"This ability costs {1} less to activate for each <filter> you control\". */
+  costLessPer?: FilterSpec;
 }
 
 /** Planeswalker loyalty ability: sorcery speed, once per turn per walker. */
@@ -895,6 +934,8 @@ export interface CardDefinition {
     targetsSelf?: boolean;
     /** Bilbo: only spells cast from anywhere other than the hand. */
     notFromHand?: boolean;
+    /** Disruptor Flute: only spells with the chosen name. */
+    chosenName?: boolean;
   }[];
   /** "If ~ would die, exile it instead." */
   exileInsteadOfDying?: boolean;
@@ -967,6 +1008,14 @@ export interface CardDefinition {
   entersUnlessDiscard?: FilterSpec;
   /** Petrified Hamlet: lands with the chosen name gain these abilities. */
   grantToNamed?: AbilityDef[];
+  /** Quantum Riddler: with one or fewer cards in hand, each draw batch draws one more. */
+  drawPlusOneWhenHandSmall?: boolean;
+  /** Ascend: ten or more permanents → city's blessing for the rest of the game. */
+  ascend?: boolean;
+  /** Omniscience: your spells from hand cost nothing. */
+  freeSpellsFromHand?: boolean;
+  /** Aluren: any player may cast creature spells with mana value 3 or less for free, as though they had flash. */
+  aluren?: boolean;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -1200,6 +1249,9 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.manaCostIn && !filter.manaCostIn.includes(card.manaCost ?? '')) return false;
   if (filter.nonbasic && card.supertypes?.includes('Basic')) return false;
   if (filter.notTypes && filter.notTypes.some((t) => card.types.includes(t))) return false;
+  if (filter.colored && card.colors.length === 0) return false;
+  if (filter.colorless && card.colors.length > 0) return false;
+  if (filter.basicLandType && !card.subtypes.some((t) => ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].includes(t))) return false;
   if (filter.cmcEquals !== undefined || filter.cmcAtMost !== undefined || filter.cmcAtLeast !== undefined) {
     let mv = 0;
     for (const m of (card.manaCost ?? '').matchAll(/\{([^}]+)\}/g)) mv += /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : m[1] === 'X' ? 0 : 1;
@@ -1219,6 +1271,8 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
 /** A deck as handed to the engine: resolved definitions, order irrelevant (will be shuffled). */
 export interface DeckList {
   cards: CardDefinition[];
+  /** Sideboard: starts "outside the game" (Wishes, Karn −2). */
+  sideboard?: CardDefinition[];
 }
 
 export interface PlayerConfig {

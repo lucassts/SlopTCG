@@ -65,7 +65,7 @@ interface ZoneToast {
   key: string;
   card: CardView;
   player: PlayerId;
-  zone: 'graveyard' | 'exile';
+  zone: 'graveyard' | 'exile' | 'sideboard';
   label: string;
 }
 
@@ -149,7 +149,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
   const [modalPick, setModalPick] = useState<CardView | null>(null);
   const [modalSel, setModalSel] = useState<Set<number>>(new Set());
   const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
-  const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' } | null>(null);
+  const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' | 'sideboard' } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [actionMenu, setActionMenu] = useState<ActionMenu | null>(null);
   const [colorPick, setColorPick] = useState<{ objectId: number; abilityIndex: number; colors: string[]; name: string } | null>(null);
@@ -1078,6 +1078,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         >
           🌀 {me.exile.length}
         </span>
+        {me.sideboardSize > 0 && (
+          <span
+            className="zone-pill"
+            style={{ cursor: 'pointer' }}
+            title="Sideboard (fora do jogo): Wishes e Karn buscam daqui"
+            onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'sideboard' }); }}
+          >
+            📦 {me.sideboardSize}
+          </span>
+        )}
         <ManaChips pool={me.manaPool} />
         <div className="hand-row">
           {(me.hand ?? []).map((c) => (
@@ -1580,7 +1590,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
         <div className="mulligan-overlay" onClick={() => setZonePick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>
-              {zonePick.zone === 'graveyard' ? 'Cemitério' : 'Exílio'} de {view.players[zonePick.player].name}
+              {zonePick.zone === 'graveyard' ? 'Cemitério' : zonePick.zone === 'exile' ? 'Exílio' : 'Sideboard (fora do jogo)'} de {view.players[zonePick.player].name}
             </h2>
             <div className="mulligan-hand choice-hand">
               {view.players[zonePick.player][zonePick.zone].length === 0 && <div className="muted">vazio</div>}

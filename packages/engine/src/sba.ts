@@ -36,6 +36,11 @@ function syncControlAuras(state: GameState, emit: Emit): void {
 }
 
 export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
+  // Ascend: ten or more permanents → city's blessing for the rest of the game.
+  for (const p of PLAYER_IDS) {
+    const ps = state.players[p];
+    if (!ps.cityBlessing && ps.zones.battlefield.length >= 10 && ps.zones.battlefield.some((id) => state.objects[id].card.ascend)) { ps.cityBlessing = true; emit({ type: 'fizzled', description: `${ps.name} recebe a bênção da cidade` }); }
+  }
   let anyChange = false;
   let changed = true;
   syncControlAuras(state, emit);

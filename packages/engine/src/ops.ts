@@ -326,6 +326,7 @@ function removeToken(state: GameState, obj: GameObject): void {
   const arr = state.players[obj.controller].zones.battlefield;
   const i = arr.indexOf(obj.id);
   if (i >= 0) arr.splice(i, 1);
+  (state.lki ??= {})[obj.id] = obj;
   delete state.objects[obj.id];
 }
 

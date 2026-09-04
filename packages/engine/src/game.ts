@@ -488,6 +488,7 @@ export class Game {
       germ.isToken = true;
       germ.zone = 'battlefield';
       germ.summoningSick = true;
+      germ.enteredOnTurn = this.state.turn;
       s.players[obj.controller].zones.battlefield.push(germ.id);
       obj.attachedTo = germ.id;
       this.emit({ type: 'tokenCreated', player: obj.controller, objectId: germ.id, name: 'Phyrexian Germ' });
@@ -745,7 +746,11 @@ export class Game {
       { this.fail(playerId, 'surge: você precisa ter conjurado outra mágica neste turno'); return false; }
     if ((cm?.kind === 'prowl' || cm?.kind === 'spectacle') && !s.combatDamageThisTurn)
       { this.fail(playerId, `${cm.kind}: precisa ter causado dano de combate neste turno`); return false; }
-    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak' || method === 'miracle';
+    const alurenOn = PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id].card.aluren));
+    const viaAluren = alurenOn && obj.zone === 'hand' && card.types.includes('Creature') && manaValueOf(card.manaCost) <= 3 && !method;
+    const viaOmniscience = obj.zone === 'hand' && !method && s.players[playerId].zones.battlefield.some((id) => s.objects[id].card.freeSpellsFromHand);
+    const viaFreeExile = viaImpulse && obj.freeCastUntilTurn === s.turn;
+    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak' || method === 'miracle' || viaAluren;
     if (!isInstant && !this.sorceryTiming(playerId))
       { this.fail(playerId, 'só pode ser conjurada na sua fase principal com a pilha vazia'); return false; }
 
@@ -984,6 +989,13 @@ export class Game {
       // Affinity for artifacts: {1} less per artifact you control.
       if (card.affinity === 'artifact')
         cost.generic = Math.max(0, cost.generic - s.players[playerId].zones.battlefield.filter((id) => s.objects[id].card.types.includes('Artifact')).length);
+      if (viaOmniscience || viaAluren || (viaFreeExile && !obj.payWithEnergy)) { cost.generic = 0; cost.colorless = 0; cost.colored = []; cost.hybrid = []; cost.phyrexian = []; }
+      if (viaFreeExile && obj.payWithEnergy) {
+        const need = manaValueOf(card.manaCost);
+        if (s.players[playerId].energy < need) { this.fail(playerId, `você precisa de ${need} de energia para conjurar ${card.name}`); return false; }
+        s.players[playerId].energy -= need;
+        cost.generic = 0; cost.colorless = 0; cost.colored = []; cost.hybrid = []; cost.phyrexian = [];
+      }
       let plan = planPayment(s, playerId, cost);
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
       // tap creatures / artifacts, exile graveyard cards, one generic each.
@@ -1056,6 +1068,10 @@ export class Game {
     obj.miracleAvailable = undefined;
     obj.castX = xValue;
     obj.wasCast = true;
+    obj.castFromHand = fromHand;
+    obj.freeCastUntilTurn = undefined;
+    obj.payWithEnergy = undefined;
+    for (const c of card.colors) if (!(s.players[playerId].colorsCastThisTurn ??= []).includes(c)) s.players[playerId].colorsCastThisTurn!.push(c);
     if (viaGraveyardPermission && gyPerm) {
       s.players[playerId].graveyardCastPermission = undefined;
       if (gyPerm.exileInstantSorcery && (card.types.includes('Instant') || card.types.includes('Sorcery'))) obj.exileOnResolveOnce = true;
@@ -1266,6 +1282,7 @@ export class Game {
           if (m.whose === 'opponent' && mineToCaster) continue;
           if (m.filter && !cardMatchesFilter(card, m.filter)) continue;
           if (m.notFromHand && !notFromHand) continue;
+          if (m.chosenName && src.chosenName !== card.name) continue;
           if (m.targetsSelf && !targets.some((t) => t.kind === 'object' && t.id === src.id)) continue;
           const scale = m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : 1;
           delta += m.amount * scale;
@@ -1452,6 +1469,7 @@ export class Game {
     if (ability.cost.mana || abilityTax > 0) {
       const cost = parseCost(ability.cost.mana);
       cost.generic += abilityTax;
+      if (ability.costLessPer) cost.generic = Math.max(0, cost.generic - s.players[playerId].zones.battlefield.filter((id) => matchFilter({ controller: playerId, sourceId: obj.id, state: s }, ability.costLessPer!, s.objects[id])).length);
       const plan = planPayment(s, playerId, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
@@ -2027,6 +2045,7 @@ export class Game {
         const skip = s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id].card.skipDraw);
         if (!(s.turn === 1 && s.activePlayer === s.onThePlay) && !skip) {
           draw(s, s.activePlayer, this.emit);
+          if (s.players[s.activePlayer].zones.hand.length <= 2 && s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id].card.drawPlusOneWhenHandSmall)) draw(s, s.activePlayer, this.emit); // Quantum Riddler (mão tinha ≤ 1 antes da compra)
           checkStateBasedActions(s, this.emit);
         }
         s.priority = s.activePlayer;
@@ -2140,6 +2159,8 @@ export class Game {
       ps.nonlandEnteredThisTurn = 0;
       ps.spellsCastThisTurn = 0;
       ps.noncreatureSpellsThisTurn = 0;
+      ps.colorsCastThisTurn = [];
+      s.lki = undefined;
       ps.lifeGainedThisTurn = 0;
       ps.lifeLostThisTurn = 0;
       ps.preventNext = undefined;
@@ -2366,6 +2387,9 @@ export class Game {
   // -------------------------------------------------------------- triggers
 
   /** Derive triggered abilities from events emitted since the last scan. */
+  /** "Whenever one or more … die": (source, ability) pairs that already fired in this scan. */
+  private diesBatch = new Set<number>();
+
   /** State triggers ("When you control no Islands, sacrifice ~"): checked whenever triggers are scanned. */
   private checkStateTriggers(): void {
     const s = this.state;
@@ -2424,9 +2448,22 @@ export class Game {
 
   private scanTriggers(): void {
     this.checkStateTriggers();
+    this.diesBatch = new Set<number>();
     const gyBatch = new Set<number>(); // "one or more cards put into your graveyard": once per scan
     while (this.triggerCursor < this.buf.length) {
       const ev = this.buf[this.triggerCursor++];
+      if (ev.type === 'zoneChanged' && ev.from === 'graveyard') {
+        // Murktide Regent: "whenever an instant or sorcery card leaves your graveyard".
+        const moved = this.state.objects[ev.objectId];
+        if (moved) for (const id of [...this.state.players[ev.player].zones.battlefield]) {
+          const o = this.state.objects[id];
+          (o?.card.abilities ?? []).forEach((ab, idx) => {
+            if (ab.kind !== 'triggered' || ab.trigger.on !== 'cardLeavesYourGraveyard') return;
+            if (ab.trigger.filter && !cardMatchesFilter(moved.card, ab.trigger.filter)) return;
+            this.pushTrigger(o, ab, ev.objectId, undefined, { abilityIndex: idx });
+          });
+        }
+      }
       if (ev.type === 'zoneChanged' && ev.to === 'graveyard') {
         const moved = this.state.objects[ev.objectId];
         if (moved && !moved.isToken) {
@@ -2682,7 +2719,7 @@ export class Game {
   /** Self triggers on the moved object + global filter triggers everywhere. */
   private fireZoneTriggers(subjectId: number, on: 'etb' | 'dies'): void {
     const s = this.state;
-    const subject = s.objects[subjectId];
+    const subject = s.objects[subjectId] ?? s.lki?.[subjectId];
     if (!subject) return;
     this.fireSelfTrigger(subjectId, on);
     for (const source of Object.values(s.objects)) {
@@ -2696,6 +2733,7 @@ export class Game {
         if (!abilityActive(source, ability)) continue;
         if (!matchFilter({ controller: source.controller, sourceId: source.id, state: s }, ability.trigger.what, subject))
           continue;
+        if (ability.kind === 'triggered' && 'oncePerBatch' in ability.trigger && ability.trigger.oncePerBatch) { const key = source.id * 100 + (source.card.abilities ?? []).indexOf(ability); if (this.diesBatch.has(key)) return; this.diesBatch.add(key); }
         this.pushTrigger(source, ability, subjectId);
       }
     }

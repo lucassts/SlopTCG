@@ -18,6 +18,8 @@ export type ZoneName =
   | 'battlefield'
   | 'graveyard'
   | 'exile'
+  /** "Outside the game": the sideboard (Wishes, Karn). */
+  | 'sideboard'
   | 'stack';
 
 export type CardType =

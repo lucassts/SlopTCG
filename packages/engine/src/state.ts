@@ -60,6 +60,15 @@ export interface GameObject {
   grantedFrom?: number[];
   /** Bilbo: instant/sorcery cast from the graveyard — exile on resolution. */
   exileOnResolveOnce?: boolean;
+  /** Cast from the hand (Amped Raptor: "if you cast it from your hand"). */
+  castFromHand?: boolean;
+  /** Turn it entered the battlefield (Ocelot Pride). */
+  enteredOnTurn?: number;
+  /** "It becomes an Angel in addition to its other types." */
+  extraSubtypes?: string[];
+  /** Ugin −11 / Amped Raptor: castable from exile this turn without paying (or paying energy = mana value). */
+  freeCastUntilTurn?: number;
+  payWithEnergy?: boolean;
   /** Instant/sorcery cards exiled with delve when cast (Murktide Regent). */
   delvedCount?: number;
   /** Was kicked when cast (permanents). */
@@ -264,6 +273,14 @@ export interface PlayerState {
   attackersPenalty?: { untilTurn: number; power: number };
   /** Emblem: no maximum hand size. */
   noMaxHandSize?: boolean;
+  /** Ascend. */
+  cityBlessing?: boolean;
+  /** Colors of spells cast this turn (Veil of Summer). */
+  colorsCastThisTurn?: import('./types.js').Color[];
+  /** Veil of Summer: you and your permanents can't be targeted by spells of these colors while turn < untilTurn. */
+  hexproofFrom?: { colors: import('./types.js').Color[]; untilTurn: number };
+  /** Veil of Summer: your spells can't be countered while turn < untilTurn. */
+  uncounterableUntilTurn?: number;
   noncreatureSpellsThisTurn?: number;
   lifeGainedThisTurn?: number;
   lifeLostThisTurn?: number;
@@ -411,6 +428,10 @@ export interface GameState {
   dayNight?: 'day' | 'night';
   /** Extra turns queued (Time Walk, Emrakul). */
   extraTurns?: PlayerId[];
+  /** Last-known information of tokens that ceased to exist this turn (dies triggers). */
+  lki?: Record<number, GameObject>;
+  /** Cards milled by the last mill step (Barrowgoyf: "from among them"). */
+  lastMilled?: number[];
   /** Spells cast during the previous turn (all players / by its active player). */
   spellsCastLastTurn?: number;
   activeSpellsLastTurn?: number;
@@ -464,13 +485,18 @@ export function createGameState(players: PlayerConfig[], seed: number): GameStat
       completedDungeons: 0,
       manaPool: emptyManaPool(),
       landsPlayedThisTurn: 0,
-      zones: { library: [], hand: [], battlefield: [], graveyard: [], exile: [] },
+      zones: { library: [], hand: [], battlefield: [], graveyard: [], exile: [], sideboard: [] },
     };
     state.players[cfg.id] = ps;
     for (const card of cfg.deck.cards) {
       const obj = createObject(state, card, cfg.id);
       obj.zone = 'library';
       ps.zones.library.push(obj.id);
+    }
+    for (const card of cfg.deck.sideboard ?? []) {
+      const obj = createObject(state, card, cfg.id);
+      obj.zone = 'sideboard';
+      ps.zones.sideboard.push(obj.id);
     }
     const s = shuffle(ps.zones.library, state.rngState);
     ps.zones.library = s.items;
@@ -545,10 +571,14 @@ export function moveObject(
     if (obj.printedCard) { obj.card = obj.printedCard; obj.printedCard = undefined; }
     // Double-faced cards leave the battlefield front face up (711.4 / 712.8).
     if (obj.baseCard && obj.transformed) { obj.card = obj.baseCard; obj.transformed = false; }
+    obj.extraSubtypes = undefined;
   } else {
     // Vale para tudo que entra: um veículo tripulado no turno em que entrou
     // também tem "enjoo" (302.6). Só criaturas consultam a flag.
     obj.summoningSick = true;
+    obj.enteredOnTurn = state.turn;
+    // A planeswalker enters with its printed loyalty (306.5b) — also when it returns transformed (Ajani).
+    if (obj.card.types.includes('Planeswalker') && obj.card.loyalty && !(obj.counters['loyalty'] > 0)) obj.counters['loyalty'] = obj.card.loyalty;
   }
 }
 
@@ -596,6 +626,7 @@ export function matchFilter(
   if (filter.untapped && obj.tapped) return false;
   if (filter.withCounter && (obj.counters[filter.withCounter] ?? 0) <= 0) return false;
   if (filter.subtype && obj.card.everyNonbasicLandType && obj.card.types.includes('Land') && !['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].includes(filter.subtype)) return true;
+  if (filter.subtype && obj.extraSubtypes?.includes(filter.subtype)) return true;
   if (ctx.state) {
     if (filter.powerAtLeast !== undefined && effectivePower(ctx.state, obj) < filter.powerAtLeast) return false;
     if (filter.powerAtMost !== undefined && effectivePower(ctx.state, obj) > filter.powerAtMost) return false;
@@ -633,6 +664,9 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'topCardIs': { const top = state.objects[state.players[me].zones.library[0]]; return !!top && cardMatchesFilter(top.card, cond.filter); }
     case 'firstSpellThisGame': return (state.players[me].spellsCastThisGame ?? 0) === 0;
     case 'wasCast': return !!source.wasCast;
+    case 'castFromHand': return !!source.castFromHand;
+    case 'cityBlessing': return !!state.players[me].cityBlessing;
+    case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
     case 'beingAttacked': return state.step === 'declareAttackers' && state.combatAwaiting === null && state.activePlayer !== me && battlefield(state).some((o) => o.attacking);
     case 'topCardSharesCreatureType': {
       const top = state.objects[state.players[me].zones.library[0]];
@@ -797,6 +831,7 @@ export function effectiveToughness(state: GameState, obj: GameObject): number {
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
   // Virada para baixo: sem habilidades impressas (disguise dá ward {2}, tratado no custo).
   if (!obj.faceDown && obj.card.keywords?.includes(kw)) return true;
+  if ((obj.counters[kw] ?? 0) > 0) return true; // keyword counters ("a flying counter")
   if (obj.untilNextTurn?.some((u) => u.keywords.includes(kw))) return true;
   if (!obj.faceDown && currentBand(obj)?.keywords?.includes(kw)) return true;
   if (!obj.faceDown && obj.card.station && (obj.counters['charge'] ?? 0) >= obj.card.station.threshold && obj.card.station.keywords?.includes(kw)) return true;

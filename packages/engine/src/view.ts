@@ -98,6 +98,9 @@ export interface PlayerView {
   battlefield: CardView[];
   graveyard: CardView[];
   exile: CardView[];
+  /** Sideboard ("outside the game"): count for everyone, cards only for the owner. */
+  sideboardSize: number;
+  sideboard: CardView[];
 }
 
 export interface GameView {
@@ -208,6 +211,8 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
           : undefined,
       battlefield: p.zones.battlefield.map((id) => cardView(state, state.objects[id], viewer)),
       graveyard: p.zones.graveyard.map((id) => cardView(state, state.objects[id])),
+      sideboardSize: p.zones.sideboard.length,
+      sideboard: pid === viewer ? p.zones.sideboard.map((id) => cardView(state, state.objects[id])) : [],
       // Cartas exiladas "para depois" (foretell, suspend…) são viradas para baixo para o oponente.
       exile: p.zones.exile.map((id) => {
         const o = state.objects[id];

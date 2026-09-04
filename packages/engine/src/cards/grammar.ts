@@ -48,6 +48,8 @@ export interface NounInfo {
   spell?: { spellType?: TargetSpec['spellType'] };
   /** "any target". */
   any?: boolean;
+  /** "spell or nonland permanent": a spell on the stack also qualifies. */
+  orSpell?: boolean;
   /** Abilities on the stack (Stifle, Consign to Memory). */
   stackItem?: { abilityKinds?: ('activated' | 'triggered')[]; allowSpell?: { colorless?: boolean } };
 }
@@ -92,8 +94,13 @@ export function parseNounG(raw: string): NounInfo | null {
   n = n.replace(/\b(non\w+),\s+(?=non\w+)/gi, '$1 ');
   // "creature card with mana value 3 or less" → "creature with…" (the word "card" is not a type).
   n = n.replace(/ cards? (with|without|that)\b/i, ' $1');
-  if (/^multicolored /i.test(n)) { n = n.replace(/^multicolored /i, ''); filter.multicolored = true; }
+  if (/^multicolored( |$)/i.test(n)) { n = n.replace(/^multicolored ?/i, ''); filter.multicolored = true; }
+  if (/^colorless( |$)/i.test(n) && !/^colorless (?:spell|mana)/i.test(n)) { n = n.replace(/^colorless ?/i, ''); filter.colorless = true; }
+  if (/ other than ~$/i.test(n)) { n = n.replace(/ other than ~$/i, ''); filter.other = true; }
 
+  // "spell or nonland permanent an opponent controls" (Sink into Stupor).
+  let orSpell = false;
+  if (/^spell or /i.test(n)) { n = n.replace(/^spell or /i, ''); orSpell = true; }
   const controllerSuffix = (): boolean => {
     const mm = n.match(/^(.+?) (you control|an opponent controls|your opponents control|you don't control|defending player controls|that player controls|its controller controls)$/i);
     if (!mm) return false;
@@ -120,6 +127,8 @@ export function parseNounG(raw: string): NounInfo | null {
     }
     if ((m = n.match(/^(.+?) with mana value (\d+)$/i))) { n = m[1]; filter.cmcEquals = parseInt(m[2], 10); changed = true; }
     if ((m = n.match(/^(.+?) with mana value X or less$/i))) { n = m[1]; filter.cmcAtMostX = true; changed = true; }
+    if ((m = n.match(/^(.+?) that's one or more colors$/i))) { n = m[1]; filter.colored = true; changed = true; }
+    if ((m = n.match(/^(.+?) with a basic land type$/i))) { n = m[1]; filter.basicLandType = true; changed = true; }
     if ((m = n.match(/^(.+?) with mana value equal to the number of ([\w+/-]+) counters on ~$/i))) { n = m[1]; filter.cmcEqualsCountersOn = m[2]; changed = true; }
     if ((m = n.match(/^(.+?) with mana cost \{(\d+)\}(?: or \{(\d+)\})?$/i))) { n = m[1]; filter.manaCostIn = [`{${m[2]}}`, ...(m[3] ? [`{${m[3]}}`] : [])]; changed = true; }
     if ((m = n.match(/^(.+?) (with|without) (flying|reach|trample|haste|vigilance|lifelink|deathtouch|menace|defender|flash|first strike|double strike|hexproof|indestructible)$/i))) {
@@ -178,6 +187,14 @@ export function parseNounG(raw: string): NounInfo | null {
       return { filter: { ...filter, what: 'permanent', typeAnyOf: types }, zone };
     }
     if (alts.every((a) => SUBTYPE_RE.test(a))) return { filter: { ...filter, what: 'creature', subtypeAnyOf: alts }, zone };
+    // "artifact, enchantment, or nonbasic land": each alternative is a single-type noun with its own prefixes.
+    const parsedAlts = alts.map((a) => parseNounG(a));
+    if (parsedAlts.every((p) => p && !p.player && !p.zone && !p.spell && p.filter.what && p.filter.what !== 'permanent')) {
+      const types = parsedAlts.map((p) => typeWord(p!.filter.what!)!).filter(Boolean);
+      const merged: FilterSpec = { ...filter, what: 'permanent', typeAnyOf: types };
+      for (const p of parsedAlts) { if (p!.filter.nonbasic) merged.nonbasic = true; }
+      return { filter: merged, zone, ...(orSpell ? { orSpell: true } : {}) };
+    }
     // "creature or planeswalker" → creature (planeswalkers automated partially).
     if (alts.length === 2 && typeWord(alts[0]) === 'Creature' && /planeswalker/i.test(alts[1])) return { filter: { ...filter, what: 'creature' }, zone };
     return null;
@@ -190,7 +207,7 @@ export function parseNounG(raw: string): NounInfo | null {
       if (t === 'Planeswalker') return null;
       return { filter: { ...filter, what: t.toLowerCase() as FilterSpec['what'] }, zone };
     }
-    if (w.toLowerCase() === 'permanent' || w.toLowerCase() === 'permanents') return { filter: { ...filter, what: 'permanent' }, zone };
+    if (w.toLowerCase() === 'permanent' || w.toLowerCase() === 'permanents') return { filter: { ...filter, what: 'permanent' }, zone, ...(orSpell ? { orSpell: true } : {}) };
     if (w.toLowerCase() === 'card' || w.toLowerCase() === 'cards') return { filter, zone };
     if (SUBTYPE_RE.test(w.replace(/s$/, '')) || BASIC_TYPES.includes(w)) {
       const sub = BASIC_TYPES.includes(w) ? w : w.replace(/s$/, '');
@@ -211,7 +228,7 @@ export function parseNounG(raw: string): NounInfo | null {
       return { filter: { ...filter, ...inner.filter, token: true }, zone };
     }
     if (SUBTYPE_RE.test(a) && typeWord(b)) return { filter: { ...filter, what: typeWord(b)!.toLowerCase() as FilterSpec['what'], subtype: a }, zone };
-    if (typeWord(a) && (b.toLowerCase() === 'permanent' || b.toLowerCase() === 'permanents')) return { filter: { ...filter, what: typeWord(a)!.toLowerCase() as FilterSpec['what'] }, zone };
+    if (typeWord(a) && (b.toLowerCase() === 'permanent' || b.toLowerCase() === 'permanents')) return { filter: { ...filter, what: typeWord(a)!.toLowerCase() as FilterSpec['what'] }, zone, ...(orSpell ? { orSpell: true } : {}) };
     if (SUBTYPE_RE.test(a) && /^permanents?$/i.test(b)) return { filter: { ...filter, what: 'permanent', subtype: a }, zone };
     return null;
   }
@@ -257,6 +274,8 @@ export function filterToTargetSpec(info: NounInfo): TargetSpec | null {
   if (f.attacking || f.inCombat) spec.combat = true;
   if (f.legendary) spec.legendary = true;
   if (f.nonbasic) spec.nonbasic = true;
+  if (f.colored) spec.colored = true;
+  if (info.orSpell) spec.orSpell = true;
   if (f.withCounter) return null; // sem suporte em alvo
   if (info.zone === 'graveyard') { spec.zone = 'graveyard'; if (f.controlledBy === 'you') { spec.ownedBy = 'you'; spec.controlledBy = undefined; } }
   else if (info.zone) return null;
@@ -366,6 +385,10 @@ export function parseCondG(raw: string): Cond | null {
   if ((m = low.match(/^(?:it's|it is) (white|blue|black|red|green)$/))) return { kind: 'subjectIs', ref: 'triggering', filter: { color: COLOR_WORDS[m[1]] } };
   if ((m = low.match(/^(?:~|this spell) is the first spell you've cast this game$/))) return { kind: 'firstSpellThisGame' };
   if (low === 'you cast it' || low === 'it was cast') return { kind: 'wasCast' };
+  if (low === 'you cast it from your hand') return { kind: 'castFromHand' };
+  if (low === "you have the city's blessing") return { kind: 'cityBlessing' };
+  if ((m = low.match(/^an opponent has cast (?:a|an) (white|blue|black|red|green) or (white|blue|black|red|green) spell this turn$/))) return { kind: 'opponentCastColorThisTurn', colors: [COLOR_WORDS[m[1]], COLOR_WORDS[m[2]]] };
+  if ((m = low.match(/^an opponent has cast (?:a|an) (white|blue|black|red|green) spell this turn$/))) return { kind: 'opponentCastColorThisTurn', colors: [COLOR_WORDS[m[1]]] };
   if (low === 'there is an instant card and a sorcery card in your graveyard') return { kind: 'and', conds: [{ kind: 'graveyardAtLeast', count: 1, filter: { what: 'instant' } }, { kind: 'graveyardAtLeast', count: 1, filter: { what: 'sorcery' } }] };
   if ((m = low.match(/^you control (?:a|an) (.+?) and (?:a|an) (.+)$/))) {
     const a = parseNounG(m[1]); const b = parseNounG(m[2]);
@@ -446,7 +469,7 @@ type Subj =
   | { kind: 'each'; filter: FilterSpec }
   | { kind: 'player'; who: WhoSel };
 
-const PRONOUN_RE = /^(it|that creature|that permanent|that land|that artifact|that enchantment|that card|that token|that spell|this creature|~|enchanted creature|enchanted permanent|enchanted land|equipped creature)$/i;
+const PRONOUN_RE = /^(it|he|she|him|her|that creature|that permanent|that land|that artifact|that enchantment|that card|that token|that spell|this creature|~|enchanted creature|enchanted permanent|enchanted land|equipped creature)$/i;
 const PLURAL_PRONOUN_RE = /^(those creatures|those permanents|those cards|those tokens|them)$/i;
 
 /** Resolve a subject noun phrase (already isolated). */
@@ -643,6 +666,7 @@ function objectEffect(subj: Subj, verb: string, ctx: GCtx, specs: TargetSpec[]):
   if (/^doesn't untap during (?:its controller's|your) next untap step$/i.test(core)) return wrap([{ op: 'pump', what: ref, power: 0, toughness: 0, keywords: ['doesntUntap'], duration: 'yourNextTurn' }]);
   if (/^don't untap during their controller's next untap step$/i.test(core)) return wrap([{ op: 'pump', what: ref, power: 0, toughness: 0, keywords: ['doesntUntap'], duration: 'yourNextTurn' }]);
   if (/^can't block ~$/i.test(core)) return wrap([{ op: 'cantBlockSource', what: ref }]);
+  if ((m = core.match(/^becomes (?:a|an) ([A-Z][a-z]+) in addition to its other types$/))) { const st = m[1]; return wrap([{ op: 'becomesSubtype', what: ref, subtype: st }]); }
   if (/^explores$/i.test(core)) return wrap([{ op: 'explore', what: ref }]);
   if (/^connives$/i.test(core)) return wrap([{ op: 'connive', what: ref }]);
   if ((m = core.match(/^fights (.+)$/i))) {
@@ -718,6 +742,21 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
     return [{ op: 'bounceOwn', filter: { ...info.filter, controlledBy: 'you' } }];
   }
   if (/^sacrifice ~$/i.test(clause)) return [{ op: 'sacrificeSelf' }];
+  if ((m = clause.match(/^exile (.+?), then return it to the battlefield tapped under its owner's control$/i))) {
+    const subj = subjOf(m[1]);
+    if (!subj || subj.kind === 'player') return null;
+    return apply(subj, (r) => [{ op: 'exile', what: r }, { op: 'returnToBattlefield', what: r, tapped: true, owner: true }]);
+  }
+  if ((m = clause.match(/^put (\w+) ([\w+/-]+) counters? and (?:a|an) ([\w+/-]+) counter on (.+)$/i))) {
+    const n = num(m[1]);
+    const subj = subjOf(m[4]);
+    if (n === null || !subj || subj.kind === 'player') return null;
+    const c1 = m[2], c2 = m[3];
+    return apply(subj, (r) => [{ op: 'putCounters', what: r, counter: c1, count: n }, { op: 'putCounters', what: r, counter: c2, count: 1 }]);
+  }
+  if (/^for each token you control that entered this turn, create a token that's a copy of it$/i.test(clause)) return [{ op: 'copyTokensEnteredThisTurn' }];
+  if (/^spells you control can't be countered this turn$/i.test(clause)) return [{ op: 'uncounterableThisTurn' }];
+  if ((m = clause.match(/^you and permanents you control gain hexproof from (white|blue|black|red|green)(?: and from (white|blue|black|red|green))? until end of turn$/i))) return [{ op: 'hexproofFromColorsUntilEot', colors: [COLOR_WORDS[m[1].toLowerCase()], ...(m[2] ? [COLOR_WORDS[m[2].toLowerCase()]] : [])] }];
   if ((m = clause.match(/^put (\w+) cards? from your hand on top of your library(?: in any order)?$/i))) { const n = num(m[1]); return n === null ? null : [{ op: 'putHandOnTop', count: n }]; }
   if ((m = clause.match(/^look at the top card of (target player's|target opponent's|your|each opponent's) library$/i))) {
     const w = m[1].toLowerCase();
@@ -906,7 +945,8 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
   }
   if (/^discards? (?:their|your|his or her) hand$/i.test(body)) return [{ op: 'discardHand', who }];
   if (/^reveals? (?:their|your) hand$/i.test(body)) return [{ op: 'revealHand', who }];
-  if ((m = body.match(/^mills? (\w+|X) cards?$/i))) { const n = m[1] === 'X' ? null : num(m[1]); return n === null ? null : [{ op: 'mill', who, count: n }]; }
+  if ((m = body.match(/^mills? (.+?) cards?$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'mill', who, count: a }]; }
+  if ((m = body.match(/^puts? (?:a|an) (.+?) card from among them into your hand$/i)) && who === 'controller') { const info = parseNounG(m[1]); return !info || info.player ? null : [{ op: 'pickFromMilled', filter: info.filter }]; }
   if ((m = body.match(/^scries (\d+|X)$/i)) && who !== 'controller') return [{ op: 'scry', count: m[1] === 'X' ? 'X' : parseInt(m[1], 10), who }];
   if ((m = body.match(/^sacrifices? (?:a|an) (.+?)(?: of (?:their|your) choice)?$/i))) {
     const info = parseNounG(m[1]);

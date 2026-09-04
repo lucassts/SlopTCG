@@ -154,12 +154,13 @@ function startNextGame(room: Room): void {
   const p1 = room.seats.p1;
   const p2 = room.seats.p2;
   if (!p1?.pool || !p2?.pool) return;
-  const expand = (pool: DeckPool): DeckList => ({
-    cards: pool.main.flatMap((entry) => {
+  const expandEntries = (pool: DeckPool, entries: CountedCard[]): CardDefinition[] =>
+    entries.flatMap((entry) => {
       const def = pool.defs.get(entry.name.toLowerCase());
       return def ? Array.from({ length: entry.count }, () => def) : [];
-    }),
-  });
+    });
+  // O sideboard entra na partida como zona "fora do jogo" (Wishes, Karn).
+  const expand = (pool: DeckPool): DeckList => ({ cards: expandEntries(pool, pool.main), sideboard: expandEntries(pool, pool.side) });
   const m = room.match;
   m.gameNumber += 1;
   m.phase = 'playing';
