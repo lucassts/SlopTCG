@@ -275,6 +275,8 @@ export function moveWithEvent(
   }
   // "If ~ would be put into a graveyard from anywhere, exile it instead." (disturb back faces).
   if (to === 'graveyard' && obj.card.exileInsteadOfGraveyard && !obj.isToken) to = 'exile';
+  // Gaea's Will: "If a card would be put into your graveyard from anywhere this turn, exile that card instead."
+  if (to === 'graveyard' && !obj.isToken && state.players[obj.owner].exileInsteadOfGraveyardUntilTurn === state.turn) to = 'exile';
   // Containment Priest: a nontoken creature that wasn't cast is exiled instead of entering.
   if (to === 'battlefield' && from !== 'stack' && !obj.isToken && obj.card.types.includes('Creature') && !obj.wasCast &&
     (['p1', 'p2'] as PlayerId[]).some((p) => state.players[p].zones.battlefield.some((id) => state.objects[id]?.card.exileNoncastCreatures))) {

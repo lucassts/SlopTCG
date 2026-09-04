@@ -42,6 +42,14 @@ export type Cond =
   | { kind: 'completedNamedDungeon'; name: string; negate?: boolean }
   /** Carpet of Flowers: "if you haven't added mana with this ability this turn". */
   | { kind: 'notUsedThisTurn' }
+  /** Mindbreak Trap: "if an opponent cast three or more spells this turn". */
+  | { kind: 'opponentCastSpellsAtLeast'; count: number }
+  /** Phlage: "unless it escaped". */
+  | { kind: 'escaped' }
+  /** Boast: "Activate only if this creature attacked this turn". */
+  | { kind: 'sourceAttackedThisTurn' }
+  /** Converge (Prismatic Ending): target's mana value ≤ colors of mana spent on the source. */
+  | { kind: 'targetCmcAtMostColorsSpent' }
   // ---- Leva 5b
   | { kind: 'dayNight'; value: 'day' | 'night' }
   | { kind: 'noSpellsLastTurn' }
@@ -141,6 +149,8 @@ export interface FilterSpec {
   /** "permanent that's one or more colors" / "colorless spell". */
   colored?: boolean;
   colorless?: boolean;
+  /** "nonlegendary creature". */
+  nonlegendary?: boolean;
   /** "land card with a basic land type". */
   basicLandType?: boolean;
   /** "with mana value X or less" (X of the spell being resolved). */
@@ -181,6 +191,8 @@ export type DynAmount =
   | 'X'
   /** "the total mana value of other permanents you control" (Summon: Bahamut). */
   | { sumManaValue: FilterSpec }
+  /** Boast (Broadside Bombardiers): "2 plus the sacrificed permanent's mana value". */
+  | { sacrificedManaValuePlus: number }
   | { per: FilterSpec }
   /** Power of the creature sacrificed as an additional cost (Fling). */
   | 'sacrificedPower'
@@ -224,6 +236,10 @@ export interface TargetSpec {
   notBasicLand?: boolean;
   /** Bloodchief's Thirst: "If this spell was kicked, instead destroy target creature or planeswalker" — the spec used when kicked. */
   kickedSpec?: TargetSpec;
+  /** Lazotep Quarry: "creature card with mana value X". */
+  cmcEqualsX?: boolean;
+  /** Reflection of Kiki-Jiki: "nonlegendary creature". */
+  nonlegendary?: boolean;
   /** For 'spell' targets: restrict by the spell's type (Negate, Essence Scatter…). */
   spellType?: 'creature' | 'noncreature' | 'instantSorcery';
   /** "artifact or enchantment": the object must have at least one of these types. */
@@ -452,6 +468,17 @@ export type EffectStep =
   | { op: 'gambitPick'; who: PlayerSel }
   /** … then the lowest-mana-value creature card(s) enter. */
   | { op: 'gambitResolve' }
+  // ---- Leva 6a (Legacy, parte 6)
+  /** Gaea's Will: until end of turn, play lands and cast spells from your graveyard. */
+  | { op: 'graveyardPlayThisTurn' }
+  /** Gaea's Will: cards that would go to your graveyard this turn are exiled instead. */
+  | { op: 'exileInsteadOfGraveyardThisTurn' }
+  /** Emrakul: shuffle that player's graveyard into their library. */
+  | { op: 'shuffleGraveyardIntoLibrary'; who: WhoSel }
+  /** (choice) Fable II: discard up to N cards, then draw that many. */
+  | { op: 'discardUpToThenDraw'; max: number }
+  /** Sewer-veillance Cam: tap or untap (toggles). */
+  | { op: 'tapOrUntap'; what: SubjectRef }
   /** (choice) Chrome Mox: exile a card from hand and remember it. */
   | { op: 'imprintFromHand'; filter: FilterSpec }
   /** (choice) Mox Diamond: discard a matching card or the source goes to the graveyard. */
@@ -505,6 +532,8 @@ export type EffectStep =
       /** Overrides: Embalm → white Zombie; Eternalize → 4/4 black Zombie; Offspring → 1/1. */
       colors?: Color[];
       addSubtype?: string;
+      /** Lazotep Quarry: "except it's a 4/4 black Zombie". */
+      replaceSubtypes?: string[];
       power?: number;
       toughness?: number;
       keywords?: Keyword[];
@@ -617,6 +646,8 @@ export type TriggerSpec =
   | { on: 'controlsNone'; filter: FilterSpec }
   /** Dark Depths: state trigger "When ~ has no ice counters on it". */
   | { on: 'noCounters'; counter: string }
+  /** Emrakul: "When ~ is put into a graveyard from anywhere". */
+  | { on: 'toGraveyardFromAnywhere'; self: true }
   | { on: 'etb'; self: true }
   /** Any object matching the filter enters the battlefield. */
   | { on: 'etb'; what: FilterSpec }
@@ -818,6 +849,9 @@ export interface StaticAbility extends LevelGate {
   toughness?: number;
   /** Dynamic bonus: +1 per battlefield object matching the filter. */
   powerPer?: FilterSpec;
+  /** Wight of the Reliquary: "+1/+1 for each creature card in your graveyard". */
+  powerPerGraveyard?: FilterSpec;
+  toughnessPerGraveyard?: FilterSpec;
   toughnessPer?: FilterSpec;
   keywords?: Keyword[];
   text: string;
@@ -1058,6 +1092,8 @@ export interface CardDefinition {
   aluren?: boolean;
   /** Yavimaya: "Each land is a Forest in addition to its other land types." */
   allLandsAreType?: 'Plains' | 'Island' | 'Swamp' | 'Mountain' | 'Forest';
+  /** Emrakul: "protection from spells that are one or more colors". */
+  protectionFromColored?: boolean;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -1217,6 +1253,9 @@ export interface CardDefinition {
     ward?: number;
     /** "Enchanted creature gets +1/+1 for each X" (dynamic). */
     powerPer?: FilterSpec;
+  /** Wight of the Reliquary: "+1/+1 for each creature card in your graveyard". */
+  powerPerGraveyard?: FilterSpec;
+  toughnessPerGraveyard?: FilterSpec;
     toughnessPer?: FilterSpec;
     /** "Prevent all damage that would be dealt by enchanted creature." */
     preventsDamage?: boolean;
@@ -1292,6 +1331,7 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (filter.nonbasic && card.supertypes?.includes('Basic')) return false;
   if (filter.notTypes && filter.notTypes.some((t) => card.types.includes(t))) return false;
   if (filter.colored && card.colors.length === 0) return false;
+  if (filter.nonlegendary && card.supertypes?.includes('Legendary')) return false;
   if (filter.colorless && card.colors.length > 0) return false;
   if (filter.basicLandType && !card.subtypes.some((t) => ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].includes(t))) return false;
   if (filter.cmcEquals !== undefined || filter.cmcAtMost !== undefined || filter.cmcAtLeast !== undefined) {

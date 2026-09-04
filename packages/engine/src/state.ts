@@ -70,6 +70,8 @@ export interface GameObject {
   impending?: boolean;
   /** Carpet of Flowers: turn this permanent's once-per-turn ability was used. */
   usedOnTurn?: number;
+  /** Boast: attacked this turn. */
+  attackedThisTurn?: boolean;
   /** Emry: castable from the graveyard this turn. */
   castableFromGraveyardTurn?: number;
   /** Ugin −11 / Amped Raptor: castable from exile this turn without paying (or paying energy = mana value). */
@@ -234,6 +236,8 @@ export interface StackItem {
   xValue?: number;
   /** Power of the creature sacrificed as an additional cost (Fling). */
   sacrificedPower?: number;
+  /** Boast: mana value of the permanent sacrificed as a cost. */
+  sacrificedManaValue?: number;
   /** Cast via flashback: the card is exiled instead of going to the graveyard. */
   flashback?: boolean;
   /** Activated (vs triggered) ability — for Stifle-style targeting. */
@@ -276,7 +280,9 @@ export interface PlayerState {
   /** Protection from everything until this turn number (The One Ring). */
   protectedUntilTurn?: number;
   /** Bilbo: may cast one matching card from the graveyard this turn. */
-  graveyardCastPermission?: { filter: import('./cards/types.js').FilterSpec; untilTurn: number; exileInstantSorcery?: boolean };
+  graveyardCastPermission?: { filter: import('./cards/types.js').FilterSpec; untilTurn: number; exileInstantSorcery?: boolean; /** Gaea's Will: not consumed by one cast; lands too. */ keep?: boolean; lands?: boolean };
+  /** Gaea's Will: cards that would go to this player's graveyard are exiled instead (this turn). */
+  exileInsteadOfGraveyardUntilTurn?: number;
   /** Tamiyo +2: creatures attacking this player get -N/-0 while turn < untilTurn. */
   attackersPenalty?: { untilTurn: number; power: number };
   /** Emblem: no maximum hand size. */
@@ -678,6 +684,10 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'wasCast': return !!source.wasCast;
     case 'castFromHand': return !!source.castFromHand;
     case 'notUsedThisTurn': return source.usedOnTurn !== state.turn;
+    case 'opponentCastSpellsAtLeast': return (state.players[opp].spellsCastThisTurn ?? 0) >= cond.count;
+    case 'escaped': return source.castMethod === 'escape';
+    case 'sourceAttackedThisTurn': return !!source.attackedThisTurn;
+    case 'targetCmcAtMostColorsSpent': return false; // needs the effect context (condHolds)
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
     case 'opponentControlsMoreLands': {
@@ -751,6 +761,8 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
       const ctx = { controller: source.controller, sourceId: source.id, state };
       if (ability.powerPer) total.power += battlefield(state).filter((o) => matchFilter(ctx, ability.powerPer!, o)).length;
       if (ability.toughnessPer) total.toughness += battlefield(state).filter((o) => matchFilter(ctx, ability.toughnessPer!, o)).length;
+      if (ability.powerPerGraveyard) total.power += state.players[ctx.controller].zones.graveyard.filter((id) => cardMatchesFilter(state.objects[id].card, ability.powerPerGraveyard!)).length;
+      if (ability.toughnessPerGraveyard) total.toughness += state.players[ctx.controller].zones.graveyard.filter((id) => cardMatchesFilter(state.objects[id].card, ability.toughnessPerGraveyard!)).length;
       if (ability.keywords) total.keywords.push(...ability.keywords);
     }
   }
@@ -769,6 +781,8 @@ function attachmentBonus(state: GameState, obj: GameObject): { power: number; to
     const ctx = { controller: a.controller, sourceId: a.id, state };
     if (e.powerPer) power += battlefield(state).filter((o) => matchFilter(ctx, e.powerPer!, o)).length;
     if (e.toughnessPer) toughness += battlefield(state).filter((o) => matchFilter(ctx, e.toughnessPer!, o)).length;
+    if (e.powerPerGraveyard) power += state.players[ctx.controller].zones.graveyard.filter((id) => cardMatchesFilter(state.objects[id].card, e.powerPerGraveyard!)).length;
+    if (e.toughnessPerGraveyard) toughness += state.players[ctx.controller].zones.graveyard.filter((id) => cardMatchesFilter(state.objects[id].card, e.toughnessPerGraveyard!)).length;
   }
   return { power, toughness };
 }

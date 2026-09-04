@@ -98,6 +98,7 @@ export function parseNounG(raw: string): NounInfo | null {
   n = n.replace(/ cards? (with|without|that)\b/i, ' $1');
   if (/^multicolored( |$)/i.test(n)) { n = n.replace(/^multicolored ?/i, ''); filter.multicolored = true; }
   if (/^colorless( |$)/i.test(n) && !/^colorless (?:spell|mana)/i.test(n)) { n = n.replace(/^colorless ?/i, ''); filter.colorless = true; }
+  if (/^nonlegendary /i.test(n)) { n = n.replace(/^nonlegendary /i, ''); filter.nonlegendary = true; }
   if (/ other than ~$/i.test(n)) { n = n.replace(/ other than ~$/i, ''); filter.other = true; }
   { const ns = n.match(/^non-([A-Z][a-z]+) /); if (ns) { n = n.slice(ns[0].length); filter.notSubtype = ns[1]; } }
   // Land types used as nouns ("Desert card", "Gate").
@@ -282,6 +283,7 @@ export function filterToTargetSpec(info: NounInfo): TargetSpec | null {
   if (f.legendary) spec.legendary = true;
   if (f.nonbasic) spec.nonbasic = true;
   if (f.colored) spec.colored = true;
+  if (f.nonlegendary) spec.nonlegendary = true;
   if (info.orSpell) spec.orSpell = true;
   if (f.withCounter) return null; // sem suporte em alvo
   if (info.zone === 'graveyard') { spec.zone = 'graveyard'; if (f.controlledBy === 'you') { spec.ownedBy = 'you'; spec.controlledBy = undefined; } }
@@ -303,6 +305,7 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
     const k = m[1];
     return k === 'power' ? { powerOf: subject } : k === 'toughness' ? { toughnessOf: subject } : { cmcOf: subject };
   }
+  if ((m = t.match(/^(\d+) plus the sacrificed (?:permanent|creature|artifact)'s mana value$/))) return { sacrificedManaValuePlus: parseInt(m[1], 10) };
   if ((m = t.match(/^the total mana value of (.+?) you control$/))) {
     const info = parseNounG(m[1]);
     if (!info || info.player) return null;
@@ -401,6 +404,7 @@ export function parseCondG(raw: string): Cond | null {
   if (low === "you have the city's blessing") return { kind: 'cityBlessing' };
   if (low === 'an opponent controls more lands than you') return { kind: 'opponentControlsMoreLands' };
   if (low === "you haven't added mana with this ability this turn") return { kind: 'notUsedThisTurn' };
+  if ((m = low.match(/^an opponent cast (\w+) or more spells this turn$/))) { const n = num(m[1]); if (n !== null) return { kind: 'opponentCastSpellsAtLeast', count: n }; }
   if ((m = t.match(/^you haven't completed (.+)$/i))) return { kind: 'completedNamedDungeon', name: m[1], negate: true };
   if ((m = t.match(/^you've completed (.+)$/i)) && !/^a dungeon$/i.test(m[1])) return { kind: 'completedNamedDungeon', name: m[1] };
   if ((m = low.match(/^an opponent has cast (?:a|an) (white|blue|black|red|green) or (white|blue|black|red|green) spell this turn$/))) return { kind: 'opponentCastColorThisTurn', colors: [COLOR_WORDS[m[1]], COLOR_WORDS[m[2]]] };
@@ -519,6 +523,16 @@ function parseSubject(text: string, ctx: GCtx, specs: TargetSpec[], baseIdx: num
     return { kind: 'player', who: last > 0 ? `controllerOf:${last - 1}` : 'controllerOfTriggering' };
   }
   if (/^defending player$/i.test(t)) return { kind: 'player', who: 'opponent' };
+  if ((m = t.match(/^any number of target (.+)$/i))) {
+    // "Exile any number of target spells": a handful of optional slots.
+    const info = parseNounG(m[1]) ?? parseNounG(m[1].replace(/s$/i, ''));
+    if (!info) return null;
+    const spec = filterToTargetSpec(info);
+    if (!spec) return null;
+    const refs: SubjectRef[] = [];
+    for (let i = 0; i < 6; i++) { specs.push({ ...spec, optional: true }); refs.push(`target:${baseIdx + specs.length - 1}`); }
+    return { kind: 'multi', refs };
+  }
   if ((m = t.match(/^(?:up to (\w+) )?(?:another |other )?target (.+)$/i))) {
     const info = parseNounG(m[2]);
     if (!info) return null;

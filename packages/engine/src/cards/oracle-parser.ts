@@ -399,6 +399,9 @@ function parseTargetedEffect(clause: string): Parsed | null {
   if (/^counter target spell$/i.test(clause)) {
     return { steps: [{ op: 'counterSpell', what: 'target:0' }], spec: { what: 'spell' } };
   }
+  if ((m = clause.match(/^counter target (white|blue|black|red|green) spell$/i))) {
+    return { steps: [{ op: 'counterSpell', what: 'target:0' }], spec: { what: 'spell', color: COLOR_WORDS[m[1].toLowerCase()] } };
+  }
   if ((m = clause.match(/^counter target (creature|noncreature|instant or sorcery) spell$/i))) {
     const t = m[1].toLowerCase();
     const spellType = t === 'creature' ? 'creature' : t === 'noncreature' ? 'noncreature' : 'instantSorcery';
@@ -609,6 +612,47 @@ function parseEffectText(
   }
   // Tamiyo +2.
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Prismatic Ending (Converge).
+  if ((m = text.match(/^Exile target (.+?) if its mana value is less than or equal to the number of colors of mana spent to cast ~\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    const spec = filterToTargetSpec(info);
+    if (!spec) return null;
+    return { steps: [{ op: 'if', cond: { kind: 'targetCmcAtMostColorsSpent' }, then: [{ op: 'exile', what: 'target:0' }] }], specs: [spec] };
+  }
+  // Emrakul.
+  if (/^its owner shuffles their graveyard into their library\.$/i.test(text)) return { steps: [{ op: 'shuffleGraveyardIntoLibrary', who: 'controller' }] };
+  // Fable of the Mirror-Breaker II.
+  if ((m = text.match(/^You may discard up to (\w+) cards\. If you do, draw that many cards\.$/i))) {
+    const n = num(m[1]);
+    if (n === null) return null;
+    return { steps: [{ op: 'discardUpToThenDraw', max: n }] };
+  }
+  // Reflection of Kiki-Jiki.
+  if ((m = text.match(/^Create a token that's a copy of (another target .+?), except it has haste\. Sacrifice it at the beginning of the next end step\.$/i))) {
+    const g = parseSentenceG(`exile ${m[1]}`, { pronoun: 'self', pronounPlayer: 'controller', base: 0, priorSpecs: [] });
+    if (!g || g.specs.length !== 1) return null;
+    return { steps: [{ op: 'tokenCopy', what: 'target:0', keywords: ['haste'], sacrificeAtEnd: true }], specs: g.specs };
+  }
+  // Phlage.
+  if (/^sacrifice it unless it escaped\.$/i.test(text)) return { steps: [{ op: 'if', cond: { kind: 'escaped' }, then: [], else: [{ op: 'sacrificeSelf' }] }] };
+  // Lazotep Quarry.
+  if ((m = text.match(/^Exile target (.+?) with mana value X from your graveyard\. Create a token that's a copy of it, except it's a (\d+)\/(\d+) (white|blue|black|red|green) ([A-Z][a-z]+)\.(?: Activate only as a sorcery\.?)?$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return null;
+    const spec = filterToTargetSpec(info);
+    if (!spec) return null;
+    return {
+      steps: [{ op: 'tokenCopy', what: 'target:0', power: parseInt(m[2], 10), toughness: parseInt(m[3], 10), colors: [COLOR_WORDS[m[4].toLowerCase()]], replaceSubtypes: [m[5]] }, { op: 'exile', what: 'target:0' }],
+      specs: [{ ...spec, zone: 'graveyard', ownedBy: 'you', cmcEqualsX: true }],
+    };
+  }
+  // Sewer-veillance Cam.
+  if ((m = text.match(/^you may tap or untap (target .+?)\.$/i))) {
+    const g = parseSentenceG(`exile ${m[1]}`, { pronoun: 'self', pronounPlayer: 'controller', base: 0, priorSpecs: [] });
+    if (!g || g.specs.length !== 1) return null;
+    return { steps: [{ op: 'mayDo', prompt: `tap or untap ${m[1]}`, effect: [{ op: 'tapOrUntap', what: 'target:0' }] }], specs: g.specs };
+  }
   // Sneak Attack.
   if ((m = text.match(/^You may put (?:a|an) (.+?) card from your hand onto the battlefield\. That (?:creature|permanent) gains haste\. Sacrifice (?:the|that) (?:creature|permanent) at the beginning of the next end step\.$/i))) {
     const info = parseNounG(m[1]);
@@ -955,7 +999,7 @@ interface ParseState {
   /** Spree: modal spell whose modes carry their own costs. */
   spree?: boolean;
   /** Leva 6a (Legacy, parte 3). */
-  flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType'>>;
+  flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored'>>;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
   /** Leva 6a (Legacy): travas, substituições, uma mágica não-criatura por turno. */
@@ -1109,6 +1153,8 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever you draw a card$/i.test(head)) return { trigger: { on: 'youDrawCard' } };
   if (/^Whenever ~ attacks?$/i.test(head)) return { trigger: { on: 'attacks', self: true } };
   if ((m = head.match(/^When ~ has no ([\w+/-]+) counters on it$/i))) return { trigger: { on: 'noCounters', counter: m[1] } };
+  if (/^When ~ is put into a graveyard from anywhere$/i.test(head)) return { trigger: { on: 'toGraveyardFromAnywhere', self: true } };
+  if (/^When ~ enters or leaves the battlefield$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'leaves', self: true } };
   if (/^Whenever ~ blocks$/i.test(head)) return { trigger: { on: 'blocks', self: true } };
   if (/^Whenever ~ attacks or blocks$/i.test(head)) return { trigger: { on: 'attacks', self: true }, extraSelf: { on: 'blocks', self: true } };
   if (/^Whenever ~ enters or attacks$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'attacks', self: true } };
@@ -1258,6 +1304,16 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
 function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: string[]): boolean {
   let m: RegExpMatchArray | null;
   // Palavra de habilidade ("Metalcraft — ", "Landfall — ") é rótulo, não regra.
+  // Boast: an activated ability usable only if this creature attacked this turn, once each turn.
+  if ((m = rawLine.match(/^Boast — (.+)$/))) {
+    const before = st.abilities.length;
+    if (!parseLine(m[1], st, isSpell, subtypes)) return false;
+    const last = st.abilities[st.abilities.length - 1];
+    if (st.abilities.length === before || last.kind !== 'activated') return false;
+    last.condition = { ...(last.condition ?? {}), cond: { kind: 'sourceAttackedThisTurn' } };
+    last.maxPerTurn = 1;
+    return true;
+  }
   const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [a-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".');
 
   // ---- modal spells: "Choose one —" (or "one or both", "two", "up to one/two", "any number") + "• …" lines
@@ -1672,6 +1728,15 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
 
+  // ---- Leva 6a (Legacy, parte 6): Gaea's Will, Wight, Emrakul, Fable II, Sewer-veillance Cam
+  if (/^Until end of turn, you may play lands and cast spells from your graveyard\.$/i.test(line)) { st.spellEffect.push({ op: 'graveyardPlayThisTurn' }); return true; }
+  if (/^If a card would be put into your graveyard from anywhere this turn, exile (?:that card|it) instead\.$/i.test(line)) { st.spellEffect.push({ op: 'exileInsteadOfGraveyardThisTurn' }); return true; }
+  if ((m = line.match(/^~ gets \+1\/\+1 for each (.+?) card in your graveyard\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player) return false;
+    st.abilities.push({ kind: 'static', selfOnly: true, filter: {}, powerPerGraveyard: info.filter, toughnessPerGraveyard: info.filter, text: line.replace(/\.$/, '') });
+    return true;
+  }
   // ---- Leva 6a (Legacy, parte 5): Yavimaya, Carpet of Flowers
   if ((m = line.match(/^Each land is a (Plains|Island|Swamp|Mountain|Forest) in addition to its other land types\.$/i))) { st.flags10.allLandsAreType = m[1] as CardDefinition['allLandsAreType']; return true; }
   if ((m = line.match(/^At the beginning of each of your main phases, (.+)$/i))) {
@@ -1992,6 +2057,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   const isKw = (p: string) =>
     KEYWORDS[p.toLowerCase()] !== undefined ||
     /^protection from (white|blue|black|red|green)$/i.test(p) ||
+    /^protection from spells that are one or more colors$/i.test(p) ||
     /^ward \{\d+\}$/i.test(p) ||
     /^(prowess|devoid|infect|wither|exalted|flanking|skulk|persist|undying|evolve|mentor|unleash|riot|living weapon|battle cry|melee|training|dethrone|ingest|split second|sunburst|ravenous)$/i.test(p) ||
     /^(toxic|bushido|crew|saddle|rampage|afflict|renown|modular|afterlife|fabricate|bloodthirst|vanishing|fading|devour|annihilator|mobilize|firebending|graft|amplify) \d+$/i.test(p) ||
@@ -2003,6 +2069,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
         parseLine(p, st, isSpell, subtypes);
         continue;
       }
+      if (/^protection from spells that are one or more colors$/i.test(p)) { st.flags10.protectionFromColored = true; continue; }
       const prot = p.match(/^protection from (white|blue|black|red|green)$/i);
       const ward = p.match(/^ward \{(\d+)\}$/i);
       const numKw = p.match(/^(toxic|bushido|crew|saddle|rampage|afflict|renown|modular|afterlife|fabricate|bloodthirst|vanishing|fading|devour) (\d+)$/i);
@@ -2327,7 +2394,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     while (rest) {
       rest = false;
       let am: RegExpMatchArray | null;
-      if (/ Activate only as a sorcery\.$/i.test(body)) { sorceryOnly = true; body = body.replace(/ Activate only as a sorcery\.$/i, '.'); rest = true; }
+      if (/ Activate only as a sorcery\.$/i.test(body)) { sorceryOnly = true; body = body.replace(/\.? Activate only as a sorcery\.$/i, '.'); rest = true; }
       else if (/ Activate only once each turn\.$/i.test(body)) { maxPerTurn = 1; body = body.replace(/ Activate only once each turn\.$/i, '.'); rest = true; }
       else if ((am = body.match(/ Activate no more than (\w+) times? each turn\.$/i))) { maxPerTurn = num(am[1]) ?? undefined; body = body.replace(/ Activate no more than \w+ times? each turn\.$/i, '.'); rest = true; }
       else if (/ Activate only during your turn\.$/i.test(body)) { actCond = { kind: 'yourTurn' }; body = body.replace(/ Activate only during your turn\.$/i, '.'); rest = true; }

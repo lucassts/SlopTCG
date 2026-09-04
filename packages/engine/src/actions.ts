@@ -75,6 +75,8 @@ export type PlayerAction =
       objectId: number;
       abilityIndex: number;
       targets?: TargetChoice[];
+      /** {X} in the activation cost (Lazotep Quarry). */
+      x?: number;
       /** Permanents sacrificed to pay the ability's sacrifice cost. */
       sacrifices?: number[];
       /** Chosen color for "add one mana of any color" abilities. */

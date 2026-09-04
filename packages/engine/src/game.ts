@@ -344,7 +344,7 @@ export class Game {
       case 'chooseTargets':
         return this.doChooseTargets(playerId, action.targets);
       case 'activateAbility':
-        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices, action.manaColor, action.discards, action.tapCreature);
+        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices, action.manaColor, action.discards, action.tapCreature, action.x);
       case 'crew':
         return this.doCrew(playerId, action.objectId, action.creatures);
       case 'chooseMode':
@@ -442,7 +442,8 @@ export class Game {
     if (err) { this.fail(playerId, err); return false; }
     const obj = s.objects[objectId];
     const playableFromExile = !!obj && obj.zone === 'exile' && obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn;
-    const fromGraveyard = !!obj && obj.zone === 'graveyard' && s.players[playerId].zones.battlefield.some((id) => s.objects[id].card.playLandsFromGraveyard);
+    const gyLands = s.players[playerId].graveyardCastPermission;
+    const fromGraveyard = !!obj && obj.zone === 'graveyard' && (s.players[playerId].zones.battlefield.some((id) => s.objects[id].card.playLandsFromGraveyard) || (!!gyLands?.lands && gyLands.untilTurn === s.turn));
     if (!obj || (obj.zone !== 'hand' && !playableFromExile && !fromGraveyard) || obj.owner !== playerId)
       { this.fail(playerId, 'carta inválida'); return false; }
     if (!obj.card.types.includes('Land'))
@@ -925,6 +926,9 @@ export class Game {
       if (altLand) moveWithEvent(s, altLand, 'hand', 'returned', this.emit);
     } else {
       const baseCost = extra.faceDown ? '{3}' : cm ? cm.cost : viaFlashback ? card.flashback!.cost : alt?.manaCost ?? card.manaCost;
+      // No mana cost (Gaea's Will, Ancestral Vision): only castable by another means (suspend, free casts).
+      if (!card.manaCost && !cm && !viaFlashback && !extra.faceDown && !viaOmniscience && !viaAluren && !viaFreeExile)
+        { this.fail(playerId, `${card.name} não tem custo de mana: só pode ser conjurada de outro jeito (suspender, de graça)`); return false; }
       const cost = parseCost(baseCost);
       if (extra.fuse && obj.baseCard?.backFace) {
         const bc = parseCost(obj.baseCard.backFace.manaCost);
@@ -1079,7 +1083,7 @@ export class Game {
     obj.payWithEnergy = undefined;
     for (const c of card.colors) if (!(s.players[playerId].colorsCastThisTurn ??= []).includes(c)) s.players[playerId].colorsCastThisTurn!.push(c);
     if (viaGraveyardPermission && gyPerm) {
-      s.players[playerId].graveyardCastPermission = undefined;
+      if (!gyPerm.keep) s.players[playerId].graveyardCastPermission = undefined;
       if (gyPerm.exileInstantSorcery && (card.types.includes('Instant') || card.types.includes('Sorcery'))) obj.exileOnResolveOnce = true;
     }
     if (fromHand && card.rebound) obj.castMethod = obj.castMethod ?? undefined, (obj as GameObject & { reboundFromHand?: boolean }).reboundFromHand = true;
@@ -1333,6 +1337,7 @@ export class Game {
     manaColor?: 'W' | 'U' | 'B' | 'R' | 'G' | 'C',
     discards?: number[],
     tapCreature?: number,
+    x?: number,
   ): boolean {
     const s = this.state;
     const obj = s.objects[objectId];
@@ -1451,7 +1456,7 @@ export class Game {
     } else if (discardIds.length > 0) {
       { this.fail(playerId, 'essa habilidade não tem custo de descarte'); return false; }
     }
-    const targetErr = this.validateTargets(playerId, ability.targets, targets, obj.card.colors);
+    const targetErr = this.validateTargets(playerId, ability.targets, targets, obj.card.colors, x);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
     for (const t of targets) if (t.kind === 'object') this.emit({ type: 'targeted', objectId: t.id, by: playerId });
 
@@ -1468,6 +1473,8 @@ export class Game {
     } else if (abilitySacs.length > 0) {
       { this.fail(playerId, 'essa habilidade não tem custo de sacrifício'); return false; }
     }
+    // Boast: mana value of the permanent sacrificed as a cost (recorded before it leaves).
+    const sacrificedManaValue = abilitySacs.reduce((sum, id) => sum + manaValueOf(s.objects[id]?.card.manaCost), 0);
     if (ability.cost.payLife && s.players[playerId].life < ability.cost.payLife)
       { this.fail(playerId, `você precisa de ${ability.cost.payLife} pontos de vida para pagar`); return false; }
     if (ability.cost.energy && s.players[playerId].energy < ability.cost.energy)
@@ -1486,6 +1493,7 @@ export class Game {
     if (ability.cost.mana || abilityTax > 0) {
       const cost = parseCost(ability.cost.mana);
       cost.generic += abilityTax;
+      if (cost.xCount > 0) { if (x === undefined || x < 0) { this.fail(playerId, 'escolha o valor de X'); return false; } cost.generic += x * cost.xCount; }
       if (ability.costLessPer) cost.generic = Math.max(0, cost.generic - s.players[playerId].zones.battlefield.filter((id) => matchFilter({ controller: playerId, sourceId: obj.id, state: s }, ability.costLessPer!, s.objects[id])).length);
       const plan = planPayment(s, playerId, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
@@ -1556,6 +1564,8 @@ export class Game {
       effect: ability.effect,
       targets,
       description: `${obj.card.name}: ${ability.text}`,
+      xValue: x,
+      sacrificedManaValue,
     });
     s.passCount = 0;
     s.priority = playerId;
@@ -2183,6 +2193,7 @@ export class Game {
       ps.spellsCastThisTurn = 0;
       ps.noncreatureSpellsThisTurn = 0;
       ps.colorsCastThisTurn = [];
+      for (const id of ps.zones.battlefield) s.objects[id].attackedThisTurn = undefined;
       s.lki = undefined;
       ps.lifeGainedThisTurn = 0;
       ps.lifeLostThisTurn = 0;
@@ -2233,6 +2244,7 @@ export class Game {
           targets: item.targets,
           xValue: item.xValue,
           sacrificedPower: item.sacrificedPower,
+          sacrificedManaValue: item.sacrificedManaValue,
           emit: this.emit,
         },
         item.effect,
@@ -2307,6 +2319,7 @@ export class Game {
             sourceName: item.cardName,
             targets: item.targets,
             xValue: item.xValue,
+            sacrificedManaValue: item.sacrificedManaValue,
             emit: this.emit,
           };
           const count = obj.card.entersWithCountersIf && !condHolds(ctx, obj.card.entersWithCountersIf) ? 0 : resolveAmount(ctx, obj.card.entersWithCounters.count);
@@ -2347,6 +2360,7 @@ export class Game {
           targets: item.targets,
           xValue: item.xValue,
           sacrificedPower: item.sacrificedPower,
+          sacrificedManaValue: item.sacrificedManaValue,
           emit: this.emit,
         },
         item.effect,
@@ -2397,6 +2411,7 @@ export class Game {
         sourceName: item.cardName,
         targets: item.targets,
         xValue: item.xValue,
+        sacrificedManaValue: item.sacrificedManaValue,
         subjectId: item.subjectId,
         subjectPlayer: item.subjectPlayer,
         triggerAmount: item.triggerAmount,
@@ -2525,6 +2540,10 @@ export class Game {
       }
       if (ev.type === 'zoneChanged' && ev.to === 'graveyard') {
         const moved = this.state.objects[ev.objectId];
+        // Emrakul: "When ~ is put into a graveyard from anywhere".
+        if (moved) (moved.card.abilities ?? []).forEach((ab, idx) => {
+          if (ab.kind === 'triggered' && ab.trigger.on === 'toGraveyardFromAnywhere') this.pushTrigger(moved, ab, moved.id, undefined, { abilityIndex: idx });
+        });
         if (moved && !moved.isToken) {
           for (const id of [...this.state.players[ev.player].zones.battlefield]) {
             const o = this.state.objects[id];
@@ -2564,6 +2583,7 @@ export class Game {
         for (const a of ev.attackers) {
           this.fireHostTriggers(a.objectId, 'hostAttacks');
           const ao = this.state.objects[a.objectId];
+          if (ao) ao.attackedThisTurn = true; // boast
           if (ao?.exertedUntilTurn === this.state.turn + 2) this.fireSelfTrigger(a.objectId, 'youExertThis');
         }
       }

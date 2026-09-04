@@ -271,6 +271,8 @@ function simulate(def) {
         if (chosenModes) { if (def.spellModeChoice) action.modes = chosenModes; else action.mode = 0; }
         if (def.manaCost?.includes('{X}')) action.x = 1;
         let skipCast = false;
+        // Sem custo de mana (Lotus Bloom, Crashing Footfalls, Ragnarok…): só se conjura por suspender / de graça — fora do cenário.
+        if (!def.manaCost && !def.types.includes('Land')) skipCast = true;
         if (def.additionalCost?.sacrifice) {
           const need = def.additionalCost.count ?? 1;
           const sacs = s.players[me].zones.battlefield.map((id) => s.objects[id]).filter((o) => o.id !== cardId && matchesFilter(o, def.additionalCost.sacrifice)).slice(0, need).map((o) => o.id);
@@ -315,6 +317,7 @@ function simulate(def) {
         const targets = (ab.targets ?? []).map((spec) => pickTarget(game, me, opp, spec));
         if (targets.some((t) => t === null)) { log.push(`habilidade ${i}: sem alvo legal — pulada`); return; }
         const action = { type: 'activateAbility', objectId: cardId, abilityIndex: i, targets };
+        if (ab.kind === 'activated' && ab.cost?.mana?.includes('{X}')) action.x = 1;
         if (ab.kind === 'activated' && ab.effect.some((e) => e.op === 'addManaChoice')) {
           const step = ab.effect.find((e) => e.op === 'addManaChoice');
           action.manaColor = step.colors?.[0] ?? 'G';
