@@ -25,6 +25,10 @@ export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | '
  */
 export type Cond =
   | { kind: 'yourTurn' }
+  /** Molten Collapse: a permanent card was put into your graveyard from anywhere this turn. */
+  | { kind: 'descended' }
+  /** Minsc & Boo −2: the creature sacrificed by this script had the subtype. */
+  | { kind: 'sacrificedWasSubtype'; subtype: string }
   /** Exhibition Tidecaller: the triggering spell was cast with at least N mana. */
   | { kind: 'triggeringManaSpentAtLeast'; amount: number }
   /** Numeric comparison between two amounts ("If X is greater than or equal to the number of cards in your library"). */
@@ -173,6 +177,10 @@ export interface FilterSpec {
   toughnessAtMost?: number;
   /** Has a counter of this kind ("each creature you control with a +1/+1 counter on it"). */
   withCounter?: string;
+  /** "black or red permanent" / "a spell that's white, blue, black, or red". */
+  colorAnyOf?: Color[];
+  /** "creature with trample or haste" (printed keywords). */
+  keywordAnyOf?: Keyword[];
   /** Tokens only / nontoken only. */
   token?: boolean;
   nontoken?: boolean;
@@ -288,6 +296,8 @@ export interface TargetSpec {
   cmcAtLeast?: number;
   toughnessAtMost?: number;
   color?: Color;
+  /** Celestial Purge: "target black or red permanent". */
+  colorAnyOf?: Color[];
   notColor?: Color;
   nontoken?: boolean;
   token?: boolean;
@@ -366,7 +376,7 @@ export type EffectStep =
   /** Dredge: the source (in the graveyard) replaces the controller's next draw. */
   | { op: 'armDredge'; count: number }
   /** "Exile the top N cards of your library. You may play them this turn." */
-  | { op: 'impulse'; count: number }
+  | { op: 'impulse'; count: number; /** Seek the Beast: playable until your next end step (this turn if it's yours, else your next turn). */ untilNextEndStep?: boolean }
   /** Goad: must attack (a player other than you) until your next turn. */
   | { op: 'goad'; what: SubjectRef }
   // ---- Leva 4: gramática composicional
@@ -426,6 +436,16 @@ export type EffectStep =
   | { op: 'gainControlSpell'; what: SubjectRef }
   /** Helm of Obedience: target opponent mills until a creature card or X cards; a milled creature enters under your control and this is sacrificed. */
   | { op: 'helmOfObedience' }
+  /** Dark Confidant: reveal the top card, put it into your hand, lose life equal to its mana value. */
+  | { op: 'revealTopToHandLoseMv' }
+  /** Maze of Ith: prevent all combat damage dealt to and by that creature this turn. */
+  | { op: 'preventCombatToAndBy'; what: SubjectRef }
+  /** Pernicious Deed: destroy each permanent of those types with mana value X or less. */
+  | { op: 'destroyEachCmcAtMostX'; types: CardType[] }
+  /** (choice) Liliana −6: the controller splits the target player's permanents into two piles (picks = pile A). */
+  | { op: 'pileSplit'; who: WhoSel }
+  /** (choice) Liliana −6: that player sacrifices the pile of their choice. */
+  | { op: 'pileSacrifice'; who: WhoSel }
   /** (choice, internal) Legend rule: the controller keeps one of the same-named legendary permanents; the rest go to the graveyard. */
   | { op: 'legendRuleKeep'; ids: number[] }
   /** Earthbend N: target land becomes a 0/0 creature with haste (still a land), gets N +1/+1 counters, and returns tapped if it dies or is exiled. */
@@ -613,7 +633,7 @@ export type EffectStep =
   | { op: 'tapEach'; filter: FilterSpec }
   | { op: 'untapEach'; filter: FilterSpec }
   /** Two creatures deal damage equal to their power to each other. */
-  | { op: 'fight'; a: SubjectRef; b: SubjectRef }
+  | { op: 'fight'; a: SubjectRef; b: SubjectRef; /** Mawloc: "If that creature would die this turn, exile it instead." */ exileIfDies?: boolean }
   /** (choice) The player sacrifices `count` permanents matching the filter. */
   | { op: 'sacrifice'; who: WhoSel; filter?: FilterSpec; count: number }
   /** (choice) Look at the top N; chosen cards go to the bottom. */
@@ -1164,6 +1184,12 @@ export interface CardDefinition {
   maxHandSize?: number;
   /** Strive: "~ costs {cost} more to cast for each target beyond the first." */
   strive?: string;
+  /** Choke: "Islands don't untap during their controllers' untap steps." */
+  noUntapLandType?: string;
+  /** Riftstone Portal: while this card is in your graveyard, lands you control have "{T}: Add {G} or {W}." */
+  riftstoneGrant?: Color[];
+  /** Molten Collapse: "Choose one. If <cond>, you may choose both instead." */
+  spellModeChoiceIf?: { cond: Cond; max: number };
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -1391,6 +1417,8 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   const hasSub = (t: string) => card.subtypes.includes(t) || (!!card.everyNonbasicLandType && !BASIC_LAND_TYPES.includes(t) && !!filter.what && filter.what === 'land');
   if (filter.subtypeAnyOf && !filter.subtypeAnyOf.some((s) => hasSub(s))) return false;
   if (filter.basic && !card.supertypes?.includes('Basic')) return false;
+  if (filter.colorAnyOf && !filter.colorAnyOf.some((c) => card.colors.includes(c))) return false;
+  if (filter.keywordAnyOf && !filter.keywordAnyOf.some((k) => card.keywords?.includes(k))) return false;
   if (filter.nonland && card.types.includes('Land')) return false;
   if (filter.noncreature && card.types.includes('Creature')) return false;
   if (filter.color && !card.colors.includes(filter.color)) return false;

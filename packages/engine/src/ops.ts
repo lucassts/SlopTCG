@@ -107,6 +107,11 @@ export function dealDamageToObject(
     emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
     return;
   }
+  // Maze of Ith: no combat damage to or from that creature this turn.
+  if (opts?.combat && (target.preventCombatThisTurn || (opts.sourceId !== undefined && state.objects[opts.sourceId]?.preventCombatThisTurn))) {
+    emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
+    return;
+  }
   // Protection from creatures: damage from creature sources is prevented.
   if (opts?.sourceId !== undefined && state.objects[opts.sourceId]?.card.types.includes('Creature') && hasKeyword(state, target, 'protectionFromCreatures')) {
     emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
@@ -222,6 +227,7 @@ export function dealDamageToPlayer(
   opts?: { infect?: boolean; toxic?: number; sourceId?: number; combat?: boolean },
 ): void {
   if ((state.players[playerId].protectedUntilTurn ?? -1) > state.turn) { emit({ type: 'fizzled', description: `${state.players[playerId].name}: dano prevenido (proteção contra tudo)` }); return; }
+  if (opts?.combat && opts.sourceId !== undefined && state.objects[opts.sourceId]?.preventCombatThisTurn) { emit({ type: 'fizzled', description: `${state.players[playerId].name}: dano de combate prevenido (Maze of Ith)` }); return; }
   if (amount <= 0) return;
   const ps = state.players[playerId];
   if (ps.preventAllThisTurn) {
@@ -317,6 +323,11 @@ export function moveWithEvent(
     const mode = state.objects[id]?.card.exileInsteadOfGraveyardFor;
     return mode === 'all' || (mode === 'opponents' && p !== obj.owner) || (mode === 'self' && p === obj.owner);
   }))) to = 'exile';
+  // Descend: a permanent card put into a graveyard this turn.
+  if (to === 'graveyard' && !obj.isToken && obj.card.types.some((t) => ['Creature', 'Artifact', 'Enchantment', 'Land', 'Planeswalker', 'Battle'].includes(t))) {
+    const ps = state.players[obj.owner];
+    ps.permanentCardsToGraveyardThisTurn = (ps.permanentCardsToGraveyardThisTurn ?? 0) + 1;
+  }
   // Turn bookkeeping for conditions (morbid, revolt, celebration).
   if (from === 'battlefield') {
     const ps = state.players[obj.controller];

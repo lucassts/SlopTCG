@@ -13,7 +13,7 @@
  * automation is a rules violation nobody notices.
  */
 import type { CardType, Color, Keyword } from '../types.js';
-import { BASIC_TYPES, COLOR_WORDS, KEYWORDS, NUMBER_WORDS, TYPE_WORD, keywordList, num } from './lexicon.js';
+import { BASIC_TYPES, CARD_TYPE_WORD, COLOR_WORDS, KEYWORDS, NUMBER_WORDS, TYPE_WORD, keywordList, num } from './lexicon.js';
 import { filterToTargetSpec, parseAmountG, parseCondG, parseNounG, parseSentenceG, parseStaticG, parseTokenG, setAbilityTextCompiler, type GCtx } from './grammar.js';
 import type {
   AbilityDef,
@@ -544,9 +544,10 @@ function parseEffectText(
   let selfExile = false;
   // Thoughtseize/Duress: frases acopladas, tratadas inteiras; o que sobra
   // ("You lose 2 life.") segue o caminho normal.
-  if ((m = text.match(/^Target (player|opponent) reveals their hand\. You choose a (nonland|noncreature, nonland|creature|instant or sorcery|noncreature)? ?card from it(\. That player discards that card| and exile that card)\.?\s*(.*)$/i))) {
-    const exileIt = /exile/i.test(m[3]);
-    m = [m[0], m[1], m[2], m[4]] as unknown as RegExpMatchArray;
+  if ((m = text.match(/^Target (player|opponent) reveals their hand\. You choose a (nonland|noncreature, nonland|creature|instant or sorcery|noncreature)? ?card from it( with mana value (\d+) or less)?(\. That player discards that card| and exile that card)\.?\s*(.*)$/i))) {
+    const exileIt = /exile/i.test(m[5]);
+    const cmcAtMost = m[4] ? parseInt(m[4], 10) : undefined;
+    m = [m[0], m[1], m[2], m[6]] as unknown as RegExpMatchArray;
     const kind = (m[2] ?? '').toLowerCase();
     if (kind === 'instant or sorcery') return null;
     const filter: FilterSpec | undefined =
@@ -555,7 +556,7 @@ function parseEffectText(
       : kind === 'noncreature' ? { noncreature: true }
       : kind === 'creature' ? { what: 'creature' }
       : undefined;
-    steps.push({ op: 'discard', who: 'target:0', count: 1, chooser: 'caster', filter, exile: exileIt || undefined });
+    steps.push({ op: 'discard', who: 'target:0', count: 1, chooser: 'caster', filter: cmcAtMost !== undefined ? { ...(filter ?? {}), cmcAtMost } : filter, exile: exileIt || undefined });
     spec = { what: 'player' };
     text = m[3];
     if (!text.trim()) return { steps, spec };
@@ -616,6 +617,21 @@ function parseEffectText(
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
   // Earthbend N (Badgermole Cub): target land you control.
   if ((m = text.match(/^earthbend (\d+)\.?$/i))) return { steps: [{ op: 'earthbend', what: 'target:0', count: parseInt(m[1], 10) }], spec: { what: 'land', controlledBy: 'you' } };
+  // Dark Confidant.
+  if (/^reveal the top card of your library and put that card into your hand\. You lose life equal to its mana value\.$/i.test(text)) return { steps: [{ op: 'revealTopToHandLoseMv' }] };
+  // Liliana of the Veil −6.
+  if (/^Separate all permanents target player controls into two piles\. That player sacrifices all permanents in the pile of their choice\.$/i.test(text)) {
+    return { steps: [{ op: 'pileSplit', who: 'target:0' }, { op: 'pileSacrifice', who: 'target:0' }], spec: { what: 'player' } };
+  }
+  // Minsc & Boo −2.
+  if (/^Sacrifice a creature\. When you do, ~ deals X damage to any target, where X is that creature's power\. If the sacrificed creature was a Hamster, draw X cards\.$/i.test(text)) {
+    return { steps: [{ op: 'sacrifice', who: 'controller', count: 1, filter: { what: 'creature' } }, { op: 'damage', to: 'target:0', amount: 'sacrificedPower' }, { op: 'if', cond: { kind: 'sacrificedWasSubtype', subtype: 'Hamster' }, then: [{ op: 'draw', who: 'controller', count: 'sacrificedPower' }] }], spec: { what: 'any' } };
+  }
+  // Seek the Beast (Questing Druid): impulso até o seu próximo end step.
+  if ((m = text.match(/^Exile the top (\w+) cards? of your library\. Until your next end step, you may play (?:those cards|them|that card)\.$/i))) {
+    const n = num(m[1]);
+    return n === null ? null : { steps: [{ op: 'impulse', count: n, untilNextEndStep: true }] };
+  }
   // Helm of Obedience.
   if (/^Target opponent mills a card, then repeats this process until a creature card or X cards have been put into their graveyard this way, whichever comes first\. If one or more creature cards were put into that graveyard this way, sacrifice ~ and put one of them onto the battlefield under your control\.(?: X can't be 0\.)?$/i.test(text)) {
     return { steps: [{ op: 'helmOfObedience' }], spec: { what: 'player', controlledBy: 'opponent' } };
@@ -810,7 +826,7 @@ function parseEffectText(
     // Leva 5: "If that creature would die this turn, exile it instead" qualifica o dano anterior; restrição de gasto de mana é ignorada.
     if (/^If (?:that creature|it) would die this turn, exile it instead$/i.test(sentence)) {
       const last = steps[steps.length - 1];
-      if (last && last.op === 'damage') { last.exileIfDies = true; continue; }
+      if (last && (last.op === 'damage' || last.op === 'fight')) { last.exileIfDies = true; continue; }
       return null;
     }
     if (/^Spend this mana only /i.test(sentence)) continue;
@@ -829,6 +845,15 @@ function parseEffectText(
     }
     // Jace, Wielder of Mysteries −8: "Then if your library has no cards in it, you win the game."
     if (/^if your library has no cards in it, you win the game$/i.test(sentence)) { steps.push({ op: 'if', cond: { kind: 'compare', left: { librarySize: 'controller' }, cmp: 'eq', right: 0 }, then: [{ op: 'winGame', who: 'controller' }] }); continue; }
+    // Maze of Ith.
+    if (/^Prevent all combat damage that would be dealt to and dealt by (?:that creature|it) this turn$/i.test(sentence) && (spec || specs)) { steps.push({ op: 'preventCombatToAndBy', what: `target:${(specs ?? [spec!]).length - 1}` }); continue; }
+    // Pernicious Deed.
+    if ((m = sentence.match(/^Destroy each (.+?) with mana value X or less$/i))) {
+      const types = m[1].split(/,? and |, /).map((w) => CARD_TYPE_WORD[w.trim().toLowerCase()]).filter((t): t is CardType => !!t);
+      if (types.length === 0) return null;
+      steps.push({ op: 'destroyEachCmcAtMostX', types });
+      continue;
+    }
     // Commandeer.
     if ((m = sentence.match(/^Gain control of target (noncreature )?spell$/i))) {
       if (spec || specs) return null;
@@ -966,9 +991,13 @@ function parseEffectText(
             // Third-person verb only: "gain 3 life" (after "You draw a card and …") keeps "you" as subject.
             if (acc.length > 0 && lastSpec?.what === 'player' && /^(draws|discards|loses|gains|scries|mills|sacrifices|creates|exiles|reveals)\b/i.test(p)) p = 'that player ' + p;
             const gopts = { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length + accSpecs.length, priorSpecs: [...prior, ...accSpecs] };
+            // "…, then you may put a land card from your hand onto the battlefield": parte opcional vira mayDo (Uro).
+            let may = false;
+            if (/^you may /i.test(p)) { may = true; p = p.slice('you may '.length); }
             let pg = parseSentenceG(p, gopts);
             // "You draw a card and gain 3 life": the imperative tail reads as "you gain 3 life" when it fails on its own.
-            if (!pg && acc.length > 0 && firstIsYou && IMPERATIVE.test(p)) pg = parseSentenceG('you ' + p, gopts);
+            if (!pg && acc.length > 0 && (firstIsYou || may) && IMPERATIVE.test(p)) pg = parseSentenceG('you ' + p, gopts);
+            if (pg && may) pg = { steps: [{ op: 'mayDo', prompt: p, effect: pg.steps }], specs: pg.specs };
             if (!pg) { ok = false; break; }
             acc.push(...pg.steps);
             accSpecs.push(...pg.specs);
@@ -1098,7 +1127,7 @@ interface ParseState {
   flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
   flags11: Partial<Pick<CardDefinition, 'landsMultiManaColorless' | 'extraManaOnCreatureTap'>>;
   flags12: Partial<Pick<CardDefinition, 'yourSpellsUncounterable' | 'grantWardLifeOthers' | 'cageNoEnterFromGraveyardLibrary' | 'cageNoCastFromGraveyardLibrary' | 'nonbasicLandsAreMountains'>>;
-  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive'>>;
+  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf'>>;
   flashbackPayLife?: number;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
@@ -1279,6 +1308,9 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever ~ deals combat damage to a player or planeswalker$/i.test(head)) return { trigger: { on: 'combatDamageToPlayer', self: true } };
   if (/^Whenever ~ attacks and isn't blocked$/i.test(head)) return { trigger: { on: 'attacksUnblocked', self: true } };
   if (/^When you cast (?:~|this spell)$/i.test(head)) return { trigger: { on: 'youCastThis' } };
+  if ((m = head.match(/^Whenever you cast a spell that's ((?:white|blue|black|red|green)(?:(?:, | or )(?:white|blue|black|red|green))*,? or (?:white|blue|black|red|green))$/i))) return { trigger: { on: 'youCastSpellOf', filter: { colorAnyOf: m[1].split(/,? or |, /).map((w) => COLOR_WORDS[w.toLowerCase()]) } } };
+  if ((m = head.match(/^Whenever you cast (?:a|an) (white|blue|black|red|green) spell$/i))) return { trigger: { on: 'youCastSpellOf', filter: { color: COLOR_WORDS[m[1].toLowerCase()] } } };
+  if (/^When ~ enters and at the beginning of your upkeep$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'upkeep', whose: 'controller' } };
   if (/^When (?:enchanted|equipped) creature dies$/i.test(head)) return { trigger: { on: 'hostDies' } };
   if (/^Whenever (?:enchanted|equipped) creature attacks$/i.test(head)) return { trigger: { on: 'hostAttacks' } };
   if (/^Whenever (?:enchanted|equipped) creature deals combat damage to a player$/i.test(head)) return { trigger: { on: 'hostCombatDamageToPlayer' } };
@@ -1419,7 +1451,9 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     last.maxPerTurn = 1;
     return true;
   }
-  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [A-Za-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".');
+  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [A-Za-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".')
+    // "a spell that's white, blue, black, or red": sem vírgulas, para não confundir a divisão cabeçalho/corpo do gatilho (Questing Druid).
+    .replace(/that's ((?:white|blue|black|red|green)(?:, (?:white|blue|black|red|green))*),? or (white|blue|black|red|green)/i, (all) => all.replace(/, /g, ' or ').replace(/ or or /g, ' or '));
 
   // ---- modal spells: "Choose one —" (or "one or both", "two", "up to one/two", "any number") + "• …" lines
   if (isSpell && (m = line.match(/^Choose (one|two|three|one or both|one or more|up to one|up to two|up to three|any number) —$/i))) {
@@ -1877,6 +1911,19 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // Hexing Squelcher.
   if (/^Spells you control can't be countered\.$/i.test(line)) { st.flags12.yourSpellsUncounterable = true; return true; }
   if ((m = line.match(/^Other creatures you control have "Ward—Pay (\d+) life\."\.?$/i))) { st.flags12.grantWardLifeOthers = parseInt(m[1], 10); return true; }
+  // Choke.
+  if ((m = line.match(/^(Plains|Islands|Swamps|Mountains|Forests) don't untap during their controllers' untap steps\.$/i))) { st.flags13.noUntapLandType = m[1].replace(/s$/, ''); return true; }
+  // Riftstone Portal.
+  if ((m = line.match(/^As long as (?:~|this card) is in your graveyard, lands you control have "\{T\}: Add \{([WUBRG])\} or \{([WUBRG])\}\."\.?$/i))) { st.flags13.riftstoneGrant = [m[1].toUpperCase() as Color, m[2].toUpperCase() as Color]; return true; }
+  // Molten Collapse: "Choose one. If you descended this turn, you may choose both instead."
+  if (isSpell && (m = line.match(/^Choose one\. If (.+?), you may choose both instead\.$/i))) {
+    const c = /^you descended this turn$/i.test(m[1]) ? { kind: 'descended' as const } : parseCondG(m[1]);
+    if (!c) return false;
+    st.modalOpen = true;
+    st.spellModeChoice = { min: 1, max: 1 };
+    st.flags13.spellModeChoiceIf = { cond: c, max: 2 };
+    return true;
+  }
   // Necrodominance.
   if (/^At the beginning of your end step, you may pay any amount of life\. If you do, draw that many cards\.$/i.test(line)) {
     st.abilities.push({ kind: 'triggered', trigger: { on: 'endStep', whose: 'controller' }, effect: [{ op: 'payLifeDrawThatMany' }], text: 'pague qualquer quantidade de vida: compre esse número de cartas' });

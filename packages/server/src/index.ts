@@ -5,6 +5,7 @@
  * the engine and broadcasts per-player redacted events + views. Anyone can
  * self-host this (it's one Node process) — federation is the long-term plan.
  */
+import https from 'node:https';
 import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
@@ -558,11 +559,51 @@ function sanitizeName(name: string): string {
 // -------------------------------------------------- deck import proxy (HTTP)
 
 /**
- * GET /api/deck?url=<archidekt deck url> → { name, cards: [{name, count}] }
- * Browsers can't call Archidekt directly (CORS), so the room server proxies.
+ * GET /api/deck?url=<archidekt or moxfield deck url> → { name, cards: [{name, count}], sideboard }
+ * Browsers can't call Archidekt/Moxfield directly (CORS), so the room server proxies.
  * Only deck ids extracted from known hosts are fetched — the client never
  * controls the outgoing URL.
  */
+async function fetchDeckByUrl(deckUrl: string): Promise<{ name: string; cards: CountedCard[]; sideboard: CountedCard[] }> {
+  if (/moxfield\.com\/decks\//i.test(deckUrl)) return fetchMoxfieldDeck(deckUrl);
+  if (/archidekt\.com\//i.test(deckUrl)) return fetchArchidektDeck(deckUrl);
+  throw new Error('URL não reconhecida — cole um link de deck do Moxfield ou do Archidekt');
+}
+
+/** GET JSON via o módulo https (o fetch do Node é barrado pelo anti-bot do Moxfield). */
+function httpsGetJson(target: string): Promise<{ status: number; json: unknown }> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(target, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36', Accept: 'application/json' } }, (r) => {
+      const chunks: Buffer[] = [];
+      r.on('data', (c: Buffer) => chunks.push(c));
+      r.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        try { resolve({ status: r.statusCode ?? 0, json: body ? JSON.parse(body) : null }); } catch { resolve({ status: r.statusCode ?? 0, json: null }); }
+      });
+      r.on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => { req.destroy(new Error('Moxfield não respondeu a tempo')); });
+  });
+}
+
+/** Moxfield: a API pública v2 devolve o deck inteiro por id; mainboard/sideboard são mapas nome → { quantity, card }. */
+async function fetchMoxfieldDeck(deckUrl: string): Promise<{ name: string; cards: CountedCard[]; sideboard: CountedCard[] }> {
+  const m = deckUrl.match(/moxfield\.com\/decks\/([A-Za-z0-9_-]+)/i);
+  if (!m) throw new Error('URL não reconhecida — cole um link de deck do Moxfield (moxfield.com/decks/…)');
+  // O fetch do Node (undici) leva 403 do anti-bot do Moxfield; o módulo https passa.
+  const res = await httpsGetJson(`https://api2.moxfield.com/v2/decks/all/${m[1]}`);
+  if (res.status !== 200) throw new Error(`Moxfield respondeu ${res.status}${res.status === 404 ? ' — deck não encontrado (é privado?)' : ''}`);
+  const deck = res.json as {
+    name?: string;
+    mainboard?: Record<string, { quantity?: number; card?: { name?: string } }>;
+    sideboard?: Record<string, { quantity?: number; card?: { name?: string } }>;
+  };
+  const list = (board?: Record<string, { quantity?: number; card?: { name?: string } }>): CountedCard[] =>
+    Object.values(board ?? {}).flatMap((e) => (e.card?.name ? [{ name: e.card.name, count: e.quantity || 1 }] : []));
+  return { name: deck.name ?? 'Deck', cards: list(deck.mainboard), sideboard: list(deck.sideboard) };
+}
+
 async function fetchArchidektDeck(
   deckUrl: string,
 ): Promise<{ name: string; cards: CountedCard[]; sideboard: CountedCard[] }> {
@@ -667,7 +708,7 @@ const httpServer = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (req.method === 'GET' && url.pathname === '/api/deck') {
     const deckUrl = url.searchParams.get('url') ?? '';
-    fetchArchidektDeck(deckUrl)
+    fetchDeckByUrl(deckUrl)
       .then((deck) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(deck));

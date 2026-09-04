@@ -795,7 +795,9 @@ export class Game {
       return { label: idxs.map((i) => card.spellModes![i].label).join(' + '), targets: allTargets, effect: allEffect };
     };
     if (card.spellModes && card.spellModes.length > 0) {
-      const choice = card.spellModeChoice ?? { min: 1, max: 1 };
+      const baseChoice = card.spellModeChoice ?? { min: 1, max: 1 };
+      // Molten Collapse: "If you descended this turn, you may choose both instead."
+      const choice = card.spellModeChoiceIf && staticConditionHolds(s, { ...obj, controller: playerId }, card.spellModeChoiceIf.cond) ? { ...baseChoice, max: card.spellModeChoiceIf.max } : baseChoice;
       if (extra.entwine) mode = combineModes(card.spellModes.map((_, i) => i));
       else {
         const picked = extra.modes ?? (modeIndex !== undefined ? [modeIndex] : []);
@@ -2121,6 +2123,8 @@ export class Game {
           const obj = s.objects[id];
           obj.summoningSick = false;
           if (hasKeyword(s, obj, 'doesntUntap') || attachmentForbids(s, obj, 'doesntUntap')) continue;
+          // Choke: "Islands don't untap during their controllers' untap steps."
+          if (obj.card.types.includes('Land') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => { const t = s.objects[id]?.card.noUntapLandType; return !!t && obj.card.subtypes.includes(t); }))) continue;
           if (obj.exertedUntilTurn !== undefined && obj.exertedUntilTurn >= s.turn) { if (obj.exertedUntilTurn === s.turn) obj.exertedUntilTurn = undefined; continue; }
           if (obj.tapped) setTapped(s, obj, false, this.emit);
         }
@@ -2235,6 +2239,7 @@ export class Game {
       obj.triggeredThisTurn = undefined;
       obj.preventNext = undefined;
       obj.preventAllThisTurn = undefined;
+      obj.preventCombatThisTurn = undefined;
       obj.damagedByThisTurn = undefined;
       obj.exileIfDiesThisTurn = undefined;
       obj.mustBlockId = undefined;
@@ -2253,6 +2258,7 @@ export class Game {
       const ps = s.players[p];
       ps.damagedThisTurn = false;
       ps.drawsThisTurn = 0;
+      ps.permanentCardsToGraveyardThisTurn = 0;
       ps.permanentsLeftThisTurn = 0;
       ps.nonlandEnteredThisTurn = 0;
       ps.spellsCastThisTurn = 0;

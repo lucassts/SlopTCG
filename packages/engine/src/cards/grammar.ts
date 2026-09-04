@@ -76,6 +76,7 @@ export function parseNounG(raw: string): NounInfo | null {
   if (lower === 'each opponent' || lower === 'opponent' || lower === 'an opponent') return { filter: {}, player: 'opponent' };
   if (lower === 'each player' || lower === 'player') return { filter: {}, player: lower === 'player' ? 'target' : 'each' };
   if (lower === 'any target') return { filter: {}, any: true };
+  if (lower === 'planeswalker' || lower === 'planeswalkers') return { filter: { what: 'permanent', typeAnyOf: ['Planeswalker'] } };
   if (lower === 'player or planeswalker' || lower === 'opponent or planeswalker') return { filter: {}, player: lower.startsWith('opponent') ? 'targetOpponent' : 'target' };
 
   // Abilities on the stack.
@@ -130,6 +131,8 @@ export function parseNounG(raw: string): NounInfo | null {
   while (changed) {
     changed = false;
     if (controllerSuffix()) changed = true;
+    if ((m = n.match(/^(.+?) that's ((?:white|blue|black|red|green)(?:, (?:white|blue|black|red|green))*,? or (?:white|blue|black|red|green))$/i))) { n = m[1]; filter.colorAnyOf = m[2].split(/,? or |, /).map((w) => COLOR_WORDS[w.toLowerCase()]); changed = true; }
+    if ((m = n.match(/^(.+?) with (\w+) or (\w+)$/i)) && KEYWORDS[m[2].toLowerCase()] && KEYWORDS[m[3].toLowerCase()]) { n = m[1]; filter.keywordAnyOf = [KEYWORDS[m[2].toLowerCase()], KEYWORDS[m[3].toLowerCase()]]; changed = true; }
     if ((m = n.match(/^(.+?) with (?:power|mana value|toughness) (\d+) or (greater|less|more|fewer)$/i))) {
       n = m[1];
       const v = parseInt(m[2], 10);
@@ -167,6 +170,7 @@ export function parseNounG(raw: string): NounInfo | null {
     [/^legendary /i, () => { filter.legendary = true; return true; }],
     [/^(tapped|untapped) /i, (mm) => { if (mm[1].toLowerCase() === 'tapped') filter.tapped = true; else filter.untapped = true; return true; }],
     [/^(attacking or blocking|attacking|blocking) /i, (mm) => { if (mm[1].toLowerCase() === 'attacking') filter.attacking = true; else filter.inCombat = true; return true; }],
+    [/^((?:white|blue|black|red|green)(?:, (?:white|blue|black|red|green))*,? or (?:white|blue|black|red|green)) /i, (mm) => { filter.colorAnyOf = mm[1].split(/,? or |, /).map((w) => COLOR_WORDS[w.toLowerCase()]); return true; }],
     [/^non(white|blue|black|red|green) /i, (mm) => { filter.notColor = COLOR_WORDS[mm[1].toLowerCase()]; return true; }],
     [/^(white|blue|black|red|green) /i, (mm) => { filter.color = COLOR_WORDS[mm[1].toLowerCase()]; return true; }],
     [/^non-([A-Z][a-z]+) /, (mm) => { filter.notSubtype = mm[1]; return true; }],
@@ -268,6 +272,7 @@ export function filterToTargetSpec(info: NounInfo): TargetSpec | null {
   if (f.controlledBy === 'you') spec.controlledBy = 'you';
   if (f.controlledBy === 'opponent') spec.controlledBy = 'opponent';
   if (f.typeAnyOf) spec.typeAnyOf = f.typeAnyOf;
+  if (f.colorAnyOf) spec.colorAnyOf = f.colorAnyOf;
   if (f.nonland) spec.typeAnyOf = spec.typeAnyOf ?? ['Creature', 'Artifact', 'Enchantment', 'Planeswalker'];
   if (f.noncreature) { if (what === 'creature') return null; spec.typeAnyOf = spec.typeAnyOf ?? ['Land', 'Artifact', 'Enchantment', 'Planeswalker']; }
   if (f.withKeyword) spec.withKeyword = f.withKeyword;

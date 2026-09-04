@@ -128,7 +128,7 @@ export function Lobby({ roomCode, you, players, onSetDeck, onReady, onStart }: L
         <div className="panel-title">Importe seu deck</div>
         <div className="row">
           <input
-            placeholder="URL do Archidekt (ex.: archidekt.com/decks/123456)"
+            placeholder="URL do Moxfield ou do Archidekt (ex.: moxfield.com/decks/abc123)"
             value={deckUrl}
             onChange={(e) => setDeckUrl(e.target.value)}
           />

@@ -64,8 +64,29 @@ function syncBloodMoon(state: GameState, emit: Emit): void {
   }
 }
 
+/** Riftstone Portal: while it is in your graveyard, your lands have "{T}: Add {G} or {W}." (granted on top of the printed abilities). */
+function syncRiftstone(state: GameState): void {
+  for (const p of PLAYER_IDS) {
+    const grant = state.players[p].zones.graveyard.map((id) => state.objects[id]?.card.riftstoneGrant).find((g) => !!g);
+    for (const id of state.players[p].zones.battlefield) {
+      const o = state.objects[id];
+      if (!o || !o.card.types.includes('Land') || o.moonified) continue;
+      if (grant && !o.riftGranted) {
+        o.riftPrinted = o.card;
+        o.card = { ...o.card, abilities: [...(o.card.abilities ?? []), { kind: 'activated', cost: { tap: true }, effect: [{ op: 'addManaChoice', who: 'controller', colors: grant }], text: `Adicionar {${grant.join('} ou {')}} (Riftstone Portal)`, isManaAbility: true }] };
+        o.riftGranted = true;
+      } else if (!grant && o.riftGranted && o.riftPrinted) {
+        o.card = o.riftPrinted;
+        o.riftGranted = undefined;
+        o.riftPrinted = undefined;
+      }
+    }
+  }
+}
+
 export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
   syncBloodMoon(state, emit);
+  syncRiftstone(state);
   // Ascend: ten or more permanents → city's blessing for the rest of the game.
   for (const p of PLAYER_IDS) {
     const ps = state.players[p];

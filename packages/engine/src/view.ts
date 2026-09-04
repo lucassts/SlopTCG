@@ -3,7 +3,7 @@
  * so a client physically cannot see the opponent's hand or either library.
  */
 import type { CardDefinition } from './cards/types.js';
-import { effectivePower, effectiveToughness, type GameState, type GameObject } from './state.js';
+import { effectivePower, effectiveToughness, staticConditionHolds, type GameState, type GameObject } from './state.js';
 import { opponentOf, PLAYER_IDS, type ManaPool, type PlayerId, type Step, type TargetChoice } from './types.js';
 import { DUNGEONS } from './dungeons.js';
 
@@ -163,6 +163,11 @@ const FACE_DOWN_CARD: CardDefinition = {
 };
 
 function cardView(state: GameState, obj: GameObject, viewer?: PlayerId): CardView {
+  // Molten Collapse: com a condição valendo agora, o cliente deixa escolher os dois modos.
+  const modeIf = obj.card.spellModeChoiceIf;
+  if (modeIf && obj.zone === 'hand' && staticConditionHolds(state, obj, modeIf.cond)) {
+    obj = { ...obj, card: { ...obj.card, spellModeChoice: { ...(obj.card.spellModeChoice ?? { min: 1, max: 1 }), max: modeIf.max } } };
+  }
   const creature = obj.card.types.includes('Creature') || !!obj.crewedUntilEot || !!obj.faceDown;
   // Face-down permanents: the opponent sees only a 2/2; the controller sees the real card.
   const card = obj.faceDown && viewer !== undefined && viewer !== obj.controller ? FACE_DOWN_CARD : obj.card;

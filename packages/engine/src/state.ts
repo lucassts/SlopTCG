@@ -87,6 +87,11 @@ export interface GameObject {
   enterTapDone?: boolean;
   /** Total mana paid to cast this spell (Exhibition Tidecaller). */
   manaSpent?: number;
+  /** Maze of Ith: no combat damage dealt to or by this creature this turn. */
+  preventCombatThisTurn?: boolean;
+  /** Riftstone Portal: this land currently has the granted mana ability (riftPrinted holds the real card). */
+  riftGranted?: boolean;
+  riftPrinted?: CardDefinition;
   /** Blood Moon: this nonbasic land is currently a Mountain (moonPrinted holds the real card). */
   moonified?: boolean;
   moonPrinted?: CardDefinition;
@@ -277,6 +282,8 @@ export interface PlayerState {
   drawsThisTurn: number;
   /** Dredge: graveyard card armed to replace the next draw. */
   dredgeNext?: number;
+  /** Descend (Molten Collapse): permanent cards put into this player's graveyard this turn. */
+  permanentCardsToGraveyardThisTurn?: number;
   /** Dungeon the player is currently in, and the room index. */
   dungeon?: { name: string; room: number };
   completedDungeons: number;
@@ -471,6 +478,8 @@ export interface GameState {
   gambitPicks?: Partial<Record<PlayerId, number>>;
   /** Beseech the Mirror: the card exiled by the last search-to-exile. */
   lastSearchedExile?: number;
+  /** Liliana −6: pile A chosen by the controller, awaiting the victim's choice. */
+  pileA?: number[];
   /** Portent of Calamity: cards exiled by the reveal, for the cast-free step. */
   lastPortentExiled?: number[];
   /** Infernal Tutor: name of the card revealed from hand by the last `revealFromHandRemember`. */
@@ -616,6 +625,7 @@ export function moveObject(
     if (obj.baseCard && obj.transformed) { obj.card = obj.baseCard; obj.transformed = false; }
     obj.extraSubtypes = undefined;
     obj.enterTapDone = undefined;
+    if (obj.riftGranted && obj.riftPrinted) { obj.card = obj.riftPrinted; obj.riftGranted = undefined; obj.riftPrinted = undefined; }
     if (obj.moonified && obj.moonPrinted) { obj.card = obj.moonPrinted; obj.moonified = undefined; obj.moonPrinted = undefined; }
   } else {
     // Vale para tudo que entra: um veículo tripulado no turno em que entrou
@@ -716,6 +726,8 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'sourceAttackedThisTurn': return !!source.attackedThisTurn;
     case 'targetCmcAtMostColorsSpent': return false; // needs the effect context (condHolds)
     case 'triggeringManaSpentAtLeast': return false; // needs the effect context (condHolds)
+    case 'sacrificedWasSubtype': return false; // needs the effect context (condHolds)
+    case 'descended': return (state.players[me].permanentCardsToGraveyardThisTurn ?? 0) > 0;
     case 'compare': return false; // needs the effect context (condHolds)
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
