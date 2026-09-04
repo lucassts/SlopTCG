@@ -612,6 +612,13 @@ function parseEffectText(
   }
   // Tamiyo +2.
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
+  // Peer into the Abyss.
+  if (/^Target player draws cards equal to half the number of cards in their library and loses half their life\. Round up each time\.$/i.test(text)) {
+    return { steps: [
+      { op: 'draw', who: 'target:0', count: { halfLibraryOf: 'target:0', round: 'up' } },
+      { op: 'loseLife', who: 'target:0', amount: { halfLifeOf: 'target:0', round: 'up' } },
+    ], spec: { what: 'player' } };
+  }
   // Ad Nauseam.
   if (/^Reveal the top card of your library and put that card into your hand\. You lose life equal to its mana value\. You may repeat this process any number of times\.$/i.test(text)) return { steps: [{ op: 'adNauseam' }] };
   // Infernal Tutor (linha 1; a linha Hellbent vira "If …, instead …" no parseLine).
@@ -878,6 +885,12 @@ function parseEffectText(
       const prior = specs ?? (spec ? [spec] : [...(gctx.priorSpecs ?? [])]);
       const tryG = (s: string) => parseSentenceG(s, { pronoun: gctx.pronoun, pronounPlayer: gctx.pronounPlayer, base: prior.length, priorSpecs: prior });
       let g = tryG(sentence);
+      if (!g && (m = sentence.match(/^If (.+?), (.+)$/i))) {
+        // "If you control four or fewer lands, search your library for a basic land card…": a condição é da gramática, a frase não.
+        const cond = parseCondG(m[1]);
+        const inner = cond ? parseEffectText(m[2], gctx) : null;
+        if (cond && inner && !inner.spec && !inner.specs && !inner.selfExile) g = { steps: [{ op: 'if', cond, then: inner.steps }], specs: [] };
+      }
       if (!g) {
         // Compostos "X and Y" / "X, then Y" pela gramática, parte a parte (alvos acumulam; "and it …" é frase própria).
         const parts = /"/.test(sentence) ? [sentence] : sentence.split(/,? then |,? and (?!gains?\b(?! \d+ life)|have\b|has\b)|, (?=(?:draws?|discards?|loses?|gains?|sacrifices?|mills?|scries|creates?|exiles?|reveals?)\b)/i).map((p) => p.trim());
@@ -951,6 +964,8 @@ interface ParseState {
   cyclingMana?: string;
   /** Street Wraith: "Cycling—Pay 2 life." */
   cyclingLife?: number;
+  /** Edge of Autumn: "Cycling—Sacrifice a land." */
+  cyclingSacrifice?: FilterSpec;
   flashbackCost?: string;
   flashbackSacrifice?: FilterSpec;
   altCost?: CardDefinition['altCost'];
@@ -2291,6 +2306,12 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // ---- cycling / flashback / alt cost
   if ((m = line.match(/^Cycling (\{[^}]+\}(?:\{[^}]+\})*)$/i))) { st.cyclingMana = m[1]; return true; }
   if ((m = line.match(/^Cycling—Pay (\d+) life\.?$/i))) { st.cyclingLife = parseInt(m[1], 10); return true; }
+  if ((m = line.match(/^Cycling—Sacrifice (?:a|an) (.+?)\.?$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player || info.spell) return false;
+    st.cyclingSacrifice = { ...info.filter, controlledBy: 'you' };
+    return true;
+  }
   if ((m = line.match(/^Kicker ((?:\{[^}]+\})+)$/i))) { st.kickerCost = m[1]; return true; }
   if ((m = line.match(/^Flashback ((?:\{[^}]+\})+)$/i))) { st.flashbackCost = m[1]; return true; }
   if (/^Flashback—Sacrifice a creature\.$/i.test(line)) { st.flashbackSacrifice = { what: 'creature' }; return true; }
@@ -2642,7 +2663,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     entersTapped: st.entersTapped || undefined,
     entersWithCounters: st.entersWithCounters,
     additionalCost: st.additionalCost,
-    cycling: st.cyclingMana || st.cyclingLife ? { mana: st.cyclingMana, life: st.cyclingLife, effect: st.cyclingEffect } : undefined,
+    cycling: st.cyclingMana || st.cyclingLife || st.cyclingSacrifice ? { mana: st.cyclingMana, life: st.cyclingLife, sacrifice: st.cyclingSacrifice, effect: st.cyclingEffect } : undefined,
     loyalty: types.includes('Planeswalker') ? input.loyalty : undefined,
     crew: st.crew,
     evasionPowerAtMost: st.evasionPowerAtMost,

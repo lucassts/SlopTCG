@@ -175,7 +175,7 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if (typeof amount === 'object' && 'cardTypesInGraveyard' in amount)
     return cardTypesInGraveyards(ctx.state, amount.cardTypesInGraveyard === 'each' ? ['p1', 'p2'] : amount.cardTypesInGraveyard === 'opponent' ? [opponentOf(ctx.controller)] : [ctx.controller]);
   if (typeof amount === 'object' && 'halfLifeOf' in amount) {
-    const who = amount.halfLifeOf === 'opponent' ? opponentOf(ctx.controller) : ctx.controller;
+    const who = resolveWho(ctx, amount.halfLifeOf)[0] ?? ctx.controller;
     const life = ctx.state.players[who].life;
     return amount.round === 'up' ? Math.ceil(life / 2) : Math.floor(life / 2);
   }
@@ -203,7 +203,7 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if ('plus' in amount) return amount.plus + resolveAmount(ctx, amount.of);
   if ('devotion' in amount) return devotionTo(ctx.state, ctx.controller, amount.devotion);
   if ('librarySize' in amount) return ctx.state.players[amount.librarySize === 'opponent' ? opponentOf(ctx.controller) : ctx.controller].zones.library.length;
-  if ('halfLibraryOf' in amount) { const n = ctx.state.players[amount.halfLibraryOf === 'opponent' ? opponentOf(ctx.controller) : ctx.controller].zones.library.length; return amount.round === 'up' ? Math.ceil(n / 2) : Math.floor(n / 2); }
+  if ('halfLibraryOf' in amount) { const n = ctx.state.players[resolveWho(ctx, amount.halfLibraryOf)[0] ?? ctx.controller].zones.library.length; return amount.round === 'up' ? Math.ceil(n / 2) : Math.floor(n / 2); }
   return battlefield(ctx.state).filter((o) =>
     matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId, state: ctx.state }, amount.per, o),
   ).length;

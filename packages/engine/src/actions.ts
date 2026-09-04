@@ -67,7 +67,7 @@ export type PlayerAction =
   /** Ninjutsu: return an unblocked attacker to hand, put this card from hand attacking. */
   | { type: 'ninjutsu'; objectId: number; attackerId: number }
   /** Cycle a card from hand (pay its cycling cost, discard it, draw). */
-  | { type: 'cycle'; objectId: number }
+  | { type: 'cycle'; objectId: number; /** Permanent sacrificed as the cycling cost ("Cycling—Sacrifice a land"). */ sacrifice?: number }
   /** Choose targets for a triggered ability waiting on the queue. */
   | { type: 'chooseTargets'; targets: TargetChoice[] }
   | {

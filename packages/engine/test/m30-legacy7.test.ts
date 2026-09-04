@@ -46,6 +46,8 @@ const oracle = mk({ name: "Thassa's Oracle", manaCost: '{U}{U}', typeLine: 'Crea
 const labman = mk({ name: 'Laboratory Maniac', manaCost: '{2}{U}', typeLine: 'Creature — Human Wizard', power: 2, toughness: 2, colors: ['U'], oracleText: 'If you would draw a card while your library has no cards in it, you win the game instead.' });
 const beseech = mk({ name: 'Beseech the Mirror', manaCost: '{1}{B}{B}{B}', typeLine: 'Sorcery', colors: ['B'], oracleText: "Bargain (You may sacrifice an artifact, enchantment, or token as you cast this spell.)\nSearch your library for a card, exile it face down, then shuffle. If this spell was bargained, you may cast the exiled card without paying its mana cost if that spell's mana value is 4 or less. Put the exiled card into your hand if it wasn't cast this way." });
 const idol = mk({ name: 'Bear Idol', manaCost: '{2}', typeLine: 'Artifact', colors: [], oracleText: '{T}: Add {C}.' });
+const edge = mk({ name: 'Edge of Autumn', manaCost: '{1}{G}', typeLine: 'Sorcery', colors: ['G'], oracleText: 'If you control four or fewer lands, search your library for a basic land card, put it onto the battlefield tapped, then shuffle.\nCycling—Sacrifice a land. (Sacrifice a land, Discard this card: Draw a card.)' });
+const peer = mk({ name: 'Peer into the Abyss', manaCost: '{4}{B}{B}{B}', typeLine: 'Sorcery', colors: ['B'], oracleText: 'Target player draws cards equal to half the number of cards in their library and loses half their life. Round up each time.' });
 
 describe('M30 · Legacy parte 7', () => {
   it('compila tudo como full', () => {
@@ -278,5 +280,63 @@ describe('M30 · Legacy parte 7', () => {
     settle(game);
     expect(game.state.objects[bolt].zone).toBe('hand'); // não barganhado: vai para a mão
     expect(game.state.players.p2.life).toBe(20);
+  });
+
+  it('Edge of Autumn: com quatro terrenos ou menos busca um básico virado; com cinco não busca; reciclar sacrifica um terreno e compra', () => {
+    expect(edge.automation, edge.automationNotes?.join(' | ')).toBe('full');
+    expect(edge.cycling).toMatchObject({ sacrifice: { what: 'land' } });
+    const game = makeGame([...FILLER, edge, edge], FILLER, { topP1: [edge.id, edge.id] });
+    goToMain1(game);
+    put(game, 'p1', 'forest'); put(game, 'p1', 'forest');
+    const e1 = findIn(game, 'p1', 'hand', edge.id);
+    expect(cast(game, 'p1', e1).ok).toBe(true);
+    untilChoice(game);
+    let pd = choice(game);
+    expect(pd.options.every((id) => game.state.objects[id].card.types.includes('Land'))).toBe(true);
+    const found = pd.options[0];
+    answer(game, 'p1', [found]);
+    settle(game);
+    expect(game.state.objects[found].zone).toBe('battlefield');
+    expect(game.state.objects[found].tapped).toBe(true);
+    // Cinco terrenos: a segunda cópia não busca nada.
+    put(game, 'p1', 'forest'); put(game, 'p1', 'forest');
+    expect(game.state.players.p1.zones.battlefield.filter((id) => game.state.objects[id].card.types.includes('Land'))).toHaveLength(5);
+    const e2 = findIn(game, 'p1', 'hand', edge.id);
+    const libN = game.state.players.p1.zones.library.length;
+    for (const id of game.state.players.p1.zones.battlefield) game.state.objects[id].tapped = false;
+    expect(cast(game, 'p1', e2).ok).toBe(true);
+    settle(game);
+    expect(game.state.pendingDecision).toBeNull();
+    expect(game.state.players.p1.zones.library).toHaveLength(libN);
+    expect(game.state.objects[e2].zone).toBe('graveyard');
+    // Reciclar: precisa sacrificar um terreno.
+    const g2 = makeGame([...FILLER, edge], FILLER, { topP1: [edge.id] });
+    goToMain1(g2);
+    const land = put(g2, 'p1', 'forest');
+    const e3 = findIn(g2, 'p1', 'hand', edge.id);
+    expect(g2.apply('p1', { type: 'cycle', objectId: e3 }).ok).toBe(false); // sem sacrifício
+    const hand = g2.state.players.p1.zones.hand.length;
+    expect(g2.apply('p1', { type: 'cycle', objectId: e3, sacrifice: land }).ok).toBe(true);
+    expect(g2.state.objects[land].zone).toBe('graveyard');
+    expect(g2.state.objects[e3].zone).toBe('graveyard');
+    expect(g2.state.players.p1.zones.hand.length).toBe(hand); // -1 (Edge) +1 (compra)
+  });
+
+  it('Peer into the Abyss: o jogador alvo compra metade da biblioteca e perde metade da vida, arredondando para cima', () => {
+    expect(peer.automation, peer.automationNotes?.join(' | ')).toBe('full');
+    const game = makeGame([...FILLER, peer], FILLER, { topP1: [peer.id] });
+    goToMain1(game);
+    for (let i = 0; i < 4; i++) put(game, 'p1', 'swamp');
+    put(game, 'p1', 'mountain'); put(game, 'p1', 'mountain'); put(game, 'p1', 'mountain');
+    const p = findIn(game, 'p1', 'hand', peer.id);
+    trimLibrary(game, 'p2', 7); // 7 cartas → compra 4
+    game.state.players.p2.life = 19; // → perde 10
+    const hand = game.state.players.p2.zones.hand.length;
+    expect(cast(game, 'p1', p, { targets: [{ kind: 'player', player: 'p2' }] }).ok).toBe(true);
+    settle(game);
+    expect(game.state.players.p2.zones.hand.length).toBe(hand + 4);
+    expect(game.state.players.p2.zones.library).toHaveLength(3);
+    expect(game.state.players.p2.life).toBe(9);
+    expect(game.state.players.p1.life).toBe(20);
   });
 });

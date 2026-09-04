@@ -70,7 +70,7 @@ interface ZoneToast {
 }
 
 interface Targeting {
-  kind: 'spell' | 'ability' | 'trigger' | 'ninjutsu';
+  kind: 'spell' | 'ability' | 'trigger' | 'ninjutsu' | 'cycle';
   objectId: number;
   abilityIndex?: number;
   specs: { what: string }[];
@@ -352,6 +352,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     if (t.chosen.length >= t.specs.length) {
       if (t.kind === 'trigger') {
         onAction({ type: 'chooseTargets', targets: t.chosen });
+      } else if (t.kind === 'cycle') {
+        const sac = t.chosen[0];
+        if (sac?.kind === 'object') onAction({ type: 'cycle', objectId: t.objectId, sacrifice: sac.id });
       } else if (t.kind === 'ninjutsu') {
         const atk = t.chosen[0];
         if (atk?.kind === 'object') {
@@ -518,8 +521,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
     });
     if (def.cycling)
       opts.push({
-        label: `♻ Reciclar (${def.cycling.mana ?? ''}${def.cycling.life ? `${def.cycling.life} vidas` : ''})`,
-        run: () => onAction({ type: 'cycle', objectId: cv.objectId }),
+        label: `♻ Reciclar (${def.cycling.mana ?? ''}${def.cycling.life ? `${def.cycling.life} vidas` : ''}${def.cycling.sacrifice ? `sacrificar ${def.cycling.sacrifice.what === 'land' ? 'um terreno' : 'uma permanente'}` : ''})`,
+        run: () => beginCycle(cv),
       });
     if (!castable) {
       opts.push({ label: '⚠ Manual: → campo de batalha', run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'battlefield' }) });
@@ -638,6 +641,15 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
       const label = handPickCount > 0 ? `${base} (escolha ${extra.method === 'retrace' ? 'o terreno' : 'a(s) carta(s)'} a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
       setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
     }
+  };
+
+  /** Cycling: with a sacrifice cost ("Cycling—Sacrifice a land") the permanent is picked first. */
+  const beginCycle = (cv: CardView) => {
+    const cyc = cv.card.cycling;
+    if (!cyc) return;
+    if (cyc.sacrifice)
+      setTargeting({ kind: 'cycle', objectId: cv.objectId, specs: [{ what: cyc.sacrifice.what === 'land' ? 'terreno para sacrificar (reciclar)' : 'permanente para sacrificar (reciclar)' }], chosen: [], label: `${cv.card.name}: reciclar — escolha o sacrifício` });
+    else onAction({ type: 'cycle', objectId: cv.objectId });
   };
 
   /** Escape: exiles the N oldest other cards of the graveyard automatically. */
@@ -1479,7 +1491,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
           {menu.card.card.cycling && (me.hand ?? []).some((c) => c.objectId === menu.card.objectId) && (
             <MenuItem
               label={`♻ Reciclar (${menu.card.card.cycling.mana ?? ''}${menu.card.card.cycling.life ? `${menu.card.card.cycling.life} vidas` : ''})`}
-              onPick={() => onAction({ type: 'cycle', objectId: menu.card.objectId })}
+              onPick={() => beginCycle(menu.card)}
             />
           )}
           <MenuItem label="→ campo de batalha" onPick={() => moveTo(menu.card, 'battlefield')} />

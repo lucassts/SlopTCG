@@ -358,7 +358,7 @@ export class Game {
       case 'chooseMode':
         return this.doChooseMode(playerId, action.mode);
       case 'cycle':
-        return this.doCycle(playerId, action.objectId);
+        return this.doCycle(playerId, action.objectId, action.sacrifice);
       case 'declareAttackers':
         return this.doDeclareAttackers(playerId, action.attackers, action.defendTarget, action.exerted, action.enlist);
       case 'declareBlockers':
@@ -1679,7 +1679,7 @@ export class Game {
   }
 
   /** Cycling: pay the cost, discard the card, draw (or custom effect). */
-  private doCycle(playerId: PlayerId, objectId: number): boolean {
+  private doCycle(playerId: PlayerId, objectId: number, sacrificeId?: number): boolean {
     const s = this.state;
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
@@ -1690,12 +1690,20 @@ export class Game {
     if (!cycling) { this.fail(playerId, `${obj.card.name} não tem reciclar`); return false; }
     if (cycling.life && s.players[playerId].life < cycling.life)
       { this.fail(playerId, `você precisa de ${cycling.life} pontos de vida`); return false; }
+    // "Cycling—Sacrifice a land": the sacrifice is part of the cost, chosen with the action.
+    let sacObj: GameObject | undefined;
+    if (cycling.sacrifice) {
+      sacObj = sacrificeId !== undefined ? s.objects[sacrificeId] : undefined;
+      if (!sacObj || sacObj.zone !== 'battlefield' || sacObj.controller !== playerId || !matchFilter({ controller: playerId, sourceId: obj.id, state: s }, cycling.sacrifice, sacObj))
+        { this.fail(playerId, 'escolha uma permanente válida para sacrificar ao reciclar'); return false; }
+    }
     if (cycling.mana) {
       const plan = planPayment(s, playerId, parseCost(cycling.mana));
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
     }
     if (cycling.life) changeLife(s, playerId, -cycling.life, `reciclar ${obj.card.name}`, this.emit);
+    if (sacObj) moveWithEvent(s, sacObj, 'graveyard', 'sacrificed', this.emit);
     moveWithEvent(s, obj, 'graveyard', 'discarded', this.emit);
     this.emit({ type: 'cycled', player: playerId, cardName: obj.card.name });
     runEffectScript(

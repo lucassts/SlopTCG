@@ -215,13 +215,13 @@ export type DynAmount =
   | { times: number; of: DynAmount }
   | { plus: number; of: DynAmount }
   /** "half your life, rounded up/down". */
-  | { halfLifeOf: PlayerSel; round: 'up' | 'down' }
+  | { halfLifeOf: WhoSel; round: 'up' | 'down' }
   /** "the number of card types among cards in your/all graveyard(s)" (Tarmogoyf family). */
   | { cardTypesInGraveyard: PlayerSel }
   /** Instant and sorcery cards exiled with delve when this was cast (Murktide Regent). */
   | 'delvedCount'
   /** "half the number of cards in your library, rounded up" (Tamiyo). */
-  | { halfLibraryOf: PlayerSel; round: 'up' | 'down' }
+  | { halfLibraryOf: WhoSel; round: 'up' | 'down' }
   /** Devotion to a color: mana symbols of that color in the mana costs of permanents you control (Thassa's Oracle). */
   | { devotion: Color }
   /** Number of cards in a library. */
@@ -1217,7 +1217,7 @@ export interface CardDefinition {
   offspring?: boolean;
   squad?: boolean;
   /** Cycling: pay the cost, discard this card, apply `effect` (default: draw 1). */
-  cycling?: { mana?: string; life?: number; effect?: EffectScript };
+  cycling?: { mana?: string; life?: number; /** Edge of Autumn: "Cycling—Sacrifice a land." */ sacrifice?: FilterSpec; effect?: EffectScript };
   /** This spell can't be countered. */
   uncounterable?: boolean;
   /** Protection from these colors: can't be targeted, blocked, or damaged by them. */

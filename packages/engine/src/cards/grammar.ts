@@ -973,7 +973,7 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
   }
   if ((m = body.match(/^(?:gains?|gain) (.+?) life$/i))) { const a = parseAmountG(m[1].replace(/^an amount of life equal to /i, '').replace(/^life equal to /i, ''), subjRef); return a === null ? null : [{ op: 'gainLife', who, amount: scale(a) }]; }
   if ((m = body.match(/^(?:gains?|gain) life equal to (.+)$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'gainLife', who, amount: a }]; }
-  if ((m = body.match(/^loses? half (?:your|their) life, rounded (up|down)$/i))) return [{ op: 'loseLife', who, amount: { halfLifeOf: who === 'opponent' ? 'opponent' : 'controller', round: m[1].toLowerCase() as 'up' | 'down' } }];
+  if ((m = body.match(/^loses? half (?:your|their) life, rounded (up|down)$/i))) return [{ op: 'loseLife', who, amount: { halfLifeOf: who, round: m[1].toLowerCase() as 'up' | 'down' } }];
   if ((m = body.match(/^loses? (.+?) life$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'loseLife', who, amount: scale(a) }]; }
   if ((m = body.match(/^loses? life equal to (.+)$/i))) { const a = parseAmountG(m[1], subjRef); return a === null ? null : [{ op: 'loseLife', who, amount: a }]; }
   if ((m = body.match(/^discards? (\w+) cards?( at random)?$/i))) {
