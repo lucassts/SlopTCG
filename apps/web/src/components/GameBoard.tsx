@@ -613,7 +613,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const fbSac = fromGraveyard ? def.flashback?.sacrifice : undefined;
     const bargainSac = kicked && def.kicker?.sacrifice ? 'artefato, encantamento ou ficha para sacrificar' : undefined;
     const emergeSac = extra.method === 'emerge' ? 'criatura para sacrificar (emergir)' : undefined;
-    const sacCount = def.additionalCost?.sacrifice ? def.additionalCost.count ?? 1 : fbSac ? def.flashback?.sacrificeCount ?? 1 : bargainSac || emergeSac ? 1 : 0;
+    let eitherDiscard = false;
+    if (def.additionalCost?.either) {
+      eitherDiscard = !(await askConfirm(def.name, 'Custo adicional: sacrificar uma criatura ou descartar uma carta?', `Sacrificar ${def.additionalCost.sacrifice?.what === 'creature' ? 'uma criatura' : 'uma permanente'}`, 'Descartar uma carta'));
+    }
+    const sacCount = def.additionalCost?.sacrifice && !eitherDiscard ? def.additionalCost.count ?? 1 : fbSac ? def.flashback?.sacrificeCount ?? 1 : bargainSac || emergeSac ? 1 : 0;
     const sacSpecs = Array.from({ length: sacCount }, () => ({
       what: def.additionalCost?.sacrifice?.what ?? fbSac?.what ?? emergeSac ?? bargainSac ?? 'permanent',
     }));
@@ -623,7 +627,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const casualtyPick = def.casualty !== undefined && (await askConfirm(def.name, `Casualty ${def.casualty}: sacrificar uma criatura com poder ${def.casualty} ou mais para copiar a mágica?`, 'Sacrificar', 'Não'));
     if (casualtyPick) sacSpecs.push({ what: `criatura com poder ${def.casualty} ou mais para sacrificar (casualty)` });
     // Retrace: uma carta de terreno da mão para descartar, antes de tudo. Custo adicional de descarte: N cartas da mão.
-    const discardCost = extra.method !== 'retrace' ? def.additionalCost?.discard ?? 0 : 0;
+    const discardCost = extra.method !== 'retrace' && (!def.additionalCost?.either || eitherDiscard) ? def.additionalCost?.discard ?? 0 : 0;
     const handPickCount = extra.method === 'retrace' ? 1 : discardCost;
     const handSpecs = extra.method === 'retrace' ? [{ what: 'carta de terreno da sua mão para descartar' }] : Array.from({ length: discardCost }, () => ({ what: 'carta da sua mão para descartar' }));
     const targetSpecs = extra.fuse
@@ -1323,7 +1327,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {/* -------- sim/não (Mana Leak: pagar ou deixar anular) -------- */}
       {/* -------- perguntas de conjuração/ataque (X, kicker, barganha, buyback…) -------- */}
       {ask && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay light">
           <div className="mulligan-box">
             <h2>{ask.title}</h2>
             <div className="muted">{ask.text}</div>
@@ -1701,7 +1705,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                         beginCast(c, undefined, true);
                       }}
                     >
-                      ⚡ Flashback {c.card.flashback.cost ?? (c.card.flashback.sacrifice ? `(sacrifique ${c.card.flashback.sacrifice.what === 'creature' ? 'uma criatura' : 'uma permanente'})` : '')}
+                      ⚡ Flashback {c.card.flashback.payLife ? `${c.card.flashback.cost}, ${c.card.flashback.payLife} de vida` : c.card.flashback.cost ?? (c.card.flashback.sacrifice ? `(sacrifique ${c.card.flashback.sacrifice.what === 'creature' ? 'uma criatura' : 'uma permanente'})` : '')}
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.castMethods?.some((m) => m.kind === 'escape') && (

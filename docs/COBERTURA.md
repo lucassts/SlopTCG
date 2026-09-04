@@ -19,19 +19,19 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-04, v0.23.0 — Leva 6a parte 9, Legacy a 94,9%)
+## Estado (2026-09-04, v0.24.0 — listas do Lucas, Legacy a 95,1%)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | **v0.23 (L6a·9)** |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | **13.534** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | **14.719** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | **4.827** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | **v0.24** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | **13.600** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | **14.670** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | **4.811** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 
 **Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
 scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
 mede quanto do que se joga já é full (META% × cópias). Legacy: **43,7% →
-67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0 e **94,9%** na v0.23.0. Relatórios em `data/meta/<formato>-gap.md`.
+67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0, **94,9%** na v0.23.0 e **95,1%** na v0.24.0. Relatórios em `data/meta/<formato>-gap.md`.
 
 A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
 "outra face não modelada" restam 143 (versos cujo texto ainda não compila).
@@ -485,6 +485,27 @@ estava virando 0/0. **Fora**: Wastescape Battlemage (kicker duplo com custos
 diferentes e gatilhos por kicker: exige um modelo de kicker com opções, fica
 para depois). Legacy: 180 cartas com lacuna (329 de 509 full), 94,9%
 ponderado.
+
+**v0.24.0 — listas do Lucas** (Turbo Doomsday, Black Saga Storm e Blue
+Dredge do Moxfield: 81 cartas distintas, todas full agora; as duas do
+MTGGoldfish ficaram atrás do anti-bot da Cloudflare). **Gatilhos do
+cemitério**: `TriggeredAbility.zone = 'graveyard'` — o parser marca quando o
+corpo começa com "if this card is in your graveyard, " ou é "return this
+card from your graveyard to the battlefield"; a engine varre cemitérios em
+`fireZoneTriggers` (morte/entrada) e no despacho de "whenever you cast"
+(Bridge from Below, Poxwalkers; Bloodghast de brinde). Novos:
+`youCastSpell.notFromHand`, `discard.exile` já existia, `gainControlSpell`
+(Commandeer, com custo alternativo de duas cartas azuis),
+`helmOfObedience`, `payLifeDrawThatMany` + `maxHandSize` +
+`exileInsteadOfGraveyardFor: 'self'` (Necrodominance), `strive` (custo por
+alvo extra, somado antes do pagamento — Kiora's Dismissal),
+`flashback.payLife` (Deep Analysis), `additionalCost.either` (Bone Shards:
+sacrifica OU descarta, o cliente pergunta), `triggeringManaSpentAtLeast`
+com `obj.manaSpent` gravado na conjuração (Exhibition Tidecaller),
+`entersWithCounters` com quantidade dinâmica (Golgari Grave-Troll), "if
+your library has no cards in it, you win the game" (Jace −8), e "reveal it,
+then shuffle and put that card on top" normalizado (Personal/Mystical
+Tutor). Legacy: 174 cartas com lacuna (335 de 509 full), 95,1% ponderado.
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

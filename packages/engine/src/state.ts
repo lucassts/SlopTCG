@@ -85,6 +85,8 @@ export interface GameObject {
   earthbendReturn?: boolean;
   /** Enter-tapped rules (entersTapped, checklands, shocklands) already applied for this stay on the battlefield. */
   enterTapDone?: boolean;
+  /** Total mana paid to cast this spell (Exhibition Tidecaller). */
+  manaSpent?: number;
   /** Blood Moon: this nonbasic land is currently a Mountain (moonPrinted holds the real card). */
   moonified?: boolean;
   moonPrinted?: CardDefinition;
@@ -713,6 +715,7 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'escaped': return source.castMethod === 'escape';
     case 'sourceAttackedThisTurn': return !!source.attackedThisTurn;
     case 'targetCmcAtMostColorsSpent': return false; // needs the effect context (condHolds)
+    case 'triggeringManaSpentAtLeast': return false; // needs the effect context (condHolds)
     case 'compare': return false; // needs the effect context (condHolds)
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));

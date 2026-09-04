@@ -179,6 +179,10 @@ export function condHolds(ctx: EffectContext, cond: import('./cards/types.js').C
     const a = resolveAmount(ctx, cond.left), b = resolveAmount(ctx, cond.right);
     return cond.cmp === 'gte' ? a >= b : cond.cmp === 'gt' ? a > b : cond.cmp === 'lte' ? a <= b : cond.cmp === 'lt' ? a < b : a === b;
   }
+  if (cond.kind === 'triggeringManaSpentAtLeast') {
+    const o = ctx.subjectId !== undefined ? ctx.state.objects[ctx.subjectId] : undefined;
+    return (o?.manaSpent ?? 0) >= cond.amount;
+  }
   if (cond.kind === 'not') return !condHolds(ctx, cond.cond);
   if (cond.kind === 'and') return cond.conds.every((c) => condHolds(ctx, c));
   if (cond.kind === 'or') return cond.conds.some((c) => condHolds(ctx, c));
@@ -293,9 +297,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -683,6 +687,11 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const types = new Set(top.flatMap((id) => state.objects[id].card.types));
       ctx.emit({ type: 'fizzled', description: `${ctx.sourceName}: revela ${top.map((id) => state.objects[id].card.name).join(', ')}` });
       return { player: controller, options: top, min: 0, max: types.size, prompt: `${ctx.sourceName}: exile até uma carta de cada tipo de carta (${[...types].join(', ')}); o resto vai para o cemitério`, mode: 'cards' };
+    }
+    case 'payLifeDrawThatMany': {
+      const life = state.players[controller].life;
+      if (life <= 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'skip' };
+      return { player: controller, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: pague quanto de vida? (compra esse número de cartas; você tem ${life})`, mode: 'number' };
     }
     case 'portentCast': {
       const exiled = (state.lastPortentExiled ?? []).filter((id) => state.objects[id]?.zone === 'exile');
@@ -1155,6 +1164,14 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         else moveWithEvent(state, o, 'graveyard', 'milled', emit);
       }
       state.lastPortentExiled = exiled;
+      return;
+    }
+    case 'payLifeDrawThatMany': {
+      const ps = state.players[ctx.controller];
+      const n = Math.max(0, Math.min(ps.life, parseInt(text ?? '0', 10) || 0));
+      if (n <= 0) return;
+      changeLife(state, ctx.controller, -n, ctx.sourceName, emit);
+      for (let i = 0; i < n; i++) draw(state, ctx.controller, emit);
       return;
     }
     case 'portentCast': {
@@ -1788,6 +1805,40 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         const before = state.players[p].life;
         changeLife(state, p, -amount, ctx.sourceName, emit);
         ctx.lifeLostThisWay = (ctx.lifeLostThisWay ?? 0) + Math.max(0, before - state.players[p].life);
+      }
+      return;
+    }
+    case 'gainControlSpell': {
+      for (const t of resolveSubject(ctx, step.what)) {
+        if (t.kind !== 'object') continue;
+        const item = state.stack.find((i) => i.kind === 'spell' && i.sourceId === t.id);
+        const obj = state.objects[t.id];
+        if (!item || !obj) continue;
+        item.controller = ctx.controller;
+        obj.controller = ctx.controller;
+        emit({ type: 'controlChanged', objectId: obj.id, cardName: obj.card.name, to: ctx.controller });
+      }
+      return;
+    }
+    case 'helmOfObedience': {
+      const [t] = ctx.targets;
+      if (t?.kind !== 'player') return;
+      const x = ctx.xValue ?? 0;
+      const victim = state.players[t.player];
+      let found: GameObject | undefined;
+      let milled = 0;
+      while (milled < x && victim.zones.library.length > 0) {
+        const top = state.objects[victim.zones.library[0]];
+        moveWithEvent(state, top, 'graveyard', 'milled', emit);
+        milled++;
+        if (top.card.types.includes('Creature') && top.zone === 'graveyard') { found = top; break; }
+      }
+      if (found) {
+        const self = state.objects[ctx.sourceId];
+        if (self && self.zone === 'battlefield') moveWithEvent(state, self, 'graveyard', 'sacrificed', emit);
+        found.controller = ctx.controller;
+        moveWithEvent(state, found, 'battlefield', 'returned', emit);
+        emit({ type: 'fizzled', description: `${ctx.sourceName}: ${found.card.name} entra no campo de batalha sob o seu controle` });
       }
       return;
     }

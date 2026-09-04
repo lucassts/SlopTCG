@@ -850,7 +850,7 @@ export class Game {
     // Additional cost: sacrifice (Fling-style; flashback may also demand one,
     // e.g. Cabal Therapy; emerge sacrifices a creature; bargain sacrifices an artifact/enchantment/token). Validated before any payment.
     const sacReq =
-      (card.additionalCost?.sacrifice ? { sacrifice: card.additionalCost.sacrifice, count: card.additionalCost.count } : undefined) ??
+      (card.additionalCost?.sacrifice && !(card.additionalCost.either && (sacrifices ?? []).length === 0) ? { sacrifice: card.additionalCost.sacrifice, count: card.additionalCost.count } : undefined) ??
       (viaFlashback && card.flashback?.sacrifice
         ? { sacrifice: card.flashback.sacrifice, count: card.flashback.sacrificeCount ?? 1 }
         : cm?.kind === 'emerge'
@@ -861,13 +861,15 @@ export class Game {
     // Other additional costs: discard N (from the action), pay N life, exile N cards from your graveyard (first matching if not given).
     const addl = card.additionalCost;
     const addlDiscards = addl?.discard ? (extra.discards ?? []) : [];
-    if (addl?.discard) {
+    if (addl?.discard && !(addl.either && (sacrifices ?? []).length > 0)) {
       if (addlDiscards.length !== addl.discard || new Set(addlDiscards).size !== addlDiscards.length)
         { this.fail(playerId, `custo adicional: descarte ${addl.discard} carta(s)`); return false; }
       for (const id of addlDiscards) { const c = s.objects[id]; if (!c || c.zone !== 'hand' || c.owner !== playerId || id === obj.id) { this.fail(playerId, 'carta inválida para descartar'); return false; } }
     }
     if (addl?.payLife && s.players[playerId].life < addl.payLife)
       { this.fail(playerId, `custo adicional: pague ${addl.payLife} pontos de vida`); return false; }
+    if (viaFlashback && card.flashback?.payLife && s.players[playerId].life < card.flashback.payLife)
+      { this.fail(playerId, `flashback: pague ${card.flashback.payLife} pontos de vida`); return false; }
     let addlGyExile: number[] = [];
     if (addl?.exileFromGraveyard) {
       const { filter, count } = addl.exileFromGraveyard;
@@ -1030,6 +1032,11 @@ export class Game {
         s.players[playerId].energy -= need;
         cost.generic = 0; cost.colorless = 0; cost.colored = []; cost.hybrid = []; cost.phyrexian = [];
       }
+      // Strive (Kiora's Dismissal): {cost} more for each target beyond the first.
+      if (card.strive && targets.length > 1) {
+        const extra = parseCost(card.strive);
+        for (let i = 1; i < targets.length; i++) { cost.generic += extra.generic; cost.colorless += extra.colorless; cost.colored.push(...extra.colored); cost.hybrid.push(...extra.hybrid); }
+      }
       let plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana });
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
       // tap creatures / artifacts, exile graveyard cards, one generic each.
@@ -1059,6 +1066,7 @@ export class Game {
       for (const t of plan.taps) for (const sym of t.produce) if (sym !== 'C') spentColors.add(sym);
       for (const sym of plan.fromPool) if (sym !== 'C') spentColors.add(sym);
       obj.colorsSpent = spentColors.size;
+      obj.manaSpent = cost.generic + cost.colored.length + cost.colorless + cost.hybrid.length + (cost.phyrexian?.length ?? 0);
       for (const h of helpers) {
         for (const id of h.ids) {
           const o = s.objects[id];
@@ -1076,6 +1084,7 @@ export class Game {
       this.emit({ type: 'discarded', player: playerId, objectId: id, cardName: c.card.name });
     }
     if (addl?.payLife) changeLife(s, playerId, -addl.payLife, `custo adicional de ${card.name}`, this.emit);
+    if (viaFlashback && card.flashback?.payLife) changeLife(s, playerId, -card.flashback.payLife, `flashback de ${card.name}`, this.emit);
     if (wardLife > 0) changeLife(s, playerId, -wardLife, 'ward (vida)', this.emit);
     if (retraceDiscard) {
       moveWithEvent(s, retraceDiscard, 'graveyard', 'discarded', this.emit);
@@ -2202,7 +2211,8 @@ export class Game {
       case 'cleanup': {
         const player = s.players[s.activePlayer];
         const unlimited = player.noMaxHandSize || player.zones.battlefield.some((id) => s.objects[id].card.noMaxHandSize);
-        const over = unlimited ? 0 : player.zones.hand.length - MAX_HAND_SIZE;
+        const limit = Math.min(MAX_HAND_SIZE, ...player.zones.battlefield.map((id) => s.objects[id].card.maxHandSize ?? MAX_HAND_SIZE));
+        const over = unlimited ? 0 : player.zones.hand.length - limit;
         s.priority = null;
         if (over > 0) {
           s.pendingDecision = { type: 'discardToHandSize', player: s.activePlayer, count: over };
@@ -2858,12 +2868,14 @@ export class Game {
     if (!subject) return;
     this.fireSelfTrigger(subjectId, on);
     for (const source of Object.values(s.objects)) {
-      if (source.zone !== 'battlefield') continue;
+      const gySource = source.zone === 'graveyard' && (source.card.abilities ?? []).some((a) => a.kind === 'triggered' && a.zone === 'graveyard');
+      if (source.zone !== 'battlefield' && !gySource) continue;
       // Graft: may move a +1/+1 counter onto another creature entering under your control.
       if (on === 'etb' && source.card.graft && source.id !== subjectId && subject.controller === source.controller && isCreature(subject) && (source.counters['+1/+1'] ?? 0) > 0)
         this.pushTrigger(source, { text: 'enxertar', effect: [{ op: 'mayDo', prompt: `mover um marcador +1/+1 de ${source.card.name} para ${subject.card.name}?`, effect: [{ op: 'moveCounter', counter: '+1/+1', from: 'self', to: 'triggering' }] }] }, subjectId);
       for (const ability of source.card.abilities ?? []) {
         if (ability.kind !== 'triggered' || ability.trigger.on !== on) continue;
+        if ((ability.zone === 'graveyard') !== gySource) continue;
         if (!('what' in ability.trigger)) continue;
         if (!abilityActive(source, ability)) continue;
         if (!matchFilter({ controller: source.controller, sourceId: source.id, state: s }, ability.trigger.what, subject))
@@ -3009,17 +3021,19 @@ export class Game {
   private fireCastTriggers(caster: PlayerId, card: CardDefinition, spellObj?: GameObject, targets: TargetChoice[] = []): void {
     const s = this.state;
     const nth = s.players[caster].spellsCastThisTurn ?? 1;
-    for (const id of [...s.players[caster].zones.battlefield]) {
+    for (const id of [...s.players[caster].zones.battlefield, ...s.players[caster].zones.graveyard]) {
       const obj = s.objects[id];
       if (!obj) continue;
       (obj.card.abilities ?? []).forEach((ability, idx) => {
         if (ability.kind !== 'triggered' || !abilityActive(obj, ability)) return;
+        if ((ability.zone === 'graveyard') !== (obj.zone === 'graveyard')) return; // Poxwalkers: só do cemitério
         const t = ability.trigger;
         let fires = false;
         if (t.on === 'youCastSpell') {
           fires = true;
           if (t.noncreatureOnly && card.types.includes('Creature')) fires = false;
           if (t.instantSorceryOnly && !card.types.includes('Instant') && !card.types.includes('Sorcery')) fires = false;
+          if (t.notFromHand && spellObj?.castFromHand) fires = false;
         } else if (t.on === 'youCastSpellNth') fires = nth === t.nth;
         else if (t.on === 'youCastSpellOf') fires = cardMatchesFilter(card, t.filter);
         else if (t.on === 'youCastSpellTargetingThis') fires = targets.some((x) => x.kind === 'object' && x.id === obj.id);

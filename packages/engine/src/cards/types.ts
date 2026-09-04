@@ -25,6 +25,8 @@ export type SubjectRef = `target:${number}` | 'self' | 'host' | 'triggering' | '
  */
 export type Cond =
   | { kind: 'yourTurn' }
+  /** Exhibition Tidecaller: the triggering spell was cast with at least N mana. */
+  | { kind: 'triggeringManaSpentAtLeast'; amount: number }
   /** Numeric comparison between two amounts ("If X is greater than or equal to the number of cards in your library"). */
   | { kind: 'compare'; left: DynAmount; cmp: 'gte' | 'gt' | 'lte' | 'lt' | 'eq'; right: DynAmount }
   // ---- Leva 6a
@@ -418,6 +420,12 @@ export type EffectStep =
   | { op: 'portentReveal'; count: DynAmount }
   /** (choice) Portent of Calamity: with four or more exiled, may cast one of them free; the rest go to your hand. */
   | { op: 'portentCast' }
+  /** (choice) Necrodominance: pay any amount of life, draw that many cards. */
+  | { op: 'payLifeDrawThatMany' }
+  /** Commandeer: gain control of the target spell on the stack. */
+  | { op: 'gainControlSpell'; what: SubjectRef }
+  /** Helm of Obedience: target opponent mills until a creature card or X cards; a milled creature enters under your control and this is sacrificed. */
+  | { op: 'helmOfObedience' }
   /** (choice, internal) Legend rule: the controller keeps one of the same-named legendary permanents; the rest go to the graveyard. */
   | { op: 'legendRuleKeep'; ids: number[] }
   /** Earthbend N: target land becomes a 0/0 creature with haste (still a land), gets N +1/+1 counters, and returns tapped if it dies or is exiled. */
@@ -711,7 +719,7 @@ export type TriggerSpec =
   | { on: 'upkeep'; whose: 'controller' | 'each' }
   | { on: 'endStep'; whose: 'controller' | 'each' }
   /** The controller casts a spell (prowess-style). */
-  | { on: 'youCastSpell'; noncreatureOnly?: boolean; instantSorceryOnly?: boolean }
+  | { on: 'youCastSpell'; noncreatureOnly?: boolean; instantSorceryOnly?: boolean; /** Poxwalkers: only spells cast from anywhere other than the hand. */ notFromHand?: boolean }
   /** The controller gains life (Ajani's Pridemate). */
   | { on: 'youGainLife' }
   /** Saga chapter(s): fires when the lore counter total reaches one of these. */
@@ -788,6 +796,8 @@ export interface TriggeredAbility extends LevelGate {
    * simply removed.
    */
   targets?: TargetSpec[];
+  /** Bridge from Below / Poxwalkers: the ability works while the card is in its owner's graveyard (not on the battlefield). */
+  zone?: 'graveyard';
   effect: EffectScript;
   /** "When ~ enters, choose one —": the controller picks a mode when it triggers. */
   modes?: SpellMode[];
@@ -957,7 +967,7 @@ export interface CardDefinition {
   /** Storm: when cast, copy this spell once per spell cast earlier this turn. */
   storm?: boolean;
   /** Additional cost paid at cast time (Fling's sacrifice; discard / pay life / exile from graveyard). */
-  additionalCost?: { sacrifice?: FilterSpec; count?: number; discard?: number; payLife?: number; exileFromGraveyard?: { filter: FilterSpec; count: number } };
+  additionalCost?: { sacrifice?: FilterSpec; count?: number; discard?: number; payLife?: number; exileFromGraveyard?: { filter: FilterSpec; count: number }; /** Bone Shards: sacrifice OR discard — the caster picks one. */ either?: boolean };
   /** Kicker: optional extra mana cost; when paid, `effect` is appended
    *  (spells) or the permanent enters with `entersWithCounters` (creatures). */
   kicker?: {
@@ -1111,7 +1121,7 @@ export interface CardDefinition {
   /** Pithing Needle: activated (non-mana) abilities of sources with the chosen name can't be activated. */
   lockChosenName?: boolean;
   /** Rest in Peace / Leyline of the Void: cards going to a graveyard are exiled instead. */
-  exileInsteadOfGraveyardFor?: 'all' | 'opponents';
+  exileInsteadOfGraveyardFor?: 'all' | 'opponents' | 'self';
   /** Planar Nexus: counts as every nonbasic land type. */
   everyNonbasicLandType?: boolean;
   /** Containment Priest: nontoken creatures that weren't cast are exiled instead of entering. */
@@ -1150,6 +1160,10 @@ export interface CardDefinition {
   cageNoCastFromGraveyardLibrary?: boolean;
   /** Blood Moon / Magus of the Moon: "Nonbasic lands are Mountains." */
   nonbasicLandsAreMountains?: boolean;
+  /** Necrodominance: "Your maximum hand size is five." */
+  maxHandSize?: number;
+  /** Strive: "~ costs {cost} more to cast for each target beyond the first." */
+  strive?: string;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -1215,7 +1229,7 @@ export interface CardDefinition {
   mentor?: boolean;
   /** Flashback: castable from the graveyard for this cost; exiles after.
    *  `cost` is mana; `sacrifice` an additional non-mana cost (Cabal Therapy). */
-  flashback?: { cost?: string; sacrifice?: FilterSpec; /** Dread Return: sacrifice three creatures. */ sacrificeCount?: number };
+  flashback?: { cost?: string; sacrifice?: FilterSpec; /** Dread Return: sacrifice three creatures. */ sacrificeCount?: number; /** Deep Analysis: "Flashback—{1}{U}, Pay 3 life." */ payLife?: number };
   /**
    * Alternative cost (Force of Will): instead of the mana cost, pay life
    * and/or exile matching cards from your hand.

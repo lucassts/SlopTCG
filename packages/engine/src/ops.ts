@@ -315,7 +315,7 @@ export function moveWithEvent(
   // Rest in Peace / Leyline of the Void.
   if (to === 'graveyard' && !obj.isToken && (['p1', 'p2'] as PlayerId[]).some((p) => state.players[p].zones.battlefield.some((id) => {
     const mode = state.objects[id]?.card.exileInsteadOfGraveyardFor;
-    return mode === 'all' || (mode === 'opponents' && p !== obj.owner);
+    return mode === 'all' || (mode === 'opponents' && p !== obj.owner) || (mode === 'self' && p === obj.owner);
   }))) to = 'exile';
   // Turn bookkeeping for conditions (morbid, revolt, celebration).
   if (from === 'battlefield') {
