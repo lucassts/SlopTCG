@@ -19,6 +19,7 @@ export const KEYWORDS: Record<string, Keyword> = {
   indestructible: 'indestructible',
   hexproof: 'hexproof',
   shroud: 'shroud',
+  'protection from creatures': 'protectionFromCreatures',
   flash: 'flash',
   fear: 'fear',
   intimidate: 'intimidate',

@@ -83,7 +83,7 @@ function filterFromNoun(noun: string): FilterSpec | null {
 function parseSearch(clause: string): EffectStep[] | null {
   // Leva 5: o substantivo passa pela gramática ("Rebel permanent card with mana value 3 or less", "instant or sorcery card").
   const m = clause.match(
-    /^search your library for (?:up to (\w+) )?(?:(a|an|one|two|three|four) )?(.+?)(?:, reveal (?:it|them|that card|those cards))?,? (?:and )?put (?:it|them|that card|those cards|those lands) (into your hand|onto the battlefield tapped|onto the battlefield|on top of your library)(?:, then shuffle| and shuffle|\. then shuffle)?$/i,
+    /^search your library for (?:up to (\w+) )?(?:(a|an|one|two|three|four) )?(.+?)(?:, reveal (?:it|them|that card|those cards))?,? (?:and )?put (?:it|them|that card|those cards|those lands) (into your hand|onto the battlefield tapped|onto the battlefield|on top of your library|into your graveyard)(?:, then shuffle| and shuffle|\. then shuffle)?$/i,
   );
   if (!m) return null;
   const count = m[1] ? num(m[1]) : m[2] && !/^an?$/i.test(m[2]) ? num(m[2]) : 1;
@@ -92,7 +92,7 @@ function parseSearch(clause: string): EffectStep[] | null {
   if (!info || info.player || info.zone || info.spell || info.any) return null;
   const filter: FilterSpec | undefined = Object.keys(info.filter).length > 0 ? info.filter : undefined;
   const dest = m[4].toLowerCase();
-  const to = dest === 'into your hand' ? 'hand' : dest === 'on top of your library' ? 'libraryTop' : 'battlefield';
+  const to = dest === 'into your hand' ? 'hand' : dest === 'on top of your library' ? 'libraryTop' : dest === 'into your graveyard' ? 'graveyard' : 'battlefield';
   return [{ op: 'search', filter, count, to, tapped: dest.endsWith('tapped') || undefined }];
 }
 
@@ -544,7 +544,9 @@ function parseEffectText(
   let selfExile = false;
   // Thoughtseize/Duress: frases acopladas, tratadas inteiras; o que sobra
   // ("You lose 2 life.") segue o caminho normal.
-  if ((m = text.match(/^Target (player|opponent) reveals their hand\. You choose a (nonland|noncreature, nonland|creature|instant or sorcery|noncreature)? ?card from it\. That player discards that card\.?\s*(.*)$/i))) {
+  if ((m = text.match(/^Target (player|opponent) reveals their hand\. You choose a (nonland|noncreature, nonland|creature|instant or sorcery|noncreature)? ?card from it(\. That player discards that card| and exile that card)\.?\s*(.*)$/i))) {
+    const exileIt = /exile/i.test(m[3]);
+    m = [m[0], m[1], m[2], m[4]] as unknown as RegExpMatchArray;
     const kind = (m[2] ?? '').toLowerCase();
     if (kind === 'instant or sorcery') return null;
     const filter: FilterSpec | undefined =
@@ -553,7 +555,7 @@ function parseEffectText(
       : kind === 'noncreature' ? { noncreature: true }
       : kind === 'creature' ? { what: 'creature' }
       : undefined;
-    steps.push({ op: 'discard', who: 'target:0', count: 1, chooser: 'caster', filter });
+    steps.push({ op: 'discard', who: 'target:0', count: 1, chooser: 'caster', filter, exile: exileIt || undefined });
     spec = { what: 'player' };
     text = m[3];
     if (!text.trim()) return { steps, spec };
@@ -585,7 +587,7 @@ function parseEffectText(
     if (!text.trim()) return { steps };
   }
   // "Look at the top N…. You may reveal a X card from among them and put it into your hand. Put the rest…" (Once Upon a Time).
-  text = text.replace(/^(Look at the top \w+ cards? of your library)\. (You may reveal (?:a|an) [\w\s-]+? card from among them and put it into your hand)\. Put the rest ([^.]*\.)/i, '$1 $2, then put the rest $3');
+  text = text.replace(/^(Look at the top \w+ cards? of your library)\. (You may reveal (?:a|an) [\w\s,-]+? card from among them and put it into your hand)\. Put the rest ([^.]*\.)/i, '$1 $2, then put the rest $3');
   // Malevolent Rumble: "Reveal the top N cards of your library. You may put a X card from among them into your hand. Put the rest into your graveyard."
   if ((m = text.match(/^Reveal the top (\w+) cards? of your library\. You may put (?:a|an) ([\w\s-]+?) card from among them into your hand\. Put the rest (into your graveyard|on the bottom of your library in a random order)\.\s*(.*)$/i))) {
     const n = num(m[1]); const info = parseNounG(m[2]);
@@ -614,6 +616,32 @@ function parseEffectText(
   if ((m = text.match(/^Until your next turn, whenever a creature attacks you or a planeswalker you control, it gets -(\d+)\/-0 until end of turn\.$/i))) return { steps: [{ op: 'attackersPenaltyUntilNextTurn', power: parseInt(m[1], 10) }] };
   // Earthbend N (Badgermole Cub): target land you control.
   if ((m = text.match(/^earthbend (\d+)\.?$/i))) return { steps: [{ op: 'earthbend', what: 'target:0', count: parseInt(m[1], 10) }], spec: { what: 'land', controlledBy: 'you' } };
+  // Goblin Welder.
+  if (/^Choose target artifact a player controls and target artifact card in that player's graveyard\. If both targets are still legal as this ability resolves, that player simultaneously sacrifices the artifact and returns the artifact card to the battlefield\.$/i.test(text)) {
+    return { steps: [{ op: 'welderSwap' }], specs: [{ what: 'artifact' }, { what: 'artifact', zone: 'graveyard' }] };
+  }
+  // Fury: "it deals N damage divided as you choose among any number of target creatures or planeswalkers".
+  if ((m = text.match(/^(?:it|~) deals (\d+) damage divided as you choose among any number of target (.+?)\.?$/i))) {
+    const info = parseNounG(m[2]) ?? parseNounG(m[2].replace(/s$/i, ''));
+    const spec = info ? filterToTargetSpec(info) : null;
+    if (!spec) return null;
+    return { steps: [{ op: 'divideDamage', amount: parseInt(m[1], 10) }], specs: Array.from({ length: 6 }, () => ({ ...spec, optional: true })) };
+  }
+  // Portent of Calamity.
+  if (/^Reveal the top X cards of your library\. For each card type, you may exile a card of that type from among them\. Put the rest into your graveyard\. You may cast a spell from among the exiled cards without paying its mana cost if you exiled four or more cards this way\. Then put the rest of the exiled cards into your hand\.$/i.test(text)) {
+    return { steps: [{ op: 'portentReveal', count: 'X' }, { op: 'portentCast' }] };
+  }
+  // Price of Progress.
+  if ((m = text.match(/^~ deals damage to each player equal to (twice )?the number of (.+?) that player controls\.$/i))) {
+    const info = parseNounG(m[2]);
+    if (!info || info.player) return null;
+    return { steps: [{ op: 'damageEachPlayerPer', filter: info.filter, times: m[1] ? 2 : 1 }] };
+  }
+  // Triumph of Saint Katherine.
+  if ((m = text.match(/^exile it and the top (\w+) cards of your library in a face-down pile\. If you do, shuffle that pile and put it back on top of your library\.$/i))) {
+    const n = num(m[1]);
+    return n === null ? null : { steps: [{ op: 'exileSelfAndTopShuffleBack', count: n }] };
+  }
   // Peer into the Abyss.
   if (/^Target player draws cards equal to half the number of cards in their library and loses half their life\. Round up each time\.$/i.test(text)) {
     return { steps: [
@@ -783,6 +811,13 @@ function parseEffectText(
     if (/^Spend this mana only /i.test(sentence)) continue;
     if (/^An opponent gains control of ~$/i.test(sentence)) { steps.push({ op: 'gainControl', what: 'self', to: 'opponent' }); continue; }
     if (/^You gain life equal to the life lost this way$/i.test(sentence)) { steps.push({ op: 'gainLife', who: 'controller', amount: 'lifeLostThisWay' }); continue; }
+    // "Creatures without flying can't block this turn." (Sundering Eruption)
+    if ((m = sentence.match(/^Creatures without (\w+) can't block this turn$/i)) && KEYWORDS[m[1].toLowerCase()]) {
+      steps.push({ op: 'forEach', filter: { what: 'creature', withoutKeyword: KEYWORDS[m[1].toLowerCase()] }, effect: [{ op: 'pump', what: 'iter', power: 0, toughness: 0, keywords: ['cantBlock'] }] });
+      continue;
+    }
+    // "It explores." depois de uma frase com alvo: o alvo explora (Seasoned Dungeoneer).
+    if (/^It explores$/i.test(sentence) && (specs?.length || spec)) { steps.push({ op: 'explore', what: `target:${(specs ?? [spec!]).length - 1}` }); continue; }
     // Overlord of the Balemurk: "mill four cards, then you may return a non-Avatar creature card or a planeswalker card from your graveyard to your hand".
     if ((m = sentence.match(/^mill (\w+) cards?, then you may return (?:a|an) (.+?) from your graveyard to your hand$/i))) {
       const n = num(m[1]);
@@ -971,6 +1006,7 @@ interface ParseState {
   cyclingSacrifice?: FilterSpec;
   flashbackCost?: string;
   flashbackSacrifice?: FilterSpec;
+  flashbackSacrificeCount?: number;
   altCost?: CardDefinition['altCost'];
   additionalCost?: CardDefinition['additionalCost'];
   entersWithCounters?: CardDefinition['entersWithCounters'];
@@ -1040,6 +1076,7 @@ interface ParseState {
   /** Leva 6a (Legacy, parte 3). */
   flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
   flags11: Partial<Pick<CardDefinition, 'landsMultiManaColorless' | 'extraManaOnCreatureTap'>>;
+  flags12: Partial<Pick<CardDefinition, 'yourSpellsUncounterable' | 'grantWardLifeOthers' | 'cageNoEnterFromGraveyardLibrary' | 'cageNoCastFromGraveyardLibrary' | 'nonbasicLandsAreMountains'>>;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
   /** Leva 6a (Legacy): travas, substituições, uma mágica não-criatura por turno. */
@@ -1194,6 +1231,8 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever ~ attacks?$/i.test(head)) return { trigger: { on: 'attacks', self: true } };
   if ((m = head.match(/^When ~ has no ([\w+/-]+) counters on it$/i))) return { trigger: { on: 'noCounters', counter: m[1] } };
   if (/^When ~ is put into a graveyard from anywhere$/i.test(head)) return { trigger: { on: 'toGraveyardFromAnywhere', self: true } };
+  if (/^When (?:~|this card) is put into your graveyard from your library$/i.test(head)) return { trigger: { on: 'toGraveyardFromAnywhere', self: true, fromZone: 'library' } };
+  if (/^When ~ is put into your graveyard from the battlefield$/i.test(head)) return { trigger: { on: 'dies', self: true } };
   if (/^When ~ enters or leaves the battlefield$/i.test(head)) return { trigger: { on: 'etb', self: true }, extraSelf: { on: 'leaves', self: true } };
   if (/^Whenever ~ blocks$/i.test(head)) return { trigger: { on: 'blocks', self: true } };
   if (/^Whenever ~ attacks or blocks$/i.test(head)) return { trigger: { on: 'attacks', self: true }, extraSelf: { on: 'blocks', self: true } };
@@ -1354,7 +1393,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     last.maxPerTurn = 1;
     return true;
   }
-  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [a-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".');
+  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [A-Za-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".');
 
   // ---- modal spells: "Choose one —" (or "one or both", "two", "up to one/two", "any number") + "• …" lines
   if (isSpell && (m = line.match(/^Choose (one|two|three|one or both|one or more|up to one|up to two|up to three|any number) —$/i))) {
@@ -1578,17 +1617,20 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
   // ---- Leva 4: custos de mágicas, substituição, estáticas diversas
-  if ((m = line.match(/^(?:(Creature|Noncreature|Instant and sorcery|Artifact|Enchantment|Instant|Sorcery|Planeswalker|[A-Z][a-z]+) )?spells? (you cast|your opponents cast|that target ~)? ?cost ((?:\{[^}]+\})+) (less|more) to cast\.$/i))) {
+  if ((m = line.match(/^(?:(Colorless) )?(?:(Creature|Noncreature|Instant and sorcery|Artifact|Enchantment|Instant|Sorcery|Planeswalker|[A-Z][a-z]+) )?spells? (you cast|your opponents cast|that target ~)? ?cost ((?:\{[^}]+\})+) (less|more) to cast\.$/i))) {
+    const colorless = !!m[1];
+    m = [m[0], m[2], m[3], m[4], m[5]] as unknown as RegExpMatchArray;
     const kind = (m[1] ?? '').toLowerCase();
     const filter: FilterSpec | undefined =
       !kind ? undefined
       : kind === 'noncreature' ? { noncreature: true }
       : kind === 'instant and sorcery' ? { typeAnyOf: ['Instant', 'Sorcery'] }
       : TYPE_WORD[kind] ? { what: TYPE_WORD[kind] }
+      : kind === 'colorless' ? { colorless: true }
       : { subtype: m[1] };
     const amount = manaValueOfCost(m[3]) * (m[4].toLowerCase() === 'less' ? -1 : 1);
     const who = (m[2] ?? '').toLowerCase();
-    (st.costModifiers ??= []).push({ amount, filter, whose: who === 'you cast' ? 'you' : who === 'your opponents cast' ? 'opponent' : 'any' });
+    (st.costModifiers ??= []).push({ amount, filter: colorless ? { ...(filter ?? {}), colorless: true } : filter, whose: who === 'you cast' ? 'you' : who === 'your opponents cast' ? 'opponent' : 'any' });
     return true;
   }
   if ((m = line.match(/^Spells your opponents cast that target ~ cost ((?:\{[^}]+\})+) more to cast\.$/i))) {
@@ -1800,6 +1842,14 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // ---- Leva 6a (Legacy, parte 3): Quantum Riddler, Ascend, Omniscience, Aluren, Disruptor Flute, Boseiju, Amped Raptor, Ugin
   if (/^Ascend$/i.test(line)) { st.flags10.ascend = true; return true; }
   if (/^If you would draw a card while your library has no cards in it, you win the game instead\.$/i.test(line)) { st.flags10.winOnDrawFromEmpty = true; return true; }
+  // Hexing Squelcher.
+  if (/^Spells you control can't be countered\.$/i.test(line)) { st.flags12.yourSpellsUncounterable = true; return true; }
+  if ((m = line.match(/^Other creatures you control have "Ward—Pay (\d+) life\."\.?$/i))) { st.flags12.grantWardLifeOthers = parseInt(m[1], 10); return true; }
+  // Grafdigger's Cage.
+  if (/^Creature cards in graveyards and libraries can't enter the battlefield\.$/i.test(line)) { st.flags12.cageNoEnterFromGraveyardLibrary = true; return true; }
+  if (/^Players can't cast spells from graveyards or libraries\.$/i.test(line)) { st.flags12.cageNoCastFromGraveyardLibrary = true; return true; }
+  // Blood Moon / Magus of the Moon.
+  if (/^Nonbasic lands are Mountains\.$/i.test(line)) { st.flags12.nonbasicLandsAreMountains = true; return true; }
   // Damping Sphere.
   if (/^If a land is tapped for two or more mana, it produces \{C\} instead of any other type and amount\.$/i.test(line)) { st.flags11.landsMultiManaColorless = true; return true; }
   if (/^Each spell a player casts costs \{1\} more to cast for each other spell that player has cast this turn\.$/i.test(line)) { (st.costModifiers ??= []).push({ amount: 1, whose: 'any', perSpellsCastThisTurn: true }); return true; }
@@ -2324,6 +2374,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if ((m = line.match(/^Kicker ((?:\{[^}]+\})+)$/i))) { st.kickerCost = m[1]; return true; }
   if ((m = line.match(/^Flashback ((?:\{[^}]+\})+)$/i))) { st.flashbackCost = m[1]; return true; }
   if (/^Flashback—Sacrifice a creature\.$/i.test(line)) { st.flashbackSacrifice = { what: 'creature' }; return true; }
+  if ((m = line.match(/^Flashback—Sacrifice (two|three|four) creatures\.$/i))) { st.flashbackSacrifice = { what: 'creature' }; st.flashbackSacrificeCount = num(m[1]) ?? undefined; return true; }
   if ((m = line.match(/^You may (?:pay (\d+) life and )?exile a (white|blue|black|red|green) card from your hand rather than pay (?:this spell's|~'s) mana cost\.$/i))) {
     const payLife = m[1] ? parseInt(m[1], 10) : undefined;
     st.altCost = {
@@ -2547,7 +2598,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     .replace(/\([^)]*\)/g, '')
     .split(input.name).join('~')
     .split(shortName).join('~')
-    .replace(/\bThis (creature|land|artifact|enchantment|permanent|Aura|Equipment|Vehicle|Saga|Class|Spacecraft|spell|Siege|battle)\b/gi, '~')
+    .replace(/\bThis (creature|land|artifact|enchantment|permanent|Aura|Equipment|Vehicle|Saga|Class|Spacecraft|spell|Siege|battle|token)\b/gi, '~')
     .replace(/[ \t]+/g, ' ')
     .replace(/ \./g, '.')
     .replace(/ ,/g, ',')
@@ -2695,6 +2746,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags9,
     ...st.flags10,
     ...st.flags11,
+    ...st.flags12,
     costModifiers: st.costModifiers,
     spellModeChoice: st.spellModeChoice,
     saga: subtypes.includes('Saga') && st.sagaChapters ? { chapters: st.sagaChapters, readAhead: st.readAhead || undefined } : undefined,
@@ -2717,7 +2769,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     flashback: st.flashbackCost
       ? { cost: st.flashbackCost }
       : st.flashbackSacrifice
-        ? { sacrifice: st.flashbackSacrifice }
+        ? { sacrifice: st.flashbackSacrifice, sacrificeCount: st.flashbackSacrificeCount }
         : undefined,
     altCost: st.altCost,
     uncounterable: st.uncounterable || undefined,
@@ -2815,6 +2867,7 @@ function newParseState(): ParseState {
     flags9: {},
     flags10: {},
     flags11: {},
+    flags12: {},
     levels: [],
     softNotes: [],
   };

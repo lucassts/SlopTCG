@@ -85,6 +85,9 @@ export interface GameObject {
   earthbendReturn?: boolean;
   /** Enter-tapped rules (entersTapped, checklands, shocklands) already applied for this stay on the battlefield. */
   enterTapDone?: boolean;
+  /** Blood Moon: this nonbasic land is currently a Mountain (moonPrinted holds the real card). */
+  moonified?: boolean;
+  moonPrinted?: CardDefinition;
   /** Echo: came under control this turn (pay on next upkeep). */
   echoPending?: boolean;
   /** Renown already happened. */
@@ -386,6 +389,8 @@ export type PendingDecision =
       options: number[];
       min: number;
       max: number;
+      /** Label of the "pick nothing" button when that is the normal outcome ("Comprar a carta" vs. dredge). */
+      skipLabel?: string;
       resume: EffectResume;
     };
 
@@ -464,6 +469,8 @@ export interface GameState {
   gambitPicks?: Partial<Record<PlayerId, number>>;
   /** Beseech the Mirror: the card exiled by the last search-to-exile. */
   lastSearchedExile?: number;
+  /** Portent of Calamity: cards exiled by the reveal, for the cast-free step. */
+  lastPortentExiled?: number[];
   /** Infernal Tutor: name of the card revealed from hand by the last `revealFromHandRemember`. */
   lastRevealedName?: string;
   /** Spells cast during the previous turn (all players / by its active player). */
@@ -607,6 +614,7 @@ export function moveObject(
     if (obj.baseCard && obj.transformed) { obj.card = obj.baseCard; obj.transformed = false; }
     obj.extraSubtypes = undefined;
     obj.enterTapDone = undefined;
+    if (obj.moonified && obj.moonPrinted) { obj.card = obj.moonPrinted; obj.moonified = undefined; obj.moonPrinted = undefined; }
   } else {
     // Vale para tudo que entra: um veículo tripulado no turno em que entrou
     // também tem "enjoo" (302.6). Só criaturas consultam a flag.

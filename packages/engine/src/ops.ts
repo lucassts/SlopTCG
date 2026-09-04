@@ -4,7 +4,7 @@
  * game.ts all funnel through these — one source of truth for "what happened".
  */
 import type { GameEvent } from './events.js';
-import { moveObject, type GameObject, type GameState } from './state.js';
+import { hasKeyword, moveObject, type GameObject, type GameState } from './state.js';
 import type { PlayerId, TargetChoice, ZoneName } from './types.js';
 import { shuffle } from './rng.js';
 
@@ -16,8 +16,7 @@ export function setEnterHook(fn: (state: GameState, obj: GameObject, emit: Emit)
 
 export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
   const player = state.players[playerId];
-  player.drawsThisTurn += 1;
-  // Dredge: an armed graveyard card replaces this draw (mill N, return it) if the library allows.
+  // Dredge: an armed graveyard card replaces this draw (mill N, return it) if the library allows. A replaced draw is not a draw (no "draws this turn").
   if (player.dredgeNext !== undefined) {
     const d = state.objects[player.dredgeNext];
     const n = d?.card.dredge ?? 0;
@@ -33,6 +32,7 @@ export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
       return;
     }
   }
+  player.drawsThisTurn += 1;
   const topId = player.zones.library[0];
   if (topId === undefined) {
     // Laboratory Maniac / Jace: "If you would draw a card while your library has no cards in it, you win the game instead."
@@ -54,6 +54,7 @@ export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
     objectId: obj.id,
     cardName: obj.card.name,
     hiddenFrom: playerId === 'p1' ? 'p2' : 'p1',
+    nth: player.drawsThisTurn,
   });
 }
 
@@ -103,6 +104,11 @@ export function dealDamageToObject(
   // Protection from [color]: all damage from sources of that color is prevented.
   const prot = target.card.protectionFrom;
   if (prot && opts?.sourceColors?.some((c) => prot.includes(c))) {
+    emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
+    return;
+  }
+  // Protection from creatures: damage from creature sources is prevented.
+  if (opts?.sourceId !== undefined && state.objects[opts.sourceId]?.card.types.includes('Creature') && hasKeyword(state, target, 'protectionFromCreatures')) {
     emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
     return;
   }
@@ -288,6 +294,12 @@ export function moveWithEvent(
   if (to === 'graveyard' && obj.card.exileInsteadOfGraveyard && !obj.isToken) to = 'exile';
   // Gaea's Will: "If a card would be put into your graveyard from anywhere this turn, exile that card instead."
   if (to === 'graveyard' && !obj.isToken && state.players[obj.owner].exileInsteadOfGraveyardUntilTurn === state.turn) to = 'exile';
+  // Grafdigger's Cage: creature cards in graveyards and libraries can't enter the battlefield.
+  if (to === 'battlefield' && (from === 'graveyard' || from === 'library') && obj.card.types.includes('Creature') &&
+    (['p1', 'p2'] as PlayerId[]).some((p) => state.players[p].zones.battlefield.some((id) => state.objects[id]?.card.cageNoEnterFromGraveyardLibrary))) {
+    emit({ type: 'fizzled', description: `${obj.card.name}: não pode entrar no campo de batalha (Grafdigger's Cage)` });
+    return;
+  }
   // Containment Priest: a nontoken creature that wasn't cast is exiled instead of entering.
   if (to === 'battlefield' && from !== 'stack' && !obj.isToken && obj.card.types.includes('Creature') && !obj.wasCast &&
     (['p1', 'p2'] as PlayerId[]).some((p) => state.players[p].zones.battlefield.some((id) => state.objects[id]?.card.exileNoncastCreatures))) {

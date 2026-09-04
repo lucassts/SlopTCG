@@ -283,6 +283,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   white-space: nowrap;
 }
 .phase-step.current { background: var(--accent); color: #1a1408; font-weight: 700; }
+.phase-step.clickable { cursor: pointer; }
+.phase-step.clickable:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.phase-step.yield-target { outline: 1px solid var(--accent); color: var(--text); }
 .phase-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .yield-group { flex-wrap: wrap; }
 .prompt-banner {

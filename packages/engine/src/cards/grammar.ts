@@ -56,6 +56,14 @@ export interface NounInfo {
 
 const SUBTYPE_RE = /^[A-Z][a-z]+(?:-[A-Z][a-z]+)?$/;
 
+/** Singular of a subtype word: irregular plurals first (Elves → Elf, Wolves → Wolf, Zombies → Zombie, Allies → Ally), then the plain -s. */
+const IRREGULAR_SINGULAR: Record<string, string> = { elves: 'Elf', wolves: 'Wolf', dwarves: 'Dwarf', thieves: 'Thief', werewolves: 'Werewolf', zombies: 'Zombie', faeries: 'Faerie', allies: 'Ally', spies: 'Spy', harpies: 'Harpy', mercenaries: 'Mercenary', homunculi: 'Homunculus', fungi: 'Fungus', octopuses: 'Octopus', mice: 'Mouse', foxes: 'Fox', sphinxes: 'Sphinx', phoenixes: 'Phoenix', lynxes: 'Lynx', walruses: 'Walrus', dinosaurs: 'Dinosaur', oxen: 'Ox', aurochs: 'Aurochs', sheep: 'Sheep', moonfolk: 'Moonfolk', kithkin: 'Kithkin', eldrazi: 'Eldrazi', fish: 'Fish', deer: 'Deer', elk: 'Elk', samurai: 'Samurai', ninja: 'Ninja', pegasus: 'Pegasus' };
+export function singularWord(w: string): string {
+  const irr = IRREGULAR_SINGULAR[w.toLowerCase()];
+  if (irr) return irr;
+  return w.replace(/s$/, '');
+}
+
 export function parseNounG(raw: string): NounInfo | null {
   let n = raw.trim().replace(/\s+/g, ' ');
   const filter: FilterSpec = {};
@@ -217,8 +225,8 @@ export function parseNounG(raw: string): NounInfo | null {
     }
     if (w.toLowerCase() === 'permanent' || w.toLowerCase() === 'permanents') return { filter: { ...filter, what: 'permanent' }, zone, ...(orSpell ? { orSpell: true } : {}) };
     if (w.toLowerCase() === 'card' || w.toLowerCase() === 'cards') return { filter, zone };
-    if (SUBTYPE_RE.test(w.replace(/s$/, '')) || BASIC_TYPES.includes(w)) {
-      const sub = BASIC_TYPES.includes(w) ? w : w.replace(/s$/, '');
+    if (SUBTYPE_RE.test(singularWord(w)) || BASIC_TYPES.includes(w)) {
+      const sub = BASIC_TYPES.includes(w) ? w : singularWord(w);
       return { filter: { ...filter, what: BASIC_TYPES.includes(sub) ? 'land' : 'creature', subtype: sub }, zone };
     }
     return null;
@@ -311,8 +319,8 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
     if (!info || info.player) return null;
     return { sumManaValue: { ...info.filter, controlledBy: 'you' } };
   }
-  if ((m = t.match(/^the number of (.+?) (?:you control|on the battlefield)$/))) {
-    const info = parseNounG(m[1]);
+  if ((m = text.trim().match(/^the number of (.+?) (?:you control|on the battlefield)$/i))) {
+    const info = parseNounG(m[1]); // caixa original: "Eldrazi" é subtipo
     if (!info || info.player) return null;
     return { per: { ...info.filter, controlledBy: /you control/.test(t) ? 'you' : 'any' } };
   }
@@ -526,7 +534,7 @@ function parseSubject(text: string, ctx: GCtx, specs: TargetSpec[], baseIdx: num
   if (/^defending player$/i.test(t)) return { kind: 'player', who: 'opponent' };
   if ((m = t.match(/^any number of target (.+)$/i))) {
     // "Exile any number of target spells": a handful of optional slots.
-    const info = parseNounG(m[1]) ?? parseNounG(m[1].replace(/s$/i, ''));
+    const info = parseNounG(m[1]) ?? parseNounG(singularWord(m[1]));
     if (!info) return null;
     const spec = filterToTargetSpec(info);
     if (!spec) return null;
@@ -589,10 +597,16 @@ export function parseTokenG(text: string, who: WhoSel = 'controller'): EffectSte
   let tapped = false;
   // Tokens with granted abilities: "… token with 'This token gets +1/+1 for each artifact you control.'"
   let granted: { abilities: AbilityDef[]; keywords: Keyword[] } | null = null;
-  if ((m = t.match(/^(.+?) with ["'](.+)["']$/))) {
-    if (!abilityCompiler) return null;
-    granted = abilityCompiler(m[2]);
-    if (!granted) return null;
+  // "… token with flying and '<quoted ability>'" → the keyword stays in the noun, the quote is compiled apart.
+  if ((m = t.match(/^(.+?) with ([\w\s,]+?) and ["'](.+)["']$/))) t = `${m[1]} with ${m[2]}`, m = [m[0], t, m[3]] as unknown as RegExpMatchArray;
+  else m = t.match(/^(.+?) with ["'](.+)["']$/);
+  if (m) {
+    if (/^~ can block only creatures with flying\.?$/i.test(m[2])) granted = { abilities: [], keywords: ['blockOnlyFlying'] }; // Drone (Pinnacle Emissary)
+    else {
+      if (!abilityCompiler) return null;
+      granted = abilityCompiler(m[2]);
+      if (!granted) return null;
+    }
     t = m[1];
   }
   if ((m = t.match(/^(.+?) that's tapped and attacking$/i))) { t = m[1]; tappedAttacking = true; }
@@ -656,6 +670,8 @@ function objectEffect(subj: Subj, verb: string, ctx: GCtx, specs: TargetSpec[]):
   let whereX: string | undefined;
   let core = v;
   if (/^blocks ~(?: this turn)? if able$/i.test(v)) return wrap([{ op: 'mustBlockSource', what: ref }]);
+  // "gains haste and gets +X/+0" → "gets +X/+0 and gains haste" (mesma gramática).
+  if ((m = core.match(/^gains (\w[\w\s,]*?) and gets ([+-](?:\d+|X)\/[+-](?:\d+|X))((?: until end of turn| until your next turn| this turn)?(?:,? where X is .+)?)$/i))) core = `gets ${m[2]} and gains ${m[1]}${m[3]}`;
   if ((m = core.match(/^(.+?),? where X is (.+)$/i))) { core = m[1]; whereX = m[2]; }
   // Duration.
   let duration: 'eot' | 'yourNextTurn' | undefined;

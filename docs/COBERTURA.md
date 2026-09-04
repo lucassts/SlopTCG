@@ -19,19 +19,19 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-04, v0.22.1 — Leva 6a parte 8, Legacy a 92,8%)
+## Estado (2026-09-04, v0.23.0 — Leva 6a parte 9, Legacy a 94,9%)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | **v0.22 (L6a·8)** |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | **13.344** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | **14.849** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | **4.887** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | **v0.23 (L6a·9)** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | **13.534** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | **14.719** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | **4.827** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 
 **Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
 scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
 mede quanto do que se joga já é full (META% × cópias). Legacy: **43,7% →
-67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0 e **92,8%** na v0.22.0. Relatórios em `data/meta/<formato>-gap.md`.
+67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0 e **94,9%** na v0.23.0. Relatórios em `data/meta/<formato>-gap.md`.
 
 A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
 "outra face não modelada" restam 143 (versos cujo texto ainda não compila).
@@ -441,6 +441,50 @@ Tamiyo: a mão inicial contava como sete compras "do turno" (a terceira
 compra nunca chegava no turno 1) — `drawsThisTurn` zera ao começar o
 primeiro turno. Verificado no navegador (duas Leylines na mão: uma no campo,
 outra na mão).
+
+**Parte 9 (v0.23.0)** — pedido do Lucas. **Dragar como substituição de
+compra**: a operação `draw` virou escolha (`ChoiceStep`): sempre que um único
+jogador compraria e tem carta com dredge no cemitério (biblioteca com N
+cartas ou mais), o engine pergunta "comprar ou dragar?" (modo `cards`, min 0,
+com `skipLabel` "Comprar a carta"), carta a carta — Brainstorm faz três
+perguntas se houver o que dragar em cada uma; a etapa de compra usa a mesma
+decisão (`effectChoice` com `draw` em `resume.current`); o Quantum Riddler
+segue no caminho de compra em lote; dragar não conta como compra
+(`drawsThisTurn` só sobe na compra real). **Tamiyo com Brainstorm**: o
+ordinal da compra passou a viajar no evento `cardDrawn.nth` (era lido depois
+da resolução inteira, quando a contagem já estava em 4 — só a Divination
+"funcionava" por coincidência); miracle e "primeira compra da etapa" usam o
+mesmo campo. **Cliente**: clicar no nome de uma etapa na barra central
+passa automaticamente até ela começar (`yieldUntil.kind = 'step'`, próxima
+ocorrência em qualquer turno); os botões Etapa/Combate/Main/Final saíram —
+ficou só "⏭ Meu turno" e o pino de segurar prioridade na ponta direita.
+Cartas (18 de 19 full): Hexing Squelcher (`yourSpellsUncounterable`,
+`grantWardLifeOthers`), Goblin Welder (`welderSwap`, dois alvos: artefato no
+campo + carta de artefato no cemitério do mesmo jogador), Goblin Engineer
+(busca para o cemitério), Thundertrap Trainer (substantivo com vírgula no
+"look at the top N"), Magus of the Moon / Blood Moon
+(`nonbasicLandsAreMountains`: `syncBloodMoon` no SBA troca `card` por uma
+Mountain com "{T}: Add {R}" e guarda `moonPrinted`; restaura ao sair do
+campo ou quando a Moon some), Pinnacle Emissary (ficha com "flying and
+'<quoted>'"), Eye of Ugin ("Colorless Eldrazi spells"), Eldrazi Linebreaker
+("gains haste and gets +X/+0 … where X is" reordenado; "the number of
+Eldrazi you control" com caixa preservada), Thought-Knot Seer (`discard.exile`),
+Fury (`divideDamage`: pergunta o dano alvo a alvo em modo `number`, o
+último leva o resto), Price of Progress (`damageEachPlayerPer`), Portent of
+Calamity (`portentReveal` + `portentCast`), Triumph of Saint Katherine
+(`exileSelfAndTopShuffleBack`; palavra de habilidade com duas palavras
+capitalizadas), Seasoned Dungeoneer (keyword `protectionFromCreatures`:
+não pode ser bloqueado, dano de criaturas prevenido; "It explores" mira o
+alvo anterior), Sundering Eruption ("Creatures without flying can't block
+this turn" → `forEach` + `cantBlock`), Grafdigger's Cage (`cageNoEnterFrom…`
+em `moveWithEvent`, `cageNoCastFrom…` na conjuração normal e de graça),
+Narcomoeba (`toGraveyardFromAnywhere.fromZone = 'library'`), Dread Return
+(`flashback.sacrificeCount`). Plural irregular de subtipo (Elves → Elf,
+Wolves → Wolf, Zombies → Zombie, Allies → Ally…) corrigido — "Heedless One"
+estava virando 0/0. **Fora**: Wastescape Battlemage (kicker duplo com custos
+diferentes e gatilhos por kicker: exige um modelo de kicker com opções, fica
+para depois). Legacy: 180 cartas com lacuna (329 de 509 full), 94,9%
+ponderado.
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

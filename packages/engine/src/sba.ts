@@ -35,7 +35,37 @@ function syncControlAuras(state: GameState, emit: Emit): void {
   }
 }
 
+/** Blood Moon / Magus of the Moon: while one is on the battlefield, nonbasic lands are Mountains (lose their abilities, gain "{T}: Add {R}"). */
+function syncBloodMoon(state: GameState, emit: Emit): void {
+  const moon = PLAYER_IDS.some((p) => state.players[p].zones.battlefield.some((id) => state.objects[id]?.card.nonbasicLandsAreMountains));
+  for (const p of PLAYER_IDS) {
+    for (const id of state.players[p].zones.battlefield) {
+      const o = state.objects[id];
+      if (!o || !o.card.types.includes('Land')) continue;
+      const nonbasic = !o.card.supertypes?.includes('Basic');
+      if (moon && nonbasic && !o.moonified) {
+        o.moonPrinted = o.card;
+        o.card = {
+          ...o.card,
+          subtypes: ['Mountain'],
+          abilities: [{ kind: 'activated', cost: { tap: true }, effect: [{ op: 'addMana', who: 'controller', mana: ['R'] }], text: 'Adicionar {R} (Blood Moon)', isManaAbility: true }],
+          keywords: [],
+          text: `${o.card.name} é uma Mountain (Blood Moon).`,
+        };
+        o.moonified = true;
+        emit({ type: 'fizzled', description: `${o.card.name} é uma Mountain enquanto houver Blood Moon / Magus of the Moon` });
+      } else if (!moon && o.moonified && o.moonPrinted) {
+        o.card = o.moonPrinted;
+        o.moonified = undefined;
+        o.moonPrinted = undefined;
+        emit({ type: 'fizzled', description: `${o.card.name} volta a ser o que era (sem Blood Moon)` });
+      }
+    }
+  }
+}
+
 export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
+  syncBloodMoon(state, emit);
   // Ascend: ten or more permanents → city's blessing for the rest of the game.
   for (const p of PLAYER_IDS) {
     const ps = state.players[p];

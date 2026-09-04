@@ -312,7 +312,7 @@ export type EffectStep =
    * player chooses; `chooser: 'caster'` makes the effect's controller pick
    * from that hand instead (Duress), optionally restricted by `filter`.
    */
-  | { op: 'discard'; who: WhoSel; count: number; chooser?: 'caster'; filter?: FilterSpec }
+  | { op: 'discard'; who: WhoSel; count: number; chooser?: 'caster'; filter?: FilterSpec; /** Thought-Knot Seer: the chosen card is exiled instead of discarded. */ exile?: boolean }
   /** The whole hand goes to the graveyard (wheels). */
   | { op: 'discardHand'; who: WhoSel }
   | { op: 'mill'; who: WhoSel; count: DynAmount }
@@ -406,6 +406,18 @@ export type EffectStep =
   | { op: 'freeCastBargain'; objectId: number; note: string }
   /** "You win the game." */
   | { op: 'winGame'; who: PlayerSel }
+  /** Price of Progress: damage to each player equal to (times ×) the number of their permanents matching the filter. */
+  | { op: 'damageEachPlayerPer'; filter: FilterSpec; times: number }
+  /** Triumph of Saint Katherine: exile this card (from the graveyard) with the top N cards of your library, shuffle that pile and put it back on top. */
+  | { op: 'exileSelfAndTopShuffleBack'; count: number }
+  /** Goblin Welder: targets = [artifact on the battlefield, artifact card in its controller's graveyard]; swap them if both are still legal. */
+  | { op: 'welderSwap' }
+  /** (choice) Fury: N damage divided as you choose among the chosen targets — asked one target at a time; the last one gets the rest. */
+  | { op: 'divideDamage'; amount: number; index?: number; remaining?: number }
+  /** (choice) Portent of Calamity: reveal the top X; exile up to one card of each card type; the rest go to the graveyard. */
+  | { op: 'portentReveal'; count: DynAmount }
+  /** (choice) Portent of Calamity: with four or more exiled, may cast one of them free; the rest go to your hand. */
+  | { op: 'portentCast' }
   /** (choice, internal) Legend rule: the controller keeps one of the same-named legendary permanents; the rest go to the graveyard. */
   | { op: 'legendRuleKeep'; ids: number[] }
   /** Earthbend N: target land becomes a 0/0 creature with haste (still a land), gets N +1/+1 counters, and returns tapped if it dies or is exiled. */
@@ -605,7 +617,7 @@ export type EffectStep =
       op: 'search';
       filter?: FilterSpec;
       count: number;
-      to: 'hand' | 'battlefield' | 'libraryTop' | 'exile';
+      to: 'hand' | 'battlefield' | 'libraryTop' | 'exile' | 'graveyard';
       tapped?: boolean;
       /** Undercity's throne: enters with counters. */
       withCounters?: { counter: string; count: number };
@@ -673,7 +685,7 @@ export type TriggerSpec =
   /** Dark Depths: state trigger "When ~ has no ice counters on it". */
   | { on: 'noCounters'; counter: string }
   /** Emrakul: "When ~ is put into a graveyard from anywhere". */
-  | { on: 'toGraveyardFromAnywhere'; self: true }
+  | { on: 'toGraveyardFromAnywhere'; self: true; /** Narcomoeba: only from the library. */ fromZone?: 'library' }
   | { on: 'etb'; self: true }
   /** Any object matching the filter enters the battlefield. */
   | { on: 'etb'; what: FilterSpec }
@@ -1128,6 +1140,16 @@ export interface CardDefinition {
   landsMultiManaColorless?: boolean;
   /** Badgermole Cub: "Whenever you tap a creature for mana, add an additional {G}." */
   extraManaOnCreatureTap?: Color;
+  /** Hexing Squelcher: "Spells you control can't be countered." */
+  yourSpellsUncounterable?: boolean;
+  /** Hexing Squelcher: "Other creatures you control have 'Ward—Pay N life.'" */
+  grantWardLifeOthers?: number;
+  /** Grafdigger's Cage: creature cards can't enter the battlefield from graveyards or libraries. */
+  cageNoEnterFromGraveyardLibrary?: boolean;
+  /** Grafdigger's Cage: players can't cast spells from graveyards or libraries. */
+  cageNoCastFromGraveyardLibrary?: boolean;
+  /** Blood Moon / Magus of the Moon: "Nonbasic lands are Mountains." */
+  nonbasicLandsAreMountains?: boolean;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -1193,7 +1215,7 @@ export interface CardDefinition {
   mentor?: boolean;
   /** Flashback: castable from the graveyard for this cost; exiles after.
    *  `cost` is mana; `sacrifice` an additional non-mana cost (Cabal Therapy). */
-  flashback?: { cost?: string; sacrifice?: FilterSpec };
+  flashback?: { cost?: string; sacrifice?: FilterSpec; /** Dread Return: sacrifice three creatures. */ sacrificeCount?: number };
   /**
    * Alternative cost (Force of Will): instead of the mana cost, pay life
    * and/or exile matching cards from your hand.

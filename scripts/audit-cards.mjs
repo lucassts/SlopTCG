@@ -44,7 +44,7 @@ const KEYWORDS = new Set([
   'flying', 'reach', 'haste', 'vigilance', 'trample', 'lifelink', 'deathtouch', 'defender', 'menace', 'firstStrike',
   'doubleStrike', 'indestructible', 'hexproof', 'shroud', 'flash', 'cantBlock', 'unblockable', 'mustAttack', 'doesntUntap',
   'fear', 'intimidate', 'shadow', 'plainswalk', 'islandwalk', 'swampwalk', 'mountainwalk', 'forestwalk', 'changeling', 'partner',
-  'horsemanship', 'blockOnlyFlying',
+  'horsemanship', 'blockOnlyFlying', 'protectionFromCreatures',
 ]);
 
 function targetRefs(effect) {

@@ -11,7 +11,7 @@ export type GameEvent =
   | { type: 'gameStarted'; players: { id: PlayerId; name: string }[]; seed: number; onThePlay: PlayerId }
   | { type: 'turnBegan'; turn: number; activePlayer: PlayerId }
   | { type: 'stepChanged'; step: Step }
-  | { type: 'cardDrawn'; player: PlayerId; objectId: number; cardName: string | null; hiddenFrom?: PlayerId }
+  | { type: 'cardDrawn'; player: PlayerId; objectId: number; cardName: string | null; hiddenFrom?: PlayerId; /** Ordinal of this draw in the turn, taken at draw time (Tamiyo "third card", miracle). */ nth?: number }
   | {
       type: 'zoneChanged';
       objectId: number;
@@ -44,7 +44,7 @@ export type GameEvent =
   | { type: 'regenerated'; objectId: number; cardName: string }
   | { type: 'cycled'; player: PlayerId; cardName: string }
   | { type: 'controlChanged'; objectId: number; cardName: string; to: PlayerId }
-  | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' | 'libraryTop' | 'exile' }
+  | { type: 'searched'; player: PlayerId; found: string[]; to: 'hand' | 'battlefield' | 'libraryTop' | 'exile' | 'graveyard' }
   | { type: 'mulliganTaken'; player: PlayerId; taken: number }
   | { type: 'handKept'; player: PlayerId; bottomed: number }
   | { type: 'startingRoll'; rolls: Record<PlayerId, number>; rerolls: number; winner: PlayerId }

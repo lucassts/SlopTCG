@@ -47,7 +47,9 @@ function loadStops(): StopsConfig {
 
 /** One-shot auto-yield (MTGO F-keys): pass priority until the target moment. */
 interface YieldState {
-  kind: 'nextStep' | 'combat' | 'mainPhase' | 'endStep' | 'myTurn';
+  kind: 'nextStep' | 'combat' | 'mainPhase' | 'endStep' | 'myTurn' | 'step';
+  /** kind 'step': passa até esta etapa começar (próxima ocorrência, em qualquer turno). */
+  target?: Step;
   step: Step;
   turn: number;
 }
@@ -58,6 +60,7 @@ const YIELD_LABEL: Record<YieldState['kind'], string> = {
   mainPhase: 'próxima fase principal',
   endStep: 'próxima etapa final',
   myTurn: 'meu próximo turno',
+  step: 'a etapa escolhida',
 };
 
 /** Transient card pop-up when a card lands in a relevant zone. */
@@ -252,6 +255,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       case 'mainPhase': return moved && (v.step === 'main1' || v.step === 'main2');
       case 'endStep': return moved && v.step === 'end';
       case 'myTurn': return v.activePlayer === you && v.turn !== y.turn;
+      case 'step': return moved && v.step === y.target;
     }
   };
 
@@ -270,13 +274,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncSeq, stops, yieldUntil, holdPriority]);
 
-  const startYield = (kind: YieldState['kind']) => {
-    if (yieldUntil?.kind === kind) {
+  const startYield = (kind: YieldState['kind'], target?: Step) => {
+    if (yieldUntil?.kind === kind && yieldUntil.target === target) {
       setYieldUntil(null); // clicar de novo cancela
       return;
     }
     setHoldPriority(false);
-    setYieldUntil({ kind, step: view.step, turn: view.turn });
+    setYieldUntil({ kind, target, step: view.step, turn: view.turn });
   };
 
   // ------------------------------------------- pop-ups de zona (toasts)
@@ -609,7 +613,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const fbSac = fromGraveyard ? def.flashback?.sacrifice : undefined;
     const bargainSac = kicked && def.kicker?.sacrifice ? 'artefato, encantamento ou ficha para sacrificar' : undefined;
     const emergeSac = extra.method === 'emerge' ? 'criatura para sacrificar (emergir)' : undefined;
-    const sacCount = def.additionalCost?.sacrifice ? def.additionalCost.count ?? 1 : fbSac || bargainSac || emergeSac ? 1 : 0;
+    const sacCount = def.additionalCost?.sacrifice ? def.additionalCost.count ?? 1 : fbSac ? def.flashback?.sacrificeCount ?? 1 : bargainSac || emergeSac ? 1 : 0;
     const sacSpecs = Array.from({ length: sacCount }, () => ({
       what: def.additionalCost?.sacrifice?.what ?? fbSac?.what ?? emergeSac ?? bargainSac ?? 'permanent',
     }));
@@ -893,7 +897,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
     if (awaitingMyBlocks) return 'Clique num bloqueador seu, depois no atacante; confirme';
     if (view.combatAwaiting) return 'Aguardando o oponente…';
-    if (yieldUntil) return `⏭ Passando automaticamente até ${YIELD_LABEL[yieldUntil.kind]} — clique de novo para cancelar`;
+    if (yieldUntil) return `⏭ Passando automaticamente até ${yieldUntil.kind === 'step' && yieldUntil.target ? `o início de ${stepName(yieldUntil.target)}` : YIELD_LABEL[yieldUntil.kind]} — clique de novo para cancelar`;
     if (holdPriority && myPriority) return '📌 Segurando a prioridade — jogue mais mágicas ou passe manualmente';
     if (myPriority && view.stack.length > 0) return 'Responder à pilha ou resolver';
     if (myPriority && (view.step === 'main1' || view.step === 'main2') && view.activePlayer === you)
@@ -965,11 +969,20 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- barra de fases -------- */}
       <div className="phase-bar phase-strip">
-        {STEPS.map((s) => (
-          <span key={s} className={`phase-step ${view.step === s ? 'current' : ''}`} title={stepName(s)}>
-            {STEP_SHORT[s]}
-          </span>
-        ))}
+        {STEPS.map((s) => {
+          const stoppable = (STOPPABLE as readonly Step[]).includes(s);
+          const targeted = yieldUntil?.kind === 'step' && yieldUntil.target === s;
+          return (
+            <span
+              key={s}
+              className={`phase-step ${view.step === s ? 'current' : ''} ${stoppable ? 'clickable' : ''} ${targeted ? 'yield-target' : ''}`}
+              title={stoppable ? `${stepName(s)} — clique para passar automaticamente até esta etapa começar` : stepName(s)}
+              onClick={(e) => { e.stopPropagation(); if (stoppable && view.status === 'playing' && !view.mulligan) startYield('step', s); }}
+            >
+              {STEP_SHORT[s]}
+            </span>
+          );
+        })}
         <span className={`storm-counter ${view.spellsCastThisTurn > 0 ? 'active' : ''}`} title="Mágicas conjuradas neste turno (contagem de tempestade)">
           ⛈ Tempestade {view.spellsCastThisTurn}
         </span>
@@ -1000,34 +1013,6 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           )}
           {view.status === 'playing' && !view.mulligan && (
             <div className="yield-group" title="Auto-yield: passa a prioridade sozinho até o momento escolhido">
-              <button
-                className={yieldUntil?.kind === 'nextStep' ? 'yield-on' : ''}
-                title="Passar até a próxima etapa"
-                onClick={(e) => { e.stopPropagation(); startYield('nextStep'); }}
-              >
-                ⏭ Etapa
-              </button>
-              <button
-                className={yieldUntil?.kind === 'combat' ? 'yield-on' : ''}
-                title="Passar até o próximo combate"
-                onClick={(e) => { e.stopPropagation(); startYield('combat'); }}
-              >
-                ⏭ Combate
-              </button>
-              <button
-                className={yieldUntil?.kind === 'mainPhase' ? 'yield-on' : ''}
-                title="Passar até a próxima fase principal"
-                onClick={(e) => { e.stopPropagation(); startYield('mainPhase'); }}
-              >
-                ⏭ Main
-              </button>
-              <button
-                className={yieldUntil?.kind === 'endStep' ? 'yield-on' : ''}
-                title="Passar até a próxima etapa final"
-                onClick={(e) => { e.stopPropagation(); startYield('endStep'); }}
-              >
-                ⏭ Final
-              </button>
               <button
                 className={yieldUntil?.kind === 'myTurn' ? 'yield-on' : ''}
                 title="Passar até o meu próximo turno"
@@ -1605,6 +1590,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               Confirmar ({choiceSel.size}
               {myChoice.min === myChoice.max ? `/${myChoice.max}` : ` de até ${myChoice.max}`})
             </button>
+            {myChoice.skipLabel && (
+              <button onClick={() => { setChoiceSel(new Set()); onAction({ type: 'effectChoice', picks: [] }); }}>{myChoice.skipLabel}</button>
+            )}
           </div>
         </div>
       )}

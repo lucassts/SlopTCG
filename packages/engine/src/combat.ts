@@ -96,6 +96,7 @@ export function canBlock(state: GameState, blocker: GameObject, attacker: GameOb
     )
       return `${land.toLowerCase()}walk: não pode ser bloqueado enquanto o defensor controla ${land}`;
   }
+  if (hasKeyword(state, attacker, 'protectionFromCreatures')) return 'proteção contra criaturas: não pode ser bloqueado';
   // Protection: the attacker can't be blocked by creatures of those colors.
   if (attacker.card.protectionFrom?.some((c) => blocker.card.colors.includes(c)))
     return `o atacante tem proteção contra as cores do bloqueador`;

@@ -59,6 +59,7 @@ export type PendingDecisionView =
       mode: 'cards' | 'scry' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
       min: number;
       max: number;
+      skipLabel?: string;
       /** Card data of the options — only for the deciding player. */
       options: CardView[] | null;
     };
@@ -141,6 +142,7 @@ function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisio
     mode: pd.mode,
     min: pd.min,
     max: pd.max,
+    skipLabel: pd.skipLabel,
     options:
       viewer === pd.player
         ? pd.options.map((id) => cardView(state, state.objects[id])).filter((c) => !!c.card)

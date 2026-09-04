@@ -19,7 +19,7 @@ import {
 } from './effects.js';
 import type { GameEvent } from './events.js';
 import { canPay, costCmc, costLabel, parseCost, planPayment } from './mana.js';
-import { applyEnterTapRules, castCardFree } from './effects.js';
+import { applyEnterTapRules, castCardFree, dredgeOptions } from './effects.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
 import { DUNGEONS } from './dungeons.js';
@@ -740,6 +740,9 @@ export class Game {
     const viaGraveyardPermission = !!gyPerm && gyPerm.untilTurn === s.turn && obj.zone === 'graveyard' && !method && cardMatchesFilter(card, gyPerm.filter);
     // Emry: "You may cast that card this turn" (a single card in the graveyard).
     const viaGraveyardCard = obj.zone === 'graveyard' && obj.castableFromGraveyardTurn === s.turn && !method;
+    // Grafdigger's Cage: players can't cast spells from graveyards or libraries.
+    if ((obj.zone === 'graveyard' || obj.zone === 'library') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id]?.card.cageNoCastFromGraveyardLibrary)))
+      { this.fail(playerId, `${card.name}: não se conjura mágicas do cemitério ou da biblioteca (Grafdigger's Cage)`); return false; }
     if (card.aftermath && obj.transformed && obj.zone !== 'graveyard') { this.fail(playerId, 'aftermath: essa metade só pode ser conjurada do cemitério'); return false; }
     const replicateTimes = Math.max(0, extra.replicateTimes ?? 0);
     if (replicateTimes > 0 && !card.replicate) { this.fail(playerId, 'essa mágica não tem replicar'); return false; }
@@ -835,7 +838,11 @@ export class Game {
     for (const t of targets) {
       if (t.kind !== 'object') continue;
       const w = s.objects[t.id];
-      if (w && w.zone === 'battlefield' && w.controller !== playerId && w.card.wardLife) wardLife += w.card.wardLife;
+      if (w && w.zone === 'battlefield' && w.controller !== playerId) {
+        if (w.card.wardLife) wardLife += w.card.wardLife;
+        // Hexing Squelcher: "Other creatures you control have 'Ward—Pay 2 life.'"
+        if (isCreature(w)) for (const gid of s.players[w.controller].zones.battlefield) { const g = s.objects[gid]; if (g && gid !== w.id && g.card.grantWardLifeOthers) wardLife += g.card.grantWardLifeOthers; }
+      }
     }
     if (wardLife > 0 && s.players[playerId].life < wardLife)
       { this.fail(playerId, `ward: você precisa pagar ${wardLife} pontos de vida`); return false; }
@@ -845,7 +852,7 @@ export class Game {
     const sacReq =
       (card.additionalCost?.sacrifice ? { sacrifice: card.additionalCost.sacrifice, count: card.additionalCost.count } : undefined) ??
       (viaFlashback && card.flashback?.sacrifice
-        ? { sacrifice: card.flashback.sacrifice, count: 1 }
+        ? { sacrifice: card.flashback.sacrifice, count: card.flashback.sacrificeCount ?? 1 }
         : cm?.kind === 'emerge'
           ? { sacrifice: { what: 'creature' as const }, count: 1 }
           : kicked && card.kicker?.sacrifice
@@ -2114,6 +2121,17 @@ export class Game {
       case 'draw': {
         const skip = s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id].card.skipDraw);
         if (!(s.turn === 1 && s.activePlayer === s.onThePlay) && !skip) {
+          // Dredge: with a dredge card in the graveyard, the draw step asks draw-or-dredge before drawing.
+          const dredges = s.players[s.activePlayer].dredgeNext === undefined ? dredgeOptions(s, s.activePlayer) : [];
+          if (dredges.length > 0) {
+            s.pendingDecision = {
+              type: 'effectChoice', player: s.activePlayer, mode: 'cards', options: dredges, min: 0, max: 1, skipLabel: 'Comprar a carta',
+              prompt: 'Etapa de compra: comprar uma carta ou dragar? Escolha a carta do cemitério para dragar, ou compre normalmente',
+              resume: { controller: s.activePlayer, sourceId: -1, sourceName: 'Etapa de compra', targets: [], current: { op: 'draw', who: 'controller', count: 1 }, remaining: [], finishSpellId: null },
+            };
+            s.priority = s.activePlayer;
+            return;
+          }
           draw(s, s.activePlayer, this.emit);
           if (s.players[s.activePlayer].zones.hand.length <= 2 && s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id].card.drawPlusOneWhenHandSmall)) draw(s, s.activePlayer, this.emit); // Quantum Riddler (mão tinha ≤ 1 antes da compra)
           checkStateBasedActions(s, this.emit);
@@ -2579,7 +2597,7 @@ export class Game {
         const moved = this.state.objects[ev.objectId];
         // Emrakul: "When ~ is put into a graveyard from anywhere".
         if (moved) (moved.card.abilities ?? []).forEach((ab, idx) => {
-          if (ab.kind === 'triggered' && ab.trigger.on === 'toGraveyardFromAnywhere') this.pushTrigger(moved, ab, moved.id, undefined, { abilityIndex: idx });
+          if (ab.kind === 'triggered' && ab.trigger.on === 'toGraveyardFromAnywhere' && (!ab.trigger.fromZone || ev.from === ab.trigger.fromZone)) this.pushTrigger(moved, ab, moved.id, undefined, { abilityIndex: idx });
         });
         if (moved && !moved.isToken) {
           for (const id of [...this.state.players[ev.player].zones.battlefield]) {
@@ -2703,7 +2721,8 @@ export class Game {
         }
       }
       if (ev.type === 'cardDrawn') {
-        const firstInDrawStep = this.state.step === 'draw' && this.state.activePlayer === ev.player && this.state.players[ev.player].drawsThisTurn === 1;
+        const nth = ev.nth ?? this.state.players[ev.player].drawsThisTurn;
+        const firstInDrawStep = this.state.step === 'draw' && this.state.activePlayer === ev.player && nth === 1;
         if (!firstInDrawStep) {
           const foe = opponentOf(ev.player);
           for (const id of [...this.state.players[foe].zones.battlefield]) {
@@ -2714,11 +2733,11 @@ export class Game {
           }
         }
         this.fireControllerTriggers(ev.player, 'youDrawCard', { subjectId: ev.objectId, subjectPlayer: ev.player });
-        this.fireControllerTriggers(ev.player, 'youDrawCardNth', { subjectId: ev.objectId, subjectPlayer: ev.player, nth: this.state.players[ev.player].drawsThisTurn });
+        this.fireControllerTriggers(ev.player, 'youDrawCardNth', { subjectId: ev.objectId, subjectPlayer: ev.player, nth });
         // Miracle: the first card drawn this turn may be cast for its miracle cost right now.
         const drawn = this.state.objects[ev.objectId];
         const miracle = drawn?.card.castMethods?.find((m) => m.kind === 'miracle');
-        if (drawn && miracle && drawn.zone === 'hand' && this.state.players[ev.player].drawsThisTurn === 1) {
+        if (drawn && miracle && drawn.zone === 'hand' && nth === 1) {
           drawn.miracleAvailable = true;
           this.emit({ type: 'miracleRevealed', player: ev.player, objectId: drawn.id, cardName: drawn.card.name, cost: miracle.cost });
         }

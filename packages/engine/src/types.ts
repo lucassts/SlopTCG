@@ -105,6 +105,8 @@ export type Keyword =
   | 'horsemanship'
   /** Can block only creatures with flying. */
   | 'blockOnlyFlying'
+  /** Protection from creatures: can't be blocked, damage from creatures prevented. */
+  | 'protectionFromCreatures'
   /** No rules impact in a two-player game; recognized so the card compiles. */
   | 'changeling'
   | 'partner';

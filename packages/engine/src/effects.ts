@@ -77,6 +77,10 @@ export interface EffectContext {
   iterId?: number;
   /** Life lost by loseLife steps of this script (Debt to the Deathless). */
   lifeLostThisWay?: number;
+  /** Draw-with-dredge: cards still to draw after the one just decided. */
+  drawRemaining?: number;
+  /** divideDamage: next target index and damage still to assign. */
+  divideNext?: { index: number; remaining: number };
   emit: Emit;
 }
 
@@ -189,6 +193,17 @@ function sourceColors(ctx: EffectContext): import('./types.js').Color[] {
   return ctx.state.objects[ctx.sourceId]?.card.colors ?? [];
 }
 
+/** Hexing Squelcher: "Spells you control can't be countered." */
+function spellsUncounterable(state: GameState, obj: GameObject | undefined): boolean {
+  return !!obj && state.players[obj.controller].zones.battlefield.some((id) => state.objects[id]?.card.yourSpellsUncounterable);
+}
+
+/** Dredge cards in the player's graveyard that could replace a draw right now (library has at least N cards). */
+export function dredgeOptions(state: GameState, player: PlayerId): number[] {
+  const lib = state.players[player].zones.library.length;
+  return state.players[player].zones.graveyard.filter((id) => { const d = state.objects[id]?.card.dredge ?? 0; return d > 0 && lib >= d; });
+}
+
 /** Damping Sphere: a land tapped for two or more mana produces that much {C} instead. */
 function dampingMana(state: GameState, sourceId: number, mana: import('./types.js').ManaSymbol[]): import('./types.js').ManaSymbol[] {
   if (mana.length < 2) return mana;
@@ -278,9 +293,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -295,6 +310,7 @@ interface ChoiceSetup {
   mode: 'cards' | 'scry' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
   /** 'confirm' with nothing to decide (target gone / can't pay) resolves immediately. */
   autoAnswer?: 'yes' | 'no' | 'skip';
+  skipLabel?: string;
 }
 
 /** Pay a mana cost for a player right now (taps + pool + phyrexian life). Returns false if unaffordable. */
@@ -648,6 +664,40 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const options = [...state.players[controller].zones.hand];
       if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
       return { player: controller, options, min: 1, max: 1, prompt: `${ctx.sourceName}: escolha uma carta da mão para revelar`, mode: 'cards' };
+    }
+    case 'divideDamage': {
+      const targets = ctx.targets.filter((t) => t.kind === 'object' && objectAlive(state, t)?.zone === 'battlefield');
+      const index = step.index ?? 0;
+      const remaining = step.remaining ?? step.amount;
+      if (targets.length === 0 || index >= targets.length || remaining <= 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'skip' };
+      // Last target takes the rest: no question.
+      if (index === targets.length - 1) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'yes' };
+      const t = targets[index];
+      const name = t.kind === 'object' ? state.objects[t.id]?.card.name ?? '?' : '?';
+      return { player: controller, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: quanto dano em ${name}? (restam ${remaining} para dividir entre ${targets.length - index} alvos)`, mode: 'number' };
+    }
+    case 'portentReveal': {
+      const n = resolveAmount(ctx, step.count);
+      const top = state.players[controller].zones.library.slice(0, n);
+      if (top.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards' };
+      const types = new Set(top.flatMap((id) => state.objects[id].card.types));
+      ctx.emit({ type: 'fizzled', description: `${ctx.sourceName}: revela ${top.map((id) => state.objects[id].card.name).join(', ')}` });
+      return { player: controller, options: top, min: 0, max: types.size, prompt: `${ctx.sourceName}: exile até uma carta de cada tipo de carta (${[...types].join(', ')}); o resto vai para o cemitério`, mode: 'cards' };
+    }
+    case 'portentCast': {
+      const exiled = (state.lastPortentExiled ?? []).filter((id) => state.objects[id]?.zone === 'exile');
+      const options = exiled.length >= 4 ? exiled.filter((id) => !state.objects[id].card.types.includes('Land')) : [];
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards' };
+      return { player: controller, options, min: 0, max: 1, skipLabel: 'Não conjurar', prompt: `${ctx.sourceName}: você exilou ${exiled.length} cartas — conjure uma delas sem pagar o custo de mana (o resto vai para a mão)`, mode: 'cards' };
+    }
+    case 'draw': {
+      // Dredge replaces a draw: whenever a single player would draw and has a dredge card in the graveyard, ask draw-or-dredge (one card at a time).
+      const players = resolveWho(ctx, step.who);
+      const n = resolveAmount(ctx, step.count);
+      const single = players.length === 1 ? players[0] : undefined;
+      const options = single !== undefined && n > 0 && state.players[single].dredgeNext === undefined ? dredgeOptions(state, single) : [];
+      if (options.length === 0) return { player: single ?? controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards' };
+      return { player: single!, options, min: 0, max: 1, skipLabel: 'Comprar a carta', prompt: `${ctx.sourceName}: comprar uma carta ou dragar?${n > 1 ? ` (compra 1 de ${n})` : ''} Escolha a carta do cemitério para dragar, ou compre normalmente`, mode: 'cards' };
     }
     case 'legendRuleKeep': {
       const options = step.ids.filter((id) => state.objects[id]?.zone === 'battlefield');
@@ -1073,6 +1123,69 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} revelou ${o.card.name} da mão` });
       return;
     }
+    case 'divideDamage': {
+      const targets = ctx.targets.filter((t) => t.kind === 'object' && objectAlive(state, t)?.zone === 'battlefield');
+      const index = step.index ?? 0;
+      const remaining = step.remaining ?? step.amount;
+      const t = targets[index];
+      if (!t || t.kind !== 'object') return false;
+      const last = index === targets.length - 1;
+      const n = last ? remaining : Math.max(0, Math.min(remaining, parseInt(text ?? '0', 10) || 0));
+      const obj = state.objects[t.id];
+      if (n > 0 && obj) dealDamageToObject(state, obj, n, ctx.sourceName, emit, { sourceId: ctx.sourceId, sourceColors: sourceColors(ctx) });
+      ctx.divideNext = { index: index + 1, remaining: remaining - n };
+      return !last && remaining - n > 0;
+    }
+    case 'portentReveal': {
+      const n = resolveAmount(ctx, step.count);
+      const top = state.players[ctx.controller].zones.library.slice(0, n);
+      const seen = new Set<string>();
+      const exiled: number[] = [];
+      for (const id of picks) {
+        const o = state.objects[id];
+        if (!o || !top.includes(id)) continue;
+        const key = o.card.types.find((ty) => !seen.has(ty));
+        if (!key) continue; // já exilou uma carta desse(s) tipo(s)
+        for (const ty of o.card.types) seen.add(ty);
+        exiled.push(id);
+      }
+      for (const id of top) {
+        const o = state.objects[id];
+        if (exiled.includes(id)) moveWithEvent(state, o, 'exile', 'exiled', emit);
+        else moveWithEvent(state, o, 'graveyard', 'milled', emit);
+      }
+      state.lastPortentExiled = exiled;
+      return;
+    }
+    case 'portentCast': {
+      const exiled = (state.lastPortentExiled ?? []).filter((id) => state.objects[id]?.zone === 'exile');
+      state.lastPortentExiled = undefined;
+      const pick = picks[0];
+      for (const id of exiled) {
+        const o = state.objects[id];
+        if (id === pick && castCardFree(state, o, ctx.controller, emit, ctx.sourceName)) continue;
+        moveWithEvent(state, o, 'hand', 'returned', emit);
+      }
+      return;
+    }
+    case 'draw': {
+      const players = resolveWho(ctx, step.who);
+      const n = resolveAmount(ctx, step.count);
+      const single = players.length === 1 ? players[0] : undefined;
+      const dredgeable = single !== undefined && n > 0 && state.players[single].dredgeNext === undefined ? dredgeOptions(state, single) : [];
+      if (single === undefined || dredgeable.length === 0) {
+        for (const p of players) {
+          // Quantum Riddler: with one or fewer cards in hand, draw one more per batch.
+          const bonus = n > 0 && state.players[p].zones.hand.length <= 1 && state.players[p].zones.battlefield.some((id) => state.objects[id].card.drawPlusOneWhenHandSmall) ? 1 : 0;
+          for (let i = 0; i < n + bonus; i++) draw(state, p, emit);
+        }
+        return false;
+      }
+      if (picks[0] !== undefined && dredgeable.includes(picks[0])) state.players[single].dredgeNext = picks[0];
+      draw(state, single, emit);
+      ctx.drawRemaining = n - 1;
+      return n > 1;
+    }
     case 'legendRuleKeep': {
       const keep = picks[0];
       for (const id of step.ids) {
@@ -1140,7 +1253,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
           return;
         }
       }
-      if (obj?.card.uncounterable) {
+      if (obj?.card.uncounterable || spellsUncounterable(state, obj)) {
         emit({ type: 'fizzled', description: `${item.cardName} não pode ser anulada` });
         return;
       }
@@ -1175,6 +1288,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       for (const id of picks) {
         const obj = state.objects[id];
         if (!obj || obj.zone !== 'hand') continue;
+        if (step.exile) { moveWithEvent(state, obj, 'exile', 'exiled', emit); continue; }
         moveWithEvent(state, obj, 'graveyard', 'discarded', emit);
         emit({ type: 'discarded', player: obj.owner, objectId: id, cardName: obj.card.name });
       }
@@ -1262,7 +1376,9 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
  * pause the script by setting state.pendingDecision.
  */
 /** Branch chosen by a yes/no step ("you may", "pay or else", "if"). */
-function branchOf(step: ChoiceStep, outcome: boolean | void, text: string | undefined): EffectStep[] {
+function branchOf(step: ChoiceStep, outcome: boolean | void, text: string | undefined, ctx?: EffectContext): EffectStep[] {
+  if (step.op === 'draw') return outcome === true && ctx?.drawRemaining ? [{ op: 'draw', who: step.who, count: ctx.drawRemaining }] : [];
+  if (step.op === 'divideDamage') return outcome === true && ctx?.divideNext ? [{ op: 'divideDamage', amount: step.amount, index: ctx.divideNext.index, remaining: ctx.divideNext.remaining }] : [];
   if (step.op === 'mayDo') return text === 'yes' ? step.effect : step.else ?? [];
   if (step.op === 'payOrElse') return outcome === true ? step.then ?? [] : step.else;
   if (step.op === 'if') return outcome === true ? step.then : step.else ?? [];
@@ -1277,7 +1393,7 @@ function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep
     if (setup.autoAnswer === 'skip') return 'done';
     if (setup.autoAnswer) {
       const outcome = executeChoice(ctx, step, [], setup.autoAnswer);
-      return branchOf(step, outcome, setup.autoAnswer);
+      return branchOf(step, outcome, setup.autoAnswer, ctx);
     }
   }
   // Text answers always need the round-trip (the answer is text, not picks).
@@ -1300,6 +1416,7 @@ function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep
     options: setup.options,
     min: setup.min,
     max: setup.max,
+    skipLabel: setup.skipLabel,
     resume: {
       controller: ctx.controller,
       sourceId: ctx.sourceId,
@@ -1348,7 +1465,7 @@ export function applyEffectChoice(
   const outcome = executeChoice(ctx, current, picks, text);
   // "You may …" / "pay or else": o ramo escolhido roda antes do resto do
   // script (pausas aninhadas continuam funcionando: vira um único script).
-  const branch = branchOf(current, outcome, text);
+  const branch = branchOf(current, outcome, text, ctx);
   const result = runEffectScript(ctx, [...branch, ...pending.resume.remaining]);
   if (result === 'paused') {
     const next = state.pendingDecision as PendingDecision | null;
@@ -1470,15 +1587,6 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         moveWithEvent(state, state.objects[top], 'exile', 'exiled', emit);
       }
       return;
-    case 'draw': {
-      const count = resolveAmount(ctx, step.count);
-      for (const p of resolveWho(ctx, step.who)) {
-        // Quantum Riddler: with one or fewer cards in hand, draw one more per batch.
-        const bonus = count > 0 && state.players[p].zones.hand.length <= 1 && state.players[p].zones.battlefield.some((id) => state.objects[id].card.drawPlusOneWhenHandSmall) ? 1 : 0;
-        for (let i = 0; i < count + bonus; i++) draw(state, p, emit);
-      }
-      return;
-    }
 
     case 'discardHand':
       for (const p of resolveWho(ctx, step.who)) {
@@ -1681,6 +1789,37 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         changeLife(state, p, -amount, ctx.sourceName, emit);
         ctx.lifeLostThisWay = (ctx.lifeLostThisWay ?? 0) + Math.max(0, before - state.players[p].life);
       }
+      return;
+    }
+    case 'welderSwap': {
+      const [a, c] = ctx.targets;
+      const art = a?.kind === 'object' ? state.objects[a.id] : undefined;
+      const card = c?.kind === 'object' ? state.objects[c.id] : undefined;
+      if (!art || !card || art.zone !== 'battlefield' || card.zone !== 'graveyard' || !art.card.types.includes('Artifact') || !card.card.types.includes('Artifact')) return;
+      if (art.controller !== card.owner) { emit({ type: 'fizzled', description: `${ctx.sourceName}: a carta no cemitério tem que ser do controlador do artefato` }); return; }
+      card.controller = card.owner;
+      moveWithEvent(state, art, 'graveyard', 'sacrificed', emit);
+      moveWithEvent(state, card, 'battlefield', 'returned', emit);
+      return;
+    }
+    case 'damageEachPlayerPer': {
+      for (const p of PLAYER_IDS) {
+        const n = state.players[p].zones.battlefield.filter((id) => { const o = state.objects[id]; return !!o && matchFilter({ controller: p, sourceId: ctx.sourceId, state }, step.filter, o); }).length * step.times;
+        if (n > 0) dealDamageToPlayer(state, p, n, ctx.sourceName, emit, { sourceId: ctx.sourceId });
+      }
+      return;
+    }
+    case 'exileSelfAndTopShuffleBack': {
+      const self = state.objects[ctx.sourceId];
+      if (!self || self.zone !== 'graveyard') return;
+      const owner = state.players[self.owner];
+      const pile = [self.id, ...owner.zones.library.slice(0, step.count)];
+      for (const id of pile) removeFromCurrentZone(state, state.objects[id]);
+      const r = shuffle(pile, state.rngState);
+      state.rngState = r.state;
+      for (const id of r.items) { const o = state.objects[id]; o.zone = 'library'; }
+      owner.zones.library.unshift(...r.items);
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: exilada com as ${step.count} cartas do topo em uma pilha virada para baixo, embaralhada e devolvida ao topo da biblioteca` });
       return;
     }
     case 'earthbend':
@@ -2098,7 +2237,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
           emit({ type: 'fizzled', description: `${item.cardName} não pode ser anulada neste turno` });
           continue;
         }
-        if (obj?.card.uncounterable) {
+        if (obj?.card.uncounterable || spellsUncounterable(state, obj)) {
           emit({ type: 'fizzled', description: `${item.cardName} não pode ser anulada` });
           continue;
         }
@@ -2494,6 +2633,10 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
 export function castCardFree(state: GameState, obj: GameObject, controller: PlayerId, emit: Emit, note: string, targets?: TargetChoice[], opts?: { bargained?: boolean; bargainDecided?: boolean }): boolean {
   const card = obj.card;
   if (card.types.includes('Land')) return false;
+  if ((obj.zone === 'graveyard' || obj.zone === 'library') && PLAYER_IDS.some((p) => state.players[p].zones.battlefield.some((id) => state.objects[id]?.card.cageNoCastFromGraveyardLibrary))) {
+    emit({ type: 'fizzled', description: `${card.name}: não se conjura do cemitério ou da biblioteca (Grafdigger's Cage)` });
+    return false;
+  }
   const needsModes = !!card.enchant || (card.spellModes?.length ?? 0) > 0;
   if (needsModes) {
     emit({ type: 'fizzled', description: `${card.name}: precisa de modos/anexo — não pode ser conjurada automaticamente (${note})` });
