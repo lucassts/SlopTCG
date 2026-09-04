@@ -12,18 +12,29 @@ function emitHover(url: string | null) {
   window.dispatchEvent(new CustomEvent<string | null>(HOVER_EVENT, { detail: url }));
 }
 
-/** Fixed enlarged preview of whatever card is under the mouse. */
-export function HoverPreview() {
+/**
+ * Enlarged preview of whatever card is under the mouse.
+ * `slot`: fixed box at the top of the side panel (game board); otherwise a floating panel on the right (lobby, sideboard).
+ */
+export function HoverPreview({ slot = false }: { slot?: boolean } = {}) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     const onHover = (e: Event) => setUrl((e as CustomEvent<string | null>).detail);
     window.addEventListener(HOVER_EVENT, onHover);
     return () => window.removeEventListener(HOVER_EVENT, onHover);
   }, []);
-  // Slot fixo no topo do painel lateral (acima do log/chat): a carta grande aparece aqui.
+  if (slot) {
+    // Slot fixo no topo do painel lateral (acima do log/chat): a carta grande aparece aqui.
+    return (
+      <div className="preview-slot" title={url ? '' : 'Passe o mouse sobre uma carta'}>
+        {url && <img src={url} alt="" draggable={false} />}
+      </div>
+    );
+  }
+  if (!url) return null;
   return (
-    <div className="preview-slot" title={url ? '' : 'Passe o mouse sobre uma carta'}>
-      {url && <img src={url} alt="" draggable={false} />}
+    <div className="hover-preview">
+      <img src={url} alt="" draggable={false} />
     </div>
   );
 }

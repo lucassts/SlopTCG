@@ -1141,7 +1141,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit }: GameB
             {concedeArmed ? 'Confirmar?' : 'Conceder'}
           </button>
         </div>
-        <HoverPreview />
+        <HoverPreview slot />
         {showManual && (
           <div className="stack-panel">
             <div className="panel-title">Modo manual — tudo fica no log</div>

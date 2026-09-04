@@ -432,8 +432,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 /* ----------------------------------------------------- pop-ups de zona */
 .zone-toasts {
   position: fixed;
-  left: 14px;
+  right: 314px;
   bottom: 220px;
+  align-items: flex-end;
   z-index: 240;
   display: flex;
   flex-direction: column;
@@ -456,7 +457,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .zone-toast .card-face { width: 58px; height: 81px; flex-shrink: 0; }
 .zone-toast-label { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
 .zone-toast-label span { color: var(--muted); }
-@keyframes toast-in { from { opacity: 0; transform: translateX(-12px); } }
+@keyframes toast-in { from { opacity: 0; transform: translateX(12px); } }
 
 /* -------------------------------------------------------- auto-yield */
 .yield-group { display: flex; gap: 2px; }
@@ -481,7 +482,22 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .sb-col { transition: border-color 0.12s; }
 
 /* preview fixo da carta sob o mouse (estilo MTGO) */
-/* Carta grande: slot fixo no topo do painel lateral, acima do log/chat. */
+/* Carta grande fora da partida (lobby, sideboard): painel flutuante à direita. */
+.hover-preview {
+  position: fixed;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: min(264px, 20vw);
+  z-index: 500;
+  pointer-events: none;
+}
+.hover-preview img {
+  width: 100%;
+  border-radius: 12px;
+  box-shadow: 0 14px 50px rgba(0, 0, 0, 0.7);
+}
+/* Carta grande na partida: slot fixo no topo do painel lateral, acima do log/chat. */
 .preview-slot {
   flex: 0 0 auto;
   width: 100%;
@@ -542,6 +558,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   .table { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr auto 1fr auto; }
   .side-panel { grid-column: 1; grid-row: 1; flex-direction: row; max-height: 120px; }
   .preview-slot { display: none; }
+  .zone-toasts { right: 14px; }
   .opp-bar { grid-row: 2; }
   .opp-field { grid-row: 3; }
   .phase-bar { grid-row: 4; }
