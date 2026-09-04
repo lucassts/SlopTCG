@@ -52,11 +52,17 @@ navegador.
 2. Dê dois cliques. O navegador abre sozinho no jogo, e a janela preta
    mostra o endereço para mandar ao oponente (ex.: `http://192.168.0.10:8080`).
 3. Crie a sala e compartilhe o código de 5 letras. Fim.
+4. **Oponente fora da sua rede?** Na sala, clique em **Gerar link público**
+   e mande o link `https://….trycloudflare.com/?sala=…` — ele abre o jogo já
+   com o código preenchido. Sem VPN, sem porta no roteador, sem conta: é um
+   túnel temporário da Cloudflare, que vale enquanto o SlopTCG estiver aberto.
+   Na primeira vez o programa baixa o `cloudflared` (~40 MB, versão fixa, do
+   release oficial) para a pasta de dados do usuário.
 
 > O Windows SmartScreen pode avisar sobre "editor desconhecido" (o binário
 > não é assinado): clique em **Mais informações → Executar assim mesmo**.
-> Para jogar com alguém fora da sua rede, use uma VPN simples como
-> Tailscale/Hamachi ou libere a porta 8080 no roteador.
+> Na mesma rede local, o endereço `http://192.168…:8080` da janela preta
+> continua funcionando sem túnel.
 
 ### Jeito de desenvolvedor
 

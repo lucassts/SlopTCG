@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-04, v0.25.0 — listas do Lucas 2 + Moxfield por URL, Legacy a 95,4%)
+## Estado (2026-09-04, v0.26.0 — link público; engine igual à v0.25.0, Legacy a 95,4%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | **v0.25** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -533,6 +533,20 @@ do anti-bot). 8 falhas de simulação novas são criaturas que devolvem "uma
 criatura azul ou preta que você controla" à mão e, sozinhas, devolvem a si
 mesmas (Cavern Harpy, Marsh Crocodile…): comportamento correto.
 Legacy: 167 cartas com lacuna (342 de 509 full), 95,4% ponderado.
+
+**v0.26.0 — link público** (sem mudança na engine; auditor e cobertura
+iguais à v0.25.0). Servidor: `/api/tunnel` (GET estado, POST liga, DELETE
+desliga; só aceita pedidos diretos por localhost e sem `cf-connecting-ip`)
+sobe um Cloudflare quick tunnel (`cloudflared tunnel --url
+http://localhost:PORT --no-autoupdate`) e lê a URL `https://….trycloudflare.com`
+da saída. O binário é procurado (`SLOPTCG_CLOUDFLARED`, ao lado do exe, cwd,
+pasta de dados do usuário, PATH) e, se faltar, baixado do release oficial
+com versão fixa (`CLOUDFLARED_VERSION`) para a pasta de dados. Cliente: no
+lobby do host aparece "Jogar pela internet" com o botão, o link
+`…/?sala=CÓDIGO` (copiável) e "Desligar o link"; a Home lê `?sala=` e
+preenche o código. Verificado de ponta a ponta no navegador (download,
+túnel em ~10 s, oponente entrando pelo link, 403 para quem tenta controlar
+o túnel pelo próprio túnel).
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

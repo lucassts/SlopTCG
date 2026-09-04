@@ -4,11 +4,13 @@ export interface HomeProps {
   onCreate: (name: string) => void;
   onJoin: (name: string, code: string) => void;
   connecting: boolean;
+  /** Código vindo do link público (…/?sala=ABCDE). */
+  initialCode?: string;
 }
 
-export function Home({ onCreate, onJoin, connecting }: HomeProps) {
+export function Home({ onCreate, onJoin, connecting, initialCode }: HomeProps) {
   const [name, setName] = useState(localStorage.getItem('sloptcg-name') ?? '');
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState((initialCode ?? '').toUpperCase().slice(0, 5));
 
   const remember = (n: string) => {
     setName(n);

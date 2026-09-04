@@ -158,7 +158,7 @@ export function App() {
 
   return (
     <>
-      {screen === 'home' && <Home onCreate={createRoom} onJoin={joinRoom} connecting={connecting} />}
+      {screen === 'home' && <Home onCreate={createRoom} onJoin={joinRoom} connecting={connecting} initialCode={new URLSearchParams(location.search).get('sala') ?? undefined} />}
       {screen === 'lobby' && session && (
         <Lobby
           roomCode={session.roomCode}

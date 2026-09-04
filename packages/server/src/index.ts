@@ -12,7 +12,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   compileOracleCard,
@@ -706,6 +706,12 @@ function serveStatic(pathname: string, res: http.ServerResponse): void {
 const httpServer = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   res.setHeader('Access-Control-Allow-Origin', '*');
+  if (url.pathname === '/api/tunnel') {
+    if (!isLocalHostRequest(req)) { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'só o host pode controlar o link público' })); return; }
+    if (req.method === 'POST') { void startTunnel().then(() => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(tunnelJson()); }); return; }
+    if (req.method === 'DELETE') { stopTunnel(); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(tunnelJson()); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(tunnelJson()); return;
+  }
   if (req.method === 'GET' && url.pathname === '/api/deck') {
     const deckUrl = url.searchParams.get('url') ?? '';
     fetchDeckByUrl(deckUrl)
@@ -726,6 +732,140 @@ const httpServer = http.createServer((req, res) => {
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'não encontrado' }));
 });
+
+// ------------------------------------------------------------------- link público (túnel)
+/**
+ * "Gerar link público": abre um Cloudflare quick tunnel (sem conta, sem
+ * configuração) para o servidor local e devolve a URL https://….trycloudflare.com.
+ * O oponente abre o link e entra na sala pela internet — sem VPN, sem porta no roteador.
+ * O binário `cloudflared` é procurado ao lado do executável, no PATH e na pasta
+ * de dados do usuário; se não existir, é baixado uma vez do release oficial (versão fixa).
+ */
+const CLOUDFLARED_VERSION = '2026.8.3';
+interface TunnelState { status: 'off' | 'downloading' | 'starting' | 'on' | 'error'; url?: string; error?: string; detail?: string }
+const tunnel: TunnelState & { proc?: ChildProcess } = { status: 'off' };
+
+function cloudflaredAssetName(): string | null {
+  const arch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'amd64' : null;
+  if (!arch) return null;
+  if (process.platform === 'win32') return `cloudflared-windows-${arch}.exe`;
+  if (process.platform === 'linux') return `cloudflared-linux-${arch}`;
+  return null; // macOS: o release é .tgz — instale com `brew install cloudflared`
+}
+
+function userDataDir(): string {
+  const base = process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.homedir() : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
+  return path.join(base, 'SlopTCG');
+}
+
+function findCloudflared(): string | null {
+  const exe = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+  const candidates = [
+    process.env.SLOPTCG_CLOUDFLARED,
+    path.join(path.dirname(process.execPath), exe),
+    path.join(process.cwd(), exe),
+    path.join(userDataDir(), exe),
+    ...(process.env.PATH ?? '').split(path.delimiter).map((d) => path.join(d, exe)),
+  ];
+  for (const c of candidates) if (c && fs.existsSync(c)) return c;
+  return null;
+}
+
+/** GET com redirecionamentos (GitHub → objects.githubusercontent.com), gravando em `dest`. */
+function downloadFile(target: string, dest: string, hops = 0): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (hops > 5) return reject(new Error('redirecionamentos demais'));
+    https.get(target, { headers: { 'User-Agent': 'SlopTCG/0.1 (open source card game client)' } }, (r) => {
+      if (r.statusCode && r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+        r.resume();
+        downloadFile(new URL(r.headers.location, target).toString(), dest, hops + 1).then(resolve, reject);
+        return;
+      }
+      if (r.statusCode !== 200) { r.resume(); return reject(new Error(`download respondeu ${r.statusCode}`)); }
+      const tmp = `${dest}.part`;
+      const out = fs.createWriteStream(tmp);
+      r.pipe(out);
+      out.on('finish', () => { out.close(); try { fs.renameSync(tmp, dest); resolve(); } catch (e) { reject(e); } });
+      out.on('error', reject);
+      r.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+async function ensureCloudflared(): Promise<string> {
+  const found = findCloudflared();
+  if (found) return found;
+  const asset = cloudflaredAssetName();
+  if (!asset) throw new Error('Neste sistema instale o cloudflared manualmente (macOS: `brew install cloudflared`) e tente de novo.');
+  const dir = userDataDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
+  tunnel.status = 'downloading';
+  tunnel.detail = `baixando o cloudflared ${CLOUDFLARED_VERSION} (uma vez só, ~40 MB)`;
+  await downloadFile(`https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${asset}`, dest);
+  const size = fs.statSync(dest).size;
+  if (size < 10_000_000) { fs.rmSync(dest, { force: true }); throw new Error('download do cloudflared veio incompleto — tente de novo'); }
+  if (process.platform !== 'win32') fs.chmodSync(dest, 0o755);
+  return dest;
+}
+
+async function startTunnel(): Promise<TunnelState> {
+  if (tunnel.status === 'on' || tunnel.status === 'starting' || tunnel.status === 'downloading') return tunnel;
+  tunnel.error = undefined;
+  try {
+    const bin = await ensureCloudflared();
+    tunnel.status = 'starting';
+    tunnel.detail = 'abrindo o túnel…';
+    const proc = spawn(bin, ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    tunnel.proc = proc;
+    let buf = '';
+    const onData = (chunk: Buffer) => {
+      buf += chunk.toString('utf8');
+      const m = buf.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+      if (m && tunnel.status === 'starting') { tunnel.status = 'on'; tunnel.url = m[0]; tunnel.detail = undefined; console.log(`  Link publico: ${m[0]}`); }
+      if (buf.length > 200_000) buf = buf.slice(-50_000);
+    };
+    proc.stdout?.on('data', onData);
+    proc.stderr?.on('data', onData);
+    proc.on('exit', (code) => {
+      if (tunnel.proc !== proc) return;
+      tunnel.proc = undefined;
+      tunnel.status = tunnel.status === 'starting' ? 'error' : 'off';
+      if (tunnel.status === 'error') tunnel.error = `o cloudflared fechou (código ${code ?? '?'})`;
+      tunnel.url = undefined;
+    });
+    proc.on('error', (err) => { tunnel.proc = undefined; tunnel.status = 'error'; tunnel.error = err.message; tunnel.url = undefined; });
+    // Sem URL em 45 s: desiste.
+    setTimeout(() => { if (tunnel.status === 'starting' && tunnel.proc === proc) { tunnel.status = 'error'; tunnel.error = 'o túnel não respondeu em 45 s (sem internet? firewall?)'; proc.kill(); } }, 45_000);
+  } catch (err) {
+    tunnel.status = 'error';
+    tunnel.error = err instanceof Error ? err.message : String(err);
+  }
+  return tunnel;
+}
+
+function stopTunnel(): void {
+  tunnel.proc?.kill();
+  tunnel.proc = undefined;
+  tunnel.status = 'off';
+  tunnel.url = undefined;
+  tunnel.error = undefined;
+  tunnel.detail = undefined;
+}
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { stopTunnel(); process.exit(0); });
+process.on('exit', () => tunnel.proc?.kill());
+
+/** Só a máquina do host (acesso direto por localhost) controla o túnel — pedidos que chegam pelo próprio túnel trazem `cf-connecting-ip`. */
+function isLocalHostRequest(req: http.IncomingMessage): boolean {
+  if (req.headers['cf-connecting-ip']) return false;
+  const host = (req.headers.host ?? '').replace(/:\d+$/, '');
+  const addr = req.socket.remoteAddress ?? '';
+  return (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') && (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1');
+}
+
+function tunnelJson(): string {
+  return JSON.stringify({ status: tunnel.status, url: tunnel.url, error: tunnel.error, detail: tunnel.detail });
+}
 
 // ------------------------------------------------------------------- server
 
@@ -788,6 +928,7 @@ httpServer.listen(PORT, () => {
   }
   console.log('');
   console.log('  Crie a sala, compartilhe o codigo de 5 letras e boa partida.');
+  console.log('  Para jogar pela internet: na sala, clique em "Gerar link publico".');
   console.log('  Feche esta janela para desligar o servidor.');
   console.log('');
   // Packaged (.exe) experience: pop the browser automatically.

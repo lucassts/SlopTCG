@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CountedCard, DeckSpec, LobbyPlayer } from '@sloptcg/protocol';
 import { serverHttpBase } from '../net';
 import { parseDecklist, resolveDecklist } from '../scryfall';
@@ -20,6 +20,26 @@ export function Lobby({ roomCode, you, players, onSetDeck, onReady, onStart }: L
   const [importing, setImporting] = useState(false);
   const [importInfo, setImportInfo] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Link público (túnel): só o host, servido por localhost, pode abrir.
+  const isHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  const [tunnel, setTunnel] = useState<{ status: string; url?: string; error?: string; detail?: string } | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const refreshTunnel = async () => {
+    try { const r = await fetch(`${serverHttpBase()}/api/tunnel`); if (r.ok) setTunnel(await r.json()); } catch { /* servidor fora */ }
+  };
+  const startTunnel = async () => {
+    setTunnel({ status: 'starting', detail: 'preparando…' });
+    try { const r = await fetch(`${serverHttpBase()}/api/tunnel`, { method: 'POST' }); setTunnel(await r.json()); } catch (e) { setTunnel({ status: 'error', error: e instanceof Error ? e.message : 'falha' }); }
+  };
+  const stopTunnel = async () => { try { const r = await fetch(`${serverHttpBase()}/api/tunnel`, { method: 'DELETE' }); setTunnel(await r.json()); } catch { /* ignora */ } };
+  useEffect(() => {
+    if (!isHost) return;
+    void refreshTunnel();
+    const t = setInterval(() => { void refreshTunnel(); }, 2000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHost]);
+  const publicLink = tunnel?.status === 'on' && tunnel.url ? `${tunnel.url}/?sala=${roomCode}` : null;
   const [preview, setPreview] = useState<{ main: CountedCard[]; side: CountedCard[] } | null>(null);
   const [previewMode, setPreviewMode] = useState<DeckViewMode>('list');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -109,6 +129,38 @@ export function Lobby({ roomCode, you, players, onSetDeck, onReady, onStart }: L
         {roomCode}
       </div>
       <div className="muted">{copied ? 'copiado!' : 'mande este código para o seu oponente'}</div>
+      {isHost && (
+        <div className="home-card" style={{ marginTop: 10 }}>
+          <div className="panel-title">Jogar pela internet</div>
+          {publicLink ? (
+            <>
+              <div
+                className="room-code"
+                style={{ fontSize: 14, letterSpacing: 0, wordBreak: 'break-all', cursor: 'pointer' }}
+                title="Clique para copiar"
+                onClick={() => { navigator.clipboard?.writeText(publicLink); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 1500); }}
+              >
+                {publicLink}
+              </div>
+              <div className="muted">{linkCopied ? 'link copiado!' : 'mande este link ao oponente — ele abre o jogo já com o código da sala. O link vale enquanto o SlopTCG estiver aberto.'}</div>
+              <button onClick={() => void stopTunnel()}>Desligar o link</button>
+            </>
+          ) : (
+            <>
+              <div className="muted">
+                {tunnel?.status === 'error'
+                  ? `Não deu: ${tunnel.error ?? 'erro'}`
+                  : tunnel?.status === 'downloading' || tunnel?.status === 'starting'
+                    ? tunnel.detail ?? 'preparando…'
+                    : 'Gera um link https temporário para o oponente entrar de qualquer lugar, sem VPN nem porta no roteador (túnel da Cloudflare, sem conta).'}
+              </div>
+              <button className="primary" disabled={tunnel?.status === 'downloading' || tunnel?.status === 'starting'} onClick={() => void startTunnel()}>
+                {tunnel?.status === 'downloading' || tunnel?.status === 'starting' ? '…' : '🌐 Gerar link público'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="home-card">
         <div className="lobby-players">
