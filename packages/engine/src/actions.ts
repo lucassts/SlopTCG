@@ -18,7 +18,7 @@ export type PlayerAction =
   /** London mulligan: shuffle the hand back and draw 7 again. */
   | { type: 'mulligan' }
   /** Keep the hand, putting exactly `bottom` (= mulligans taken) on the bottom. */
-  | { type: 'keepHand'; bottom: number[] }
+  | { type: 'keepHand'; bottom: number[]; /** Leylines: which "opening hand" cards begin the game on the battlefield (undefined = all of them). */ beginOnBattlefield?: number[] }
   | { type: 'playLand'; objectId: number; /** MDFC: play the back face (a land). */ face?: 'back' }
   | {
       type: 'castSpell';

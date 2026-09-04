@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-04, v0.22.0 — Leva 6a parte 8, Legacy a 92,8%)
+## Estado (2026-09-04, v0.22.1 — Leva 6a parte 8, Legacy a 92,8%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | **v0.22 (L6a·8)** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -430,6 +430,17 @@ fim de cada jogo mostra "você venceu/perdeu o jogo N" com botão "Ir para o
 sideboard" (o sideboard só abre depois), e o fim da série mostra quem venceu
 a partida com o placar. Legacy: 199 cartas com lacuna (310 de 509 full),
 92,8% ponderado.
+
+**v0.22.1** (pedido do Lucas: Leyline of the Void e Tamiyo, Inquisitive
+Student). As duas já compilavam full; o que faltava era o "you may" das
+cartas de efeito pré-jogo: ao manter a mão, o cliente pergunta, para cada
+carta com `openingHand`, se ela começa no campo, e manda
+`keepHand.beginOnBattlefield` (sem a lista, todas começam — testes e
+auditor); o log registra "X começa o jogo com Y no campo de batalha".
+Tamiyo: a mão inicial contava como sete compras "do turno" (a terceira
+compra nunca chegava no turno 1) — `drawsThisTurn` zera ao começar o
+primeiro turno. Verificado no navegador (duas Leylines na mão: uma no campo,
+outra na mão).
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

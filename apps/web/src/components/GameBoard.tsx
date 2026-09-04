@@ -147,6 +147,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const [selBlocker, setSelBlocker] = useState<number | null>(null);
   const [discardSel, setDiscardSel] = useState<Set<number>>(new Set());
   const [bottomSel, setBottomSel] = useState<Set<number>>(new Set());
+  /** Leylines da mão inicial que o jogador decidiu NÃO começar no campo. */
+  const [leyOut, setLeyOut] = useState<Set<number>>(new Set());
   const [choiceSel, setChoiceSel] = useState<Set<number>>(new Set());
   const [modalPick, setModalPick] = useState<CardView | null>(null);
   const [modalSel, setModalSel] = useState<Set<number>>(new Set());
@@ -1531,11 +1533,22 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     Para manter, escolha {mullTaken} carta(s) para o fundo da biblioteca ({bottomSel.size}/{mullTaken}).
                   </div>
                 )}
+                {(me.hand ?? []).filter((c) => c.card.openingHand && !bottomSel.has(c.objectId)).map((c) => (
+                  <div key={c.objectId} className="row" style={{ alignItems: 'center', gap: 8 }}>
+                    <span className="muted">{c.card.name}: começar o jogo com ela no campo de batalha?</span>
+                    <button
+                      className={leyOut.has(c.objectId) ? '' : 'primary'}
+                      onClick={() => { const next = new Set(leyOut); if (next.has(c.objectId)) next.delete(c.objectId); else next.add(c.objectId); setLeyOut(next); }}
+                    >
+                      {leyOut.has(c.objectId) ? 'Não, fica na mão' : 'Sim, no campo'}
+                    </button>
+                  </div>
+                ))}
                 <div className="row">
                   <button
                     className="primary"
                     disabled={bottomSel.size !== mullTaken}
-                    onClick={() => onAction({ type: 'keepHand', bottom: [...bottomSel] })}
+                    onClick={() => onAction({ type: 'keepHand', bottom: [...bottomSel], beginOnBattlefield: (me.hand ?? []).filter((c) => c.card.openingHand && !bottomSel.has(c.objectId) && !leyOut.has(c.objectId)).map((c) => c.objectId) })}
                   >
                     Manter mão
                   </button>

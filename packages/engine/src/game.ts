@@ -175,6 +175,8 @@ export class Game {
   private beginFirstTurn(): void {
     const s = this.state;
     s.turn = 1;
+    // A mão inicial não é "comprada em um turno": Tamiyo ("third card in a turn") e afins contam do zero.
+    for (const p of PLAYER_IDS) s.players[p].drawsThisTurn = 0;
     this.emit({ type: 'turnBegan', turn: 1, activePlayer: s.activePlayer });
     this.enterStep('untap');
     this.advanceLoop();
@@ -204,7 +206,7 @@ export class Game {
     return true;
   }
 
-  private doKeepHand(playerId: PlayerId, bottom: number[]): boolean {
+  private doKeepHand(playerId: PlayerId, bottom: number[], beginOnBattlefield?: number[]): boolean {
     const s = this.state;
     const mull = s.mulligan;
     if (!mull || mull.phase[playerId] !== 'deciding')
@@ -229,11 +231,14 @@ export class Game {
     mull.phase[playerId] = 'kept';
     this.emit({ type: 'handKept', player: playerId, bottomed: mustBottom });
     // Leylines: "If this card is in your opening hand, you may begin the game with it on the battlefield."
-    for (const id of [...player.zones.hand]) {
+    // O cliente manda quais começam no campo; sem a lista, todas começam.
+    const leylines = [...player.zones.hand].filter((id) => s.objects[id].card.openingHand);
+    const chosen = beginOnBattlefield ? leylines.filter((id) => beginOnBattlefield.includes(id)) : leylines;
+    for (const id of chosen) {
       const ley = s.objects[id];
-      if (!ley.card.openingHand) continue;
       moveWithEvent(s, ley, 'battlefield', 'resolved', this.emit);
       this.applyEnterTapRules(ley);
+      this.emit({ type: 'fizzled', description: `${player.name} começa o jogo com ${ley.card.name} no campo de batalha` });
     }
     if (PLAYER_IDS.every((p) => mull.phase[p] === 'kept')) {
       s.mulligan = null;
@@ -324,7 +329,7 @@ export class Game {
       case 'mulligan':
         return this.doMulligan(playerId);
       case 'keepHand':
-        return this.doKeepHand(playerId, action.bottom);
+        return this.doKeepHand(playerId, action.bottom, action.beginOnBattlefield);
       case 'playLand':
         return this.doPlayLand(playerId, action.objectId, action.face);
       case 'castSpell':
