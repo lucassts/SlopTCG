@@ -96,6 +96,8 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return `${name(ev.player)} criou uma ficha: ${ev.name}.`;
     case 'attached':
       return `${ev.sourceName} foi anexada a ${ev.hostName}.`;
+    case 'phased':
+      return ev.out ? `${ev.cardName} saiu de fase.` : `${ev.cardName} voltou à fase.`;
     case 'copiesCreated':
       return ev.reason === 'storm'
         ? `Tempestade: ${ev.count} cópia(s) de ${ev.cardName} na pilha.`

@@ -84,6 +84,10 @@ export type GameEvent =
   | { type: 'hideawayExiled'; player: PlayerId; sourceName: string }
   /** An object became the target of a spell or ability (trigger hook). */
   | { type: 'targeted'; objectId: number; by: PlayerId }
+  /** An ability controlled by `by` was put on the stack with at least one target (Loki). */
+  | { type: 'abilityTargeted'; by: PlayerId; count: number }
+  /** Phasing: `out` = the permanent phased out; otherwise it phased in. */
+  | { type: 'phased'; objectId: number; cardName: string; out: boolean }
   | { type: 'shuffled'; player: PlayerId }
   | { type: 'priorityChanged'; player: PlayerId | null }
   | { type: 'decisionRequired'; player: PlayerId; decision: string }

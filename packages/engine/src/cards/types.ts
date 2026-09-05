@@ -662,6 +662,12 @@ export type EffectStep =
   | { op: 'planarHand' }
   /** (choice) Discover N: exile from the top until a nonland card with mana value N or less; cast it free or put it into your hand. */
   | { op: 'discover'; amount: number }
+  /** Talon Gates of Madara: the permanent phases out (returns at its controller's next untap step). */
+  | { op: 'phaseOut'; what: SubjectRef }
+  /** Talon Gates: "{4}: Put this card from your hand onto the battlefield." */
+  | { op: 'selfToBattlefield' }
+  /** (choice) Chain Lightning: the damaged player (or the permanent's controller) may pay `cost` to copy the spell with a new target. */
+  | { op: 'chainCopy'; cost: string; damage: number }
   /** (choice) The player sacrifices `count` permanents matching the filter. */
   | { op: 'sacrifice'; who: WhoSel; filter?: FilterSpec; count: number }
   /** (choice) Look at the top N; chosen cards go to the bottom. */
@@ -756,6 +762,8 @@ export type TriggerSpec =
   | { on: 'becomesBlocked'; self: true }
   /** Becomes the target of a spell or ability (any controller, or opponents' only). */
   | { on: 'becomesTargeted'; self: true; byOpponent?: boolean }
+  /** Loki: "Whenever a player or permanent becomes the target of an ability you control". */
+  | { on: 'yourAbilityTargets' }
   /** The controller draws a card. */
   | { on: 'youDrawCard' }
   /** This creature deals combat damage to a player. */

@@ -19,7 +19,7 @@ import {
 } from './effects.js';
 import type { GameEvent } from './events.js';
 import { canPay, costCmc, costLabel, parseCost, planPayment } from './mana.js';
-import { applyEnterTapRules, castCardFree, dredgeOptions } from './effects.js';
+import { applyEnterTapRules, castCardFree, dredgeOptions, phaseInAll } from './effects.js';
 import { sameName } from './state.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
@@ -1520,6 +1520,7 @@ export class Game {
     const targetErr = this.validateTargets(playerId, ability.targets, targets, obj.card.colors, x);
     if (targetErr) { this.fail(playerId, targetErr); return false; }
     for (const t of targets) if (t.kind === 'object') this.emit({ type: 'targeted', objectId: t.id, by: playerId });
+    if (targets.length > 0) this.emit({ type: 'abilityTargeted', by: playerId, count: targets.length });
 
     // Sacrifice-another cost (Viscera Seer): validated before paying anything.
     const abilitySacs = sacrifices ?? [];
@@ -2144,6 +2145,7 @@ export class Game {
         this.checkDayNight();
         const player = s.players[s.activePlayer];
         player.landsPlayedThisTurn = 0;
+        phaseInAll(s, s.activePlayer, this.emit);
         for (const id of player.zones.battlefield) {
           const obj = s.objects[id];
           obj.summoningSick = false;
@@ -2760,6 +2762,14 @@ export class Game {
           if (atk.card.afflict) changeLife(s, opponentOf(atk.controller), -atk.card.afflict, `afligir de ${atk.card.name}`, this.emit);
         }
       }
+      if (ev.type === 'abilityTargeted') {
+        for (const id of [...this.state.players[ev.by].zones.battlefield]) {
+          const o = this.state.objects[id];
+          (o?.card.abilities ?? []).forEach((ab, idx) => {
+            if (ab.kind === 'triggered' && ab.trigger.on === 'yourAbilityTargets' && abilityActive(o, ab)) this.pushTrigger(o, ab, undefined, undefined, { abilityIndex: idx });
+          });
+        }
+      }
       if (ev.type === 'targeted') {
         const o = this.state.objects[ev.objectId];
         for (const ability of o?.card.abilities ?? []) {
@@ -3357,6 +3367,8 @@ export class Game {
       s.priority = playerId;
       return true;
     }
+    for (const t of targets) if (t.kind === 'object') this.emit({ type: 'targeted', objectId: t.id, by: playerId });
+    if (targets.length > 0) this.emit({ type: 'abilityTargeted', by: playerId, count: targets.length });
     s.stack.push({
       id: s.nextStackId++,
       kind: 'ability',

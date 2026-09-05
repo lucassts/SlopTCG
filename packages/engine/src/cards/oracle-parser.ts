@@ -628,6 +628,13 @@ function parseEffectText(
   }
   // Discover N (Trumpeting Carnosaur).
   if ((m = text.match(/^discover (\d+)\.?$/i))) return { steps: [{ op: 'discover', amount: parseInt(m[1], 10) }] };
+  // Talon Gates of Madara.
+  if (/^up to one target creature phases out\.?$/i.test(text)) return { steps: [{ op: 'phaseOut', what: 'target:0' }], spec: { what: 'creature', optional: true } };
+  if (/^target creature phases out\.?$/i.test(text)) return { steps: [{ op: 'phaseOut', what: 'target:0' }], spec: { what: 'creature' } };
+  // Chain Lightning.
+  if ((m = text.match(/^(?:~|this spell) deals (\d+) damage to any target\. Then that player or that permanent's controller may pay ((?:\{[^}]+\})+)\. If the player does, they may copy (?:this spell|~) and may choose a new target for that copy\.$/i))) {
+    return { steps: [{ op: 'damage', to: 'target:0', amount: parseInt(m[1], 10) }, { op: 'chainCopy', cost: m[2], damage: parseInt(m[1], 10) }], spec: { what: 'any' } };
+  }
   // Sejiri Steppe.
   if (/^target creature you control gains protection from the color of your choice until end of turn\.?$/i.test(text)) {
     return { steps: [{ op: 'chooseValue', kind: 'color' }, { op: 'protectionChosenUntilEot', what: 'target:0' }], spec: { what: 'creature', controlledBy: 'you' } };
@@ -1354,6 +1361,7 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^When ~ is put into a graveyard from the battlefield$/i.test(head)) return { trigger: { on: 'dies', self: true } };
   if (/^Whenever ~ becomes blocked$/i.test(head)) return { trigger: { on: 'becomesBlocked', self: true } };
   if (/^Whenever ~ becomes the target of a spell or ability$/i.test(head)) return { trigger: { on: 'becomesTargeted', self: true } };
+  if (/^Whenever a player or permanent becomes the target of an ability you control$/i.test(head)) return { trigger: { on: 'yourAbilityTargets' } };
   if (/^Whenever ~ becomes the target of a spell or ability an opponent controls$/i.test(head)) return { trigger: { on: 'becomesTargeted', self: true, byOpponent: true } };
   if (/^Whenever you draw a card$/i.test(head)) return { trigger: { on: 'youDrawCard' } };
   if (/^Whenever ~ attacks?$/i.test(head)) return { trigger: { on: 'attacks', self: true } };
@@ -1989,6 +1997,11 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // Hexing Squelcher.
   if (/^Spells you control can't be countered\.$/i.test(line)) { st.flags12.yourSpellsUncounterable = true; return true; }
   if ((m = line.match(/^Other creatures you control have "Ward—Pay (\d+) life\."\.?$/i))) { st.flags12.grantWardLifeOthers = parseInt(m[1], 10); return true; }
+  // Talon Gates of Madara: "{4}: Put this card from your hand onto the battlefield."
+  if ((m = line.match(/^((?:\{[^}]+\})+): Put (?:this card|~) from your hand onto the battlefield\.$/i))) {
+    st.abilities.push({ kind: 'activated', zone: 'hand', cost: { mana: m[1] }, effect: [{ op: 'selfToBattlefield' }], text: `${m[1]}: põe esta carta da mão no campo de batalha` });
+    return true;
+  }
   // Hogaak: várias keywords numa linha ("Convoke, delve").
   if ((m = line.match(/^([A-Z][a-z]+)(?:, ([a-z]+))+$/)) && /^(?:Convoke|Delve|Flying|Trample|Haste|Vigilance|Lifelink|Deathtouch|Reach|Menace)(?:, (?:convoke|delve|flying|trample|haste|vigilance|lifelink|deathtouch|reach|menace))+$/.test(line)) {
     for (const w of line.split(', ')) if (!parseLine(w.charAt(0).toUpperCase() + w.slice(1), st, isSpell, subtypes)) return false;

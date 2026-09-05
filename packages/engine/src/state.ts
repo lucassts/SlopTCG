@@ -93,6 +93,8 @@ export interface GameObject {
   protectionUntilEot?: import('./types.js').Color[];
   /** Scythecat Cub: resolutions this turn of abilities keyed by `markResolved`. */
   resolvedThisTurn?: Record<string, number>;
+  /** Phased out: still "on the battlefield" for zone purposes, but out of the battlefield list until the controller's next untap step. */
+  phasedOut?: boolean;
   /** Riftstone Portal: this land currently has the granted mana ability (riftPrinted holds the real card). */
   riftGranted?: boolean;
   riftPrinted?: CardDefinition;
@@ -333,6 +335,8 @@ export interface PlayerState {
   preventNext?: number;
   preventAllThisTurn?: boolean;
   landsPlayedThisTurn: number;
+  /** Permanents phased out (ids); they phase in at this player's untap step. */
+  phasedOut?: number[];
   zones: Record<Exclude<ZoneName, 'stack'>, number[]>;
 }
 
