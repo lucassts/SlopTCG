@@ -89,6 +89,10 @@ export interface GameObject {
   manaSpent?: number;
   /** Maze of Ith: no combat damage dealt to or by this creature this turn. */
   preventCombatThisTurn?: boolean;
+  /** Sejiri Steppe: protection from these colors until end of turn. */
+  protectionUntilEot?: import('./types.js').Color[];
+  /** Scythecat Cub: resolutions this turn of abilities keyed by `markResolved`. */
+  resolvedThisTurn?: Record<string, number>;
   /** Riftstone Portal: this land currently has the granted mana ability (riftPrinted holds the real card). */
   riftGranted?: boolean;
   riftPrinted?: CardDefinition;
@@ -192,6 +196,13 @@ export interface DelayedAction {
 }
 
 /** Creature on the battlefield — printed type, a crewed vehicle, or a face-down 2/2. */
+/** Card names compared the way people type them: case, accents and spacing don't matter (Pithing Needle, Disruptor Flute). */
+export function sameName(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  const norm = (x: string) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return norm(a) === norm(b) || norm(a) === norm(b.split(' // ')[0]);
+}
+
 export function isCreature(obj: GameObject): boolean {
   // Impending: not a creature while it has time counters.
   if (obj.impending && (obj.counters['time'] ?? 0) > 0) return false;
@@ -478,6 +489,10 @@ export interface GameState {
   gambitPicks?: Partial<Record<PlayerId, number>>;
   /** Beseech the Mirror: the card exiled by the last search-to-exile. */
   lastSearchedExile?: number;
+  /** Planar Genesis: the cards looked at, awaiting the hand pick. */
+  lastPlanarTop?: number[];
+  /** Discover: cards exiled by the reveal and the hit. */
+  lastDiscover?: { ids: number[]; hit?: number };
   /** Liliana −6: pile A chosen by the controller, awaiting the victim's choice. */
   pileA?: number[];
   /** Portent of Calamity: cards exiled by the reveal, for the cast-free step. */
@@ -728,6 +743,9 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'triggeringManaSpentAtLeast': return false; // needs the effect context (condHolds)
     case 'sacrificedWasSubtype': return false; // needs the effect context (condHolds)
     case 'descended': return (state.players[me].permanentCardsToGraveyardThisTurn ?? 0) > 0;
+    case 'sourceUntapped': return !source.tapped;
+    case 'targetIsPermanentCard': return false; // needs the effect context (condHolds)
+    case 'resolvedNthThisTurn': return (source.resolvedThisTurn?.[cond.key] ?? 0) === cond.n;
     case 'compare': return false; // needs the effect context (condHolds)
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
@@ -823,6 +841,8 @@ function attachmentBonus(state: GameState, obj: GameObject): { power: number; to
     if (e.powerPer) power += battlefield(state).filter((o) => matchFilter(ctx, e.powerPer!, o)).length;
     if (e.toughnessPer) toughness += battlefield(state).filter((o) => matchFilter(ctx, e.toughnessPer!, o)).length;
     if (e.powerPerGraveyard) power += state.players[ctx.controller].zones.graveyard.filter((id) => cardMatchesFilter(state.objects[id].card, e.powerPerGraveyard!)).length;
+    if (e.powerPerCounterOnSelf) power += a.counters[e.powerPerCounterOnSelf] ?? 0;
+    if (e.toughnessPerCounterOnSelf) toughness += a.counters[e.toughnessPerCounterOnSelf] ?? 0;
     if (e.toughnessPerGraveyard) toughness += state.players[ctx.controller].zones.graveyard.filter((id) => cardMatchesFilter(state.objects[id].card, e.toughnessPerGraveyard!)).length;
   }
   return { power, toughness };
@@ -841,6 +861,7 @@ export function cdaValue(state: GameState, obj: GameObject, amount: import('./ca
   }
   const ctx = { controller: me, sourceId: obj.id, state };
   if ('per' in amount) return battlefield(state).filter((o) => matchFilter(ctx, amount.per, o)).length;
+  if ('exiledWith' in amount) return Object.values(state.objects).filter((o) => o.zone === 'exile' && o.exiledBy === obj.id).length;
   if ('graveyardCount' in amount) {
     const who: PlayerId[] = amount.graveyardCount === 'each' ? [...PLAYER_IDS] : amount.graveyardCount === 'opponent' ? [opponentOf(me)] : [me];
     return who.reduce((n, p) => n + state.players[p].zones.graveyard.filter((id) => !amount.filter || cardMatchesFilter(state.objects[id].card, amount.filter)).length, 0);

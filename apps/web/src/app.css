@@ -580,3 +580,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   .my-field { grid-row: 5; }
   .my-bar { grid-row: 6; }
 }
+
+/* Nomear carta: sugestões do Scryfall */
+.name-suggestions { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow-y: auto; width: min(360px, 80vw); margin: 8px auto; }
+.name-suggestion { text-align: left; padding: 6px 10px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; color: inherit; cursor: pointer; font: inherit; }
+.name-suggestion:hover { background: rgba(255, 255, 255, 0.18); }

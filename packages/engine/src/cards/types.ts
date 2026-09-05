@@ -27,6 +27,12 @@ export type Cond =
   | { kind: 'yourTurn' }
   /** Molten Collapse: a permanent card was put into your graveyard from anywhere this turn. */
   | { kind: 'descended' }
+  /** Mystic Sanctuary: "When ~ enters untapped". */
+  | { kind: 'sourceUntapped' }
+  /** Lion Sash: "If it was a permanent card" (the first target's card has a permanent type). */
+  | { kind: 'targetIsPermanentCard' }
+  /** Scythecat Cub: this ability (by key) has resolved N times this turn, counting this one. */
+  | { kind: 'resolvedNthThisTurn'; key: string; n: number }
   /** Minsc & Boo −2: the creature sacrificed by this script had the subtype. */
   | { kind: 'sacrificedWasSubtype'; subtype: string }
   /** Exhibition Tidecaller: the triggering spell was cast with at least N mana. */
@@ -234,6 +240,8 @@ export type DynAmount =
   | { halfLibraryOf: WhoSel; round: 'up' | 'down' }
   /** Debt to the Deathless: "life equal to the life lost this way" (accumulated by loseLife steps of the same script). */
   | 'lifeLostThisWay'
+  /** Unlicensed Hearse: cards exiled with this. */
+  | { exiledWith: 'self' }
   /** Devotion to a color: mana symbols of that color in the mana costs of permanents you control (Thassa's Oracle). */
   | { devotion: Color }
   /** Number of cards in a library. */
@@ -241,7 +249,7 @@ export type DynAmount =
 
 /** What a target may legally be. Validated at cast time and at resolution. */
 export interface TargetSpec {
-  what: 'any' | 'creature' | 'player' | 'permanent' | 'spell' | 'land' | 'artifact' | 'enchantment' | 'stackItem';
+  what: 'any' | 'creature' | 'player' | 'permanent' | 'spell' | 'land' | 'artifact' | 'enchantment' | 'stackItem' | /** any card (graveyard targets: Lion Sash, Unlicensed Hearse). */ 'card';
   /** 'stackItem': which abilities on the stack qualify; `allowSpell` also accepts spells (Consign to Memory: colorless ones). */
   abilityKinds?: ('activated' | 'triggered')[];
   allowSpell?: { colorless?: boolean };
@@ -634,6 +642,26 @@ export type EffectStep =
   | { op: 'untapEach'; filter: FilterSpec }
   /** Two creatures deal damage equal to their power to each other. */
   | { op: 'fight'; a: SubjectRef; b: SubjectRef; /** Mawloc: "If that creature would die this turn, exile it instead." */ exileIfDies?: boolean }
+  /** Echo of Eons: each player shuffles hand and graveyard into their library, then draws N. */
+  | { op: 'echoOfEons'; draw: number }
+  /** Golgari Thug / Mystic Sanctuary: put the target card (from a graveyard) on top of its owner's library. */
+  | { op: 'toLibraryTop'; what: SubjectRef }
+  /** Skyclave Apparition: for each card exiled by this, its owner creates an X/X token where X is the card's mana value. */
+  | { op: 'tokenForExiledByThis'; color: Color; subtype: string }
+  /** Sejiri Steppe: protection from the source's chosen color until end of turn. */
+  | { op: 'protectionChosenUntilEot'; what: SubjectRef }
+  /** Scythecat Cub: count this ability's resolutions this turn under `key`. */
+  | { op: 'markResolved'; key: string }
+  /** Scythecat Cub: double the counters of that kind on the object. */
+  | { op: 'doubleCounters'; what: SubjectRef; counter: string }
+  /** (choice) The Tabernacle at Pendrell Vale: for each creature of the active player, pay {1} or destroy it (one at a time). */
+  | { op: 'tabernacleTax'; index?: number }
+  /** (choice) Planar Genesis: pick a land among the top N for the battlefield tapped (none → next step picks a card for the hand). */
+  | { op: 'planarPick'; count: number }
+  /** (choice) Planar Genesis: pick a card among the revealed ones for your hand; the rest go to the bottom. */
+  | { op: 'planarHand' }
+  /** (choice) Discover N: exile from the top until a nonland card with mana value N or less; cast it free or put it into your hand. */
+  | { op: 'discover'; amount: number }
   /** (choice) The player sacrifices `count` permanents matching the filter. */
   | { op: 'sacrifice'; who: WhoSel; filter?: FilterSpec; count: number }
   /** (choice) Look at the top N; chosen cards go to the bottom. */
@@ -663,7 +691,7 @@ export type EffectStep =
   | { op: 'copySpell'; what: SubjectRef }
   /** Fog: no combat damage is dealt for the rest of this turn. */
   | { op: 'preventCombatDamage' }
-  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean }
+  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Urza's Workshop: repeat the symbols N times. */ times?: DynAmount; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean }
   /** "Add one mana of any color" (or "of these colors") — the activation
    *  carries the chosen color; `colors` restricts the legal choices. */
   | { op: 'addManaChoice'; who: PlayerSel; count?: DynAmount; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean; /** Carpet of Flowers: remember the use for \"if you haven't added mana with this ability this turn\". */ markUsed?: boolean }
@@ -851,6 +879,8 @@ export interface ActivatedAbility extends LevelGate {
     discardSelf?: boolean;
     /** "Remove N X counters from ~". */
     removeCounters?: { counter: string; count: number };
+    /** Quirion Ranger: "Return a Forest you control to its owner's hand" as a cost (chosen like a sacrifice). */
+    returnToHand?: FilterSpec;
     /** Lion's Eye Diamond: discard your whole hand. */
     discardHand?: boolean;
     /** Simian Spirit Guide: exile this card from your hand. */
@@ -1190,6 +1220,32 @@ export interface CardDefinition {
   riftstoneGrant?: Color[];
   /** Molten Collapse: "Choose one. If <cond>, you may choose both instead." */
   spellModeChoiceIf?: { cond: Cond; max: number };
+  /** Apex Devastator: "Cascade, cascade, cascade, cascade". */
+  cascadeCount?: number;
+  /** Archon of Emeria: "Nonbasic lands your opponents control enter tapped." */
+  opponentsNonbasicLandsEnterTapped?: boolean;
+  /** Ensnaring Bridge: creatures with power greater than the number of cards in this permanent's controller's hand can't attack. */
+  ensnaringBridge?: boolean;
+  /** Gaddock Teeg: noncreature spells with mana value 4+ or {X} can't be cast. */
+  gaddockTeeg?: boolean;
+  /** Trinisphere: while untapped, spells that would cost less than three mana cost three. */
+  trinisphere?: boolean;
+  /** Clarion Conqueror: activated abilities of permanents of these types can't be activated. */
+  lockAbilitiesOfTypes?: CardType[];
+  /** Silent Gravestone: cards in graveyards can't be targeted. */
+  noGraveyardTargets?: boolean;
+  /** Anointed Peacekeeper: look at an opponent's hand as this enters (before naming a card). */
+  revealOpponentHandOnEnter?: boolean;
+  /** Anointed Peacekeeper: activated abilities of sources with the chosen name cost {N} more (not mana abilities). */
+  activationTaxChosenName?: number;
+  /** Hogaak: "You can't spend mana to cast this spell." — convoke/delve pay everything. */
+  noManaToCast?: boolean;
+  /** Hogaak: "You may cast this card from your graveyard." */
+  castFromGraveyardSelf?: boolean;
+  /** Collective Brutality: "Escalate—Discard a card." — extra cost per mode beyond the first. */
+  escalate?: { discard?: number };
+  /** The Tabernacle at Pendrell Vale. */
+  tabernacle?: boolean;
   /** Cycling trigger ("When you cycle this card, X"). */
   cyclingTrigger?: EffectScript;
   // ---- Leva 5b: faces, P/T variável, mecânicas rules-heavy
@@ -1340,6 +1396,9 @@ export interface CardDefinition {
     power?: number;
     toughness?: number;
     keywords?: Keyword[];
+    /** Lion Sash: "+1/+1 for each +1/+1 counter on this Equipment". */
+    powerPerCounterOnSelf?: string;
+    toughnessPerCounterOnSelf?: string;
     cantAttack?: boolean;
     cantBlock?: boolean;
     doesntUntap?: boolean;

@@ -102,8 +102,8 @@ export function dealDamageToObject(
 ): void {
   if (amount <= 0) return;
   // Protection from [color]: all damage from sources of that color is prevented.
-  const prot = target.card.protectionFrom;
-  if (prot && opts?.sourceColors?.some((c) => prot.includes(c))) {
+  const prot = [...(target.card.protectionFrom ?? []), ...(target.protectionUntilEot ?? [])];
+  if (prot.length > 0 && opts?.sourceColors?.some((c) => prot.includes(c))) {
     emit({ type: 'damagePrevented', sourceName, targetName: target.card.name, amount });
     return;
   }

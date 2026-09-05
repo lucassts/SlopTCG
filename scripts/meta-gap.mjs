@@ -78,16 +78,17 @@ for (const a of selected) {
 
 // ------------------------------------------------------------ classificação
 const raw = JSON.parse(fs.readFileSync(path.join(root, 'data', 'oracle-cards.json'), 'utf8'));
+const normName = (n) => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 const byName = new Map();
 for (const c of raw) {
   if (['token', 'double_faced_token', 'emblem', 'art_series', 'vanguard', 'scheme', 'plane', 'phenomenon'].includes(c.layout)) continue;
-  const keys = [c.name.toLowerCase(), c.name.split('//')[0].trim().toLowerCase()];
+  const keys = [normName(c.name), normName(c.name.split('//')[0])];
   for (const k of keys) if (!byName.has(k) || (byName.get(k).set_type === 'funny' && c.set_type !== 'funny')) byName.set(k, c);
 }
 const cards = new Map(); // name → { name, status, weight, archetypes, failedLines, notes }
 const status = new Map();
 const classify = (name) => {
-  const key = name.toLowerCase().split('//')[0].trim();
+  const key = normName(name.split('//')[0]);
   if (status.has(key)) return status.get(key);
   const official = byName.get(key);
   let r;

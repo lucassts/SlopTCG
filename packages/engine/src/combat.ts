@@ -27,6 +27,10 @@ export function canAttack(state: GameState, obj: GameObject): string | null {
   if (obj.summoningSick && !hasKeyword(state, obj, 'haste')) return 'tem enjoo de invocação';
   if (hasKeyword(state, obj, 'defender')) return 'tem defensor';
   if (hasKeyword(state, obj, 'cantAttack')) return 'não pode atacar';
+  // Ensnaring Bridge: power greater than the number of cards in the Bridge controller's hand.
+  for (const p of ['p1', 'p2'] as PlayerId[]) for (const id of state.players[p].zones.battlefield) {
+    if (state.objects[id]?.card.ensnaringBridge && effectivePower(state, obj) > state.players[p].zones.hand.length) return `Ensnaring Bridge: poder maior que as ${state.players[p].zones.hand.length} carta(s) na mão do controlador`;
+  }
   if ((obj.cantAttackUntilTurn ?? -1) >= state.turn) return 'não pode atacar até o próximo turno do controlador';
   if (obj.card.attackRequiresDefenderSubtype) {
     const sub = obj.card.attackRequiresDefenderSubtype;
@@ -98,7 +102,7 @@ export function canBlock(state: GameState, blocker: GameObject, attacker: GameOb
   }
   if (hasKeyword(state, attacker, 'protectionFromCreatures')) return 'proteção contra criaturas: não pode ser bloqueado';
   // Protection: the attacker can't be blocked by creatures of those colors.
-  if (attacker.card.protectionFrom?.some((c) => blocker.card.colors.includes(c)))
+  if ([...(attacker.card.protectionFrom ?? []), ...(attacker.protectionUntilEot ?? [])].some((c) => blocker.card.colors.includes(c)))
     return `o atacante tem proteção contra as cores do bloqueador`;
   return null;
 }

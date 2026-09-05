@@ -336,9 +336,10 @@ function simulate(def) {
           if (!tc) { log.push(`habilidade ${i}: nenhuma criatura para virar — pulada`); return; }
           action.tapCreature = tc.id;
         }
-        if (ab.kind === 'activated' && ab.cost.sacrifice) {
-          const sac = s.players[me].zones.battlefield.map((id) => s.objects[id]).find((o) => o.id !== cardId && matchesFilter(o, ab.cost.sacrifice));
-          if (!sac) { log.push(`habilidade ${i}: nada para sacrificar — pulada`); return; }
+        if (ab.kind === 'activated' && (ab.cost.sacrifice || ab.cost.returnToHand)) {
+          const pickFilter = ab.cost.sacrifice ?? ab.cost.returnToHand;
+          const sac = s.players[me].zones.battlefield.map((id) => s.objects[id]).find((o) => o.id !== cardId && matchesFilter(o, pickFilter));
+          if (!sac) { log.push(`habilidade ${i}: nada para ${ab.cost.returnToHand ? 'devolver à mão' : 'sacrificar'} — pulada`); return; }
           action.sacrifices = [sac.id];
         }
         if (ab.kind === 'activated' && ab.cost.discard) {

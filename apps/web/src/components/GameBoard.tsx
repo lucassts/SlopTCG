@@ -173,6 +173,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const [actionMenu, setActionMenu] = useState<ActionMenu | null>(null);
   const [colorPick, setColorPick] = useState<{ objectId: number; abilityIndex: number; colors: string[]; name: string } | null>(null);
   const [nameText, setNameText] = useState('');
+  const [nameSuggestions, setNameSuggestions] = useState<string[]>([]);
   const [showManual, setShowManual] = useState(false);
   const [showStops, setShowStops] = useState(false);
   const [stops, setStops] = useState<StopsConfig>(loadStops);
@@ -627,7 +628,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const casualtyPick = def.casualty !== undefined && (await askConfirm(def.name, `Casualty ${def.casualty}: sacrificar uma criatura com poder ${def.casualty} ou mais para copiar a mágica?`, 'Sacrificar', 'Não'));
     if (casualtyPick) sacSpecs.push({ what: `criatura com poder ${def.casualty} ou mais para sacrificar (casualty)` });
     // Retrace: uma carta de terreno da mão para descartar, antes de tudo. Custo adicional de descarte: N cartas da mão.
-    const discardCost = extra.method !== 'retrace' && (!def.additionalCost?.either || eitherDiscard) ? def.additionalCost?.discard ?? 0 : 0;
+    const escalateDiscards = def.escalate?.discard ? Math.max(0, (extra.modes?.length ?? 0) - 1) * def.escalate.discard : 0;
+    const discardCost = (extra.method !== 'retrace' && (!def.additionalCost?.either || eitherDiscard) ? def.additionalCost?.discard ?? 0 : 0) + escalateDiscards;
     const handPickCount = extra.method === 'retrace' ? 1 : discardCost;
     const handSpecs = extra.method === 'retrace' ? [{ what: 'carta de terreno da sua mão para descartar' }] : Array.from({ length: discardCost }, () => ({ what: 'carta da sua mão para descartar' }));
     const targetSpecs = extra.fuse
@@ -783,13 +785,32 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     beginAbility(cv, idx, ability);
   };
 
+  // Nomear carta: sugestões do Scryfall enquanto digita, para evitar erro de digitação.
+  const nameMode = myChoice?.mode === 'nameCard';
+  useEffect(() => {
+    if (!nameMode) { setNameSuggestions([]); return; }
+    const q = nameText.trim();
+    if (q.length < 2) { setNameSuggestions([]); return; }
+    let alive = true;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(q)}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { data?: string[] };
+        if (alive) setNameSuggestions((data.data ?? []).slice(0, 10));
+      } catch { /* sem rede: segue só com o texto digitado */ }
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [nameMode, nameText]);
+
   /** Activate an ability, collecting sacrifice cost and targets by clicks. */
   const beginAbility = (
     cv: CardView,
     idx: number,
-    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; discard?: number; tapCreature?: boolean } },
+    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; returnToHand?: { what?: string }; discard?: number; tapCreature?: boolean } },
   ) => {
-    const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice : undefined;
+    const returnCost = typeof ability.cost === 'object' ? ability.cost.returnToHand : undefined;
+    const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice ?? returnCost : undefined;
     const discardCount = typeof ability.cost === 'object' ? ability.cost.discard ?? 0 : 0;
     const tapPick = typeof ability.cost === 'object' ? !!ability.cost.tapCreature : false;
     const sacCount = sacFilter ? 1 : 0;
@@ -806,7 +827,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           : tapPick
             ? `${cv.card.name}: ${ability.text} (escolha a criatura a virar)`
             : sacCount > 0
-              ? `${cv.card.name}: ${ability.text} (escolha o sacrifício primeiro)`
+              ? `${cv.card.name}: ${ability.text} (${returnCost ? 'escolha o que devolver à mão primeiro' : 'escolha o sacrifício primeiro'})`
               : `${cv.card.name}: ${ability.text}`;
       setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined, tapPick: tapPick || undefined });
     }
@@ -1457,12 +1478,21 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               onChange={(e) => setNameText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && nameText.trim()) {
-                  onAction({ type: 'effectChoice', picks: [], text: nameText.trim() });
+                  onAction({ type: 'effectChoice', picks: [], text: nameSuggestions.length === 1 ? nameSuggestions[0] : nameText.trim() });
                   setNameText('');
                 }
               }}
               style={{ width: 'min(360px, 80vw)' }}
             />
+            {nameSuggestions.length > 0 && (
+              <div className="name-suggestions">
+                {nameSuggestions.map((n) => (
+                  <button key={n} className="name-suggestion" onClick={() => { onAction({ type: 'effectChoice', picks: [], text: n }); setNameText(''); }}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               className="primary"
               disabled={!nameText.trim()}

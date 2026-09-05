@@ -48,6 +48,8 @@ export interface NounInfo {
   spell?: { spellType?: TargetSpec['spellType'] };
   /** "any target". */
   any?: boolean;
+  /** "card from a graveyard": any card, no type restriction. */
+  anyCard?: boolean;
   /** "spell or nonland permanent": a spell on the stack also qualifies. */
   orSpell?: boolean;
   /** Abilities on the stack (Stifle, Consign to Memory). */
@@ -77,6 +79,7 @@ export function parseNounG(raw: string): NounInfo | null {
   if (lower === 'each player' || lower === 'player') return { filter: {}, player: lower === 'player' ? 'target' : 'each' };
   if (lower === 'any target') return { filter: {}, any: true };
   if (lower === 'planeswalker' || lower === 'planeswalkers') return { filter: { what: 'permanent', typeAnyOf: ['Planeswalker'] } };
+  if ((m = n.match(/^(cards?) (?:from|in) (?:a|any|a single) graveyard$/i))) return { filter: {}, zone: 'graveyard', anyCard: true };
   if (lower === 'player or planeswalker' || lower === 'opponent or planeswalker') return { filter: {}, player: lower.startsWith('opponent') ? 'targetOpponent' : 'target' };
 
   // Abilities on the stack.
@@ -111,6 +114,7 @@ export function parseNounG(raw: string): NounInfo | null {
   if (/ other than ~$/i.test(n)) { n = n.replace(/ other than ~$/i, ''); filter.other = true; }
   { const ns = n.match(/^non-([A-Z][a-z]+) /); if (ns) { n = n.slice(ns[0].length); filter.notSubtype = ns[1]; } }
   // Land types used as nouns ("Desert card", "Gate").
+  if ((m = n.match(/^Urza's lands?$/i))) return { filter: { ...filter, what: 'land', subtype: "Urza's" }, zone };
   if (/^(?:Desert|Gate|Cave|Lair|Locus|Mine|Power-Plant|Tower|Sphere|Urza's)$/i.test(n)) return { filter: { ...filter, what: 'land', subtype: n.replace(/^urza's$/i, "Urza's") }, zone };
 
   // "spell or nonland permanent an opponent controls" (Sink into Stupor).
@@ -260,6 +264,7 @@ export function parseNounG(raw: string): NounInfo | null {
 /** Filter → target spec (targets are mostly battlefield permanents; graveyard cards keep zone). */
 export function filterToTargetSpec(info: NounInfo): TargetSpec | null {
   if (info.any) return { what: 'any' };
+  if (info.anyCard) return { what: 'card', zone: 'graveyard' };
   if (info.stackItem) return { what: 'stackItem', abilityKinds: info.stackItem.abilityKinds, allowSpell: info.stackItem.allowSpell };
   if (info.player) {
     return info.player === 'opponent' || info.player === 'targetOpponent' ? { what: 'player', controlledBy: 'opponent' } : { what: 'player' };
@@ -342,6 +347,7 @@ export function parseAmountG(text: string, subject: SubjectRef): DynAmount | nul
   if ((m = t.match(/^the number of ([\w+/-]+) counters? on (?:it|~|this creature|that creature)$/))) return { countersOn: subject, counter: m[1] };
   if ((m = t.match(/^half the number of cards in your library, rounded (up|down)$/))) return { halfLibraryOf: 'controller', round: m[1] as 'up' | 'down' };
   if (t === 'that number') return null;
+  if (/^the number of cards exiled with (?:it|~)$/.test(t)) return { exiledWith: 'self' };
   if ((m = t.match(/^twice (.+)$/))) { const inner = parseAmountG(m[1], subject); return inner === null ? null : { times: 2, of: inner }; }
   if ((m = t.match(/^(\w+) times (.+)$/))) { const k = num(m[1]); const inner = k === null ? null : parseAmountG(m[2], subject); return k === null || inner === null ? null : { times: k, of: inner }; }
   return null;
@@ -460,6 +466,8 @@ export function parseCondG(raw: string): Cond | null {
     const info = parseNounG(m[1]);
     return !info ? null : { kind: 'controlsAtLeast', count: 1, filter: { ...info.filter, controlledBy: 'you' } };
   }
+  if ((m = t.match(/^there are (\w+) or more card types among cards in your graveyard$/i))) { const n = num(m[1]); return n === null ? null : { kind: 'compare', left: { cardTypesInGraveyard: 'controller' }, cmp: 'gte', right: n }; }
+  if ((m = t.match(/^there are no ([\w+/-]+) counters on ~$/i))) return { kind: 'compare', left: { countersOn: 'self', counter: m[1] }, cmp: 'eq', right: 0 };
   if ((m = t.match(/^you control no (.+)$/i))) {
     const info = parseNounG(m[1]);
     return !info ? null : { kind: 'controlsAtMost', count: 0, filter: { ...info.filter, controlledBy: 'you' } };

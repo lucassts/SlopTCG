@@ -20,6 +20,7 @@ import {
 import type { GameEvent } from './events.js';
 import { canPay, costCmc, costLabel, parseCost, planPayment } from './mana.js';
 import { applyEnterTapRules, castCardFree, dredgeOptions } from './effects.js';
+import { sameName } from './state.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
 import { DUNGEONS } from './dungeons.js';
@@ -591,6 +592,7 @@ export class Game {
     const enterScript: import('./cards/types.js').EffectStep[] = [];
     if (card.soulbond) enterScript.push({ op: 'mayDo', prompt: `${card.name}: formar par com outra criatura (soulbond)?`, effect: [{ op: 'pairSoulbond' }] });
     if (card.copyOnEnter) { obj.copyPending = true; enterScript.push({ op: 'copyOf' }); }
+    if (card.revealOpponentHandOnEnter) this.emit({ type: 'handRevealed', player: opponentOf(obj.controller), cards: s.players[opponentOf(obj.controller)].zones.hand.map((id) => s.objects[id].card.name) });
     if (card.chooseOnEnter) enterScript.push({ op: 'chooseValue', kind: card.chooseOnEnter });
     if (card.devour) enterScript.push({ op: 'devour', per: card.devour });
     if (enterScript.length > 0) this.pushTrigger(obj, { text: 'ao entrar', effect: enterScript });
@@ -617,10 +619,13 @@ export class Game {
       return 'número de alvos incorreto';
     const upToX = required.filter((t) => t.upToX).length;
     if (upToX > 0 && targets.length > (xValue ?? 0)) return `no máximo X = ${xValue ?? 0} alvo(s)`;
+    const gravestone = PLAYER_IDS.some((p) => this.state.players[p].zones.battlefield.some((id) => this.state.objects[id]?.card.noGraveyardTargets));
     for (let i = 0; i < targets.length; i++) {
       const spec = required[i];
       if (!spec) return 'alvo em excesso';
-      if (!targetMatchesSpec(this.state, playerId, spec, targets[i], srcColors, xValue)) return 'alvo ilegal';
+      const t = targets[i];
+      if (gravestone && t.kind === 'object' && this.state.objects[t.id]?.zone === 'graveyard') return 'cartas em cemitérios não podem ser alvo (Silent Gravestone)';
+      if (!targetMatchesSpec(this.state, playerId, spec, t, srcColors, xValue)) return 'alvo ilegal';
     }
     return null;
   }
@@ -739,7 +744,10 @@ export class Game {
     const gyPerm = s.players[playerId].graveyardCastPermission;
     const viaGraveyardPermission = !!gyPerm && gyPerm.untilTurn === s.turn && obj.zone === 'graveyard' && !method && cardMatchesFilter(card, gyPerm.filter);
     // Emry: "You may cast that card this turn" (a single card in the graveyard).
-    const viaGraveyardCard = obj.zone === 'graveyard' && obj.castableFromGraveyardTurn === s.turn && !method;
+    const viaGraveyardCard = obj.zone === 'graveyard' && (obj.castableFromGraveyardTurn === s.turn || !!card.castFromGraveyardSelf) && !method;
+    // Gaddock Teeg: noncreature spells with mana value 4 or greater, or with {X}, can't be cast.
+    if (!card.types.includes('Creature') && (manaValueOf(card.manaCost) >= 4 || (card.manaCost ?? '').includes('{X}')) && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id]?.card.gaddockTeeg)))
+      { this.fail(playerId, `${card.name}: não pode ser conjurada (Gaddock Teeg)`); return false; }
     // Grafdigger's Cage: players can't cast spells from graveyards or libraries.
     if ((obj.zone === 'graveyard' || obj.zone === 'library') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id]?.card.cageNoCastFromGraveyardLibrary)))
       { this.fail(playerId, `${card.name}: não se conjura mágicas do cemitério ou da biblioteca (Grafdigger's Cage)`); return false; }
@@ -862,10 +870,13 @@ export class Game {
             : undefined);
     // Other additional costs: discard N (from the action), pay N life, exile N cards from your graveyard (first matching if not given).
     const addl = card.additionalCost;
-    const addlDiscards = addl?.discard ? (extra.discards ?? []) : [];
-    if (addl?.discard && !(addl.either && (sacrifices ?? []).length > 0)) {
-      if (addlDiscards.length !== addl.discard || new Set(addlDiscards).size !== addlDiscards.length)
-        { this.fail(playerId, `custo adicional: descarte ${addl.discard} carta(s)`); return false; }
+    const modesPickedCount = extra.modes?.length ?? (modeIndex !== undefined ? 1 : 0);
+    const escalateDiscards = card.escalate?.discard ? Math.max(0, modesPickedCount - 1) * card.escalate.discard : 0;
+    const needDiscards = (addl?.discard ?? 0) + escalateDiscards;
+    const addlDiscards = needDiscards > 0 ? (extra.discards ?? []) : [];
+    if (needDiscards > 0 && !(addl?.either && (sacrifices ?? []).length > 0)) {
+      if (addlDiscards.length !== needDiscards || new Set(addlDiscards).size !== addlDiscards.length)
+        { this.fail(playerId, `custo adicional: descarte ${needDiscards} carta(s)`); return false; }
       for (const id of addlDiscards) { const c = s.objects[id]; if (!c || c.zone !== 'hand' || c.owner !== playerId || id === obj.id) { this.fail(playerId, 'carta inválida para descartar'); return false; } }
     }
     if (addl?.payLife && s.players[playerId].life < addl.payLife)
@@ -1039,7 +1050,17 @@ export class Game {
         const extra = parseCost(card.strive);
         for (let i = 1; i < targets.length; i++) { cost.generic += extra.generic; cost.colorless += extra.colorless; cost.colored.push(...extra.colored); cost.hybrid.push(...extra.hybrid); }
       }
-      let plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana });
+      // Trinisphere (untapped): a spell that would cost less than three costs three.
+      if (PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => { const o = s.objects[id]; return !!o?.card.trinisphere && !o.tapped; }))) {
+        const total = cost.generic + cost.colored.length + cost.colorless + cost.hybrid.length + (cost.phyrexian?.length ?? 0);
+        if (total < 3) cost.generic += 3 - total;
+      }
+      // Hogaak: "You can't spend mana to cast this spell." — convoke/delve pay the whole (generic) cost.
+      if (card.noManaToCast) {
+        cost.generic = cost.generic + cost.colored.length + cost.colorless + cost.hybrid.length + (cost.phyrexian?.length ?? 0);
+        cost.colored = []; cost.colorless = 0; cost.hybrid = []; cost.phyrexian = [];
+      }
+      let plan = card.noManaToCast ? null : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana });
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
       // tap creatures / artifacts, exile graveyard cards, one generic each.
       const helpers: { kind: 'convoke' | 'improvise' | 'delve'; ids: number[] }[] = [];
@@ -1054,7 +1075,7 @@ export class Game {
             if (cost.generic <= 0) break;
             cost.generic -= 1;
             (helpers.find((h) => h.kind === c.kind) ?? helpers[helpers.push({ kind: c.kind, ids: [] }) - 1]).ids.push(id);
-            plan = planPayment(s, playerId, cost);
+            plan = card.noManaToCast ? (cost.generic <= 0 ? { taps: [], fromPool: [], lifePaid: 0 } : null) : planPayment(s, playerId, cost);
             if (plan) break;
           }
           if (plan) break;
@@ -1174,7 +1195,7 @@ export class Game {
     this.emit({ type: 'spellCast', player: playerId, objectId: obj.id, cardName: card.name, targets });
     if (copies > 0) this.emit({ type: 'copiesCreated', cardName: card.name, count: copies, reason: 'storm' });
     this.fireCastTriggers(playerId, card, obj, targets);
-    if (card.cascade && !extra.faceDown) this.doCascade(playerId, obj);
+    if (card.cascade && !extra.faceDown) for (let i = 0; i < (card.cascadeCount ?? 1); i++) this.doCascade(playerId, obj);
     return true;
   }
 
@@ -1340,7 +1361,7 @@ export class Game {
           if (m.whose === 'opponent' && mineToCaster) continue;
           if (m.filter && !cardMatchesFilter(card, m.filter)) continue;
           if (m.notFromHand && !notFromHand) continue;
-          if (m.chosenName && src.chosenName !== card.name) continue;
+          if (m.chosenName && !sameName(src.chosenName, card.name)) continue;
           if (m.targetsSelf && !targets.some((t) => t.kind === 'object' && t.id === src.id)) continue;
           const scale = m.perSpellsCastThisTurn ? (s.players[playerId].spellsCastThisTurn ?? 0) : m.per ? countOn(m.per, src.controller) : m.perGraveyard ? countGy(m.perGraveyard, src.controller) : m.perDomain ? domain(src.controller) : 1;
           delta += m.amount * scale;
@@ -1399,9 +1420,12 @@ export class Game {
       { this.fail(playerId, `${obj.card.name}: essa habilidade só funciona ${ability.zone === 'graveyard' ? 'do cemitério' : ability.zone === 'hand' ? 'da mão' : 'no campo de batalha'}`); return false; }
 
     // Stony Silence / Pithing Needle.
+    // Clarion Conqueror: activated abilities of artifacts, creatures and planeswalkers can't be activated (mana abilities included).
+    if (PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => { const t = s.objects[id]?.card.lockAbilitiesOfTypes; return !!t && obj.card.types.some((x) => t.includes(x)) && (obj.zone === 'battlefield'); })))
+      { this.fail(playerId, `${obj.card.name}: habilidades ativadas desse tipo de permanente estão travadas (Clarion Conqueror)`); return false; }
     if (obj.card.types.includes('Artifact') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => { const l = s.objects[id].card.artifactAbilitiesLocked; return l === true || (l === 'opponents' && p !== playerId); })))
       { this.fail(playerId, `${obj.card.name}: habilidades ativadas de artefatos não podem ser ativadas`); return false; }
-    if (!ability.isManaAbility && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id].card.lockChosenName && s.objects[id].chosenName === obj.card.name)))
+    if (!ability.isManaAbility && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id].card.lockChosenName && sameName(s.objects[id].chosenName, obj.card.name))))
       { this.fail(playerId, `${obj.card.name}: habilidades com esse nome estão travadas`); return false; }
     // Mana abilities may be activated at any time; others need priority.
     if (!ability.isManaAbility && !ability.immediate) {
@@ -1499,13 +1523,14 @@ export class Game {
 
     // Sacrifice-another cost (Viscera Seer): validated before paying anything.
     const abilitySacs = sacrifices ?? [];
-    if (ability.cost.sacrifice) {
+    const costPick = ability.cost.sacrifice ?? ability.cost.returnToHand;
+    if (costPick) {
       if (abilitySacs.length !== 1)
-        { this.fail(playerId, 'escolha 1 permanente para sacrificar como custo'); return false; }
+        { this.fail(playerId, ability.cost.returnToHand ? 'escolha 1 permanente para devolver à mão como custo' : 'escolha 1 permanente para sacrificar como custo'); return false; }
       const sacObj = s.objects[abilitySacs[0]];
       if (!sacObj || sacObj.zone !== 'battlefield' || sacObj.controller !== playerId)
-        { this.fail(playerId, 'sacrifício inválido'); return false; }
-      if (!matchFilter({ controller: playerId, sourceId: obj.id }, ability.cost.sacrifice, sacObj))
+        { this.fail(playerId, 'custo inválido'); return false; }
+      if (!matchFilter({ controller: playerId, sourceId: obj.id }, costPick, sacObj))
         { this.fail(playerId, `${sacObj.card.name} não satisfaz o custo`); return false; }
     } else if (abilitySacs.length > 0) {
       { this.fail(playerId, 'essa habilidade não tem custo de sacrifício'); return false; }
@@ -1526,7 +1551,7 @@ export class Game {
       setTapped(s, c, true, this.emit);
     }
 
-    const abilityTax = this.wardTax(playerId, targets);
+    const abilityTax = this.wardTax(playerId, targets) + (ability.isManaAbility ? 0 : PLAYER_IDS.flatMap((p) => s.players[p].zones.battlefield).map((id) => s.objects[id]).filter((o) => !!o?.card.activationTaxChosenName && sameName(o.chosenName, obj.card.name)).reduce((sum, o) => sum + (o.card.activationTaxChosenName ?? 0), 0));
     if (ability.cost.mana || abilityTax > 0) {
       const cost = parseCost(ability.cost.mana);
       cost.generic += abilityTax;
@@ -1571,7 +1596,7 @@ export class Game {
       moveWithEvent(s, c, 'graveyard', 'discarded', this.emit);
       this.emit({ type: 'discarded', player: playerId, objectId: id, cardName: c.card.name });
     }
-    for (const id of abilitySacs) moveWithEvent(s, s.objects[id], 'graveyard', 'sacrificed', this.emit);
+    for (const id of abilitySacs) moveWithEvent(s, s.objects[id], ability.cost.returnToHand ? 'hand' : 'graveyard', ability.cost.returnToHand ? 'returned' : 'sacrificed', this.emit);
     if (ability.cost.sacrificeSelf) moveWithEvent(s, obj, 'graveyard', 'sacrificed', this.emit);
     if (ability.exileSelf && obj.zone === 'graveyard') moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
 
@@ -2164,6 +2189,13 @@ export class Game {
       }
       case 'upkeep': {
         this.fireUpkeepKeywords();
+        // The Tabernacle at Pendrell Vale: "All creatures have 'At the beginning of your upkeep, destroy this creature unless you pay {1}.'"
+        for (const p of PLAYER_IDS) for (const id of [...s.players[p].zones.battlefield]) {
+          const tab = s.objects[id];
+          if (!tab?.card.tabernacle) continue;
+          if (s.players[s.activePlayer].zones.battlefield.some((cid) => isCreature(s.objects[cid]))) this.pushTriggerAs(tab, s.activePlayer, { text: 'pague {1} por cada criatura ou ela é destruída', effect: [{ op: 'tabernacleTax' }] });
+          break;
+        }
         this.runDelayed('nextUpkeep', s.activePlayer);
         this.fireStepTriggers('upkeep');
         s.priority = s.activePlayer;
@@ -2240,6 +2272,8 @@ export class Game {
       obj.preventNext = undefined;
       obj.preventAllThisTurn = undefined;
       obj.preventCombatThisTurn = undefined;
+      obj.protectionUntilEot = undefined;
+      obj.resolvedThisTurn = undefined;
       obj.damagedByThisTurn = undefined;
       obj.exileIfDiesThisTurn = undefined;
       obj.mustBlockId = undefined;
@@ -2380,7 +2414,6 @@ export class Game {
             });
           }
         }
-        if (obj.card.entersUnlessDiscard) this.pushTrigger(obj, { text: 'descarte um terreno ou vai para o cemitério', effect: [{ op: 'discardOrDie', filter: obj.card.entersUnlessDiscard }] });
         // "Enters the battlefield with N +1/+1 counters" (N may be X; raid-style conditions honored).
         if (obj.card.entersWithCounters) {
           const ctx = {
