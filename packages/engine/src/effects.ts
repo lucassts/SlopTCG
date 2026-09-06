@@ -714,6 +714,7 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       if (top.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards' };
       const types = new Set(top.flatMap((id) => state.objects[id].card.types));
       ctx.emit({ type: 'fizzled', description: `${ctx.sourceName}: revela ${top.map((id) => state.objects[id].card.name).join(', ')}` });
+      ctx.emit({ type: 'cardsRevealed', player: controller, cards: top.map((id) => state.objects[id].card.name), source: ctx.sourceName });
       return { player: controller, options: top, min: 0, max: types.size, prompt: `${ctx.sourceName}: exile até uma carta de cada tipo de carta (${[...types].join(', ')}); o resto vai para o cemitério`, mode: 'cards' };
     }
     case 'tabernacleTax': {
@@ -1208,6 +1209,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       const mv = manaValueOf(o.card.manaCost);
       moveWithEvent(state, o, 'hand', 'returned', emit);
       emit({ type: 'fizzled', description: `${ctx.sourceName}: ${ps.name} revelou ${o.card.name} (valor de mana ${mv}) e a colocou na mão` });
+      emit({ type: 'cardsRevealed', player: ctx.controller, cards: [o.card.name], source: ctx.sourceName });
       if (mv > 0) changeLife(state, ctx.controller, -mv, ctx.sourceName, emit);
       return;
     }
@@ -1216,6 +1218,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (!o || o.zone !== 'hand' || o.owner !== ctx.controller) { state.lastRevealedName = undefined; return; }
       state.lastRevealedName = o.card.name;
       emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} revelou ${o.card.name} da mão` });
+      emit({ type: 'cardsRevealed', player: ctx.controller, cards: [o.card.name], source: ctx.sourceName });
       return;
     }
     case 'divideDamage': {
@@ -2089,6 +2092,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       const o = state.objects[top];
       const mv = manaValueOf(o.card.manaCost);
       emit({ type: 'fizzled', description: `${ctx.sourceName}: revela ${o.card.name} (valor de mana ${mv})` });
+      emit({ type: 'cardsRevealed', player: ctx.controller, cards: [o.card.name], source: ctx.sourceName });
       moveWithEvent(state, o, 'hand', 'returned', emit);
       if (mv > 0) changeLife(state, ctx.controller, -mv, ctx.sourceName, emit);
       return;
@@ -2355,6 +2359,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       const picks = PLAYER_IDS.map((p) => state.gambitPicks?.[p]).filter((id): id is number => id !== undefined).map((id) => state.objects[id]).filter((o) => o && o.zone === 'hand');
       state.gambitPicks = undefined;
       emit({ type: 'fizzled', description: `${ctx.sourceName}: revelados ${picks.map((o) => `${o.card.name} (${state.players[o.owner].name})`).join(', ') || 'nada'}` });
+      for (const p of PLAYER_IDS) { const mine = picks.filter((o) => o.owner === p); if (mine.length > 0) emit({ type: 'cardsRevealed', player: p, cards: mine.map((o) => o.card.name), source: ctx.sourceName }); }
       const creatures = picks.filter((o) => o.card.types.includes('Creature'));
       if (creatures.length === 0) return;
       const min = Math.min(...creatures.map((o) => manaValueOf(o.card.manaCost)));

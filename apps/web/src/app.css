@@ -344,6 +344,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   position: fixed;
   inset: 0;
   background: rgba(10, 12, 16, 0.45);
+  /* O fundo não bloqueia cliques: dá para virar fontes de mana com um modal aberto (só a caixa captura). */
+  pointer-events: none;
   display: flex;
   align-items: center;
   /* Caixas de decisão ficam à direita, fora de onde as cartas normalmente estão. */
@@ -360,7 +362,8 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
   padding-top: 10vh;
   padding-right: 300px;
 }
-.mulligan-overlay.light .mulligan-box { pointer-events: auto; box-shadow: 0 14px 50px rgba(0, 0, 0, 0.7); }
+.mulligan-overlay .mulligan-box { pointer-events: auto; }
+.mulligan-overlay.light .mulligan-box { box-shadow: 0 14px 50px rgba(0, 0, 0, 0.7); }
 @media (max-width: 900px) {
   .mulligan-overlay { justify-content: center; padding-right: 0; }
   .mulligan-overlay.light { padding-right: 0; }
@@ -604,3 +607,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .settings-row button { border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 6px; padding: 3px 8px; }
 .lang-switch { position: fixed; top: 12px; right: 12px; display: flex; gap: 4px; }
 .lang-switch button { padding: 3px 8px; font-size: 12px; }
+
+/* Menu de ação por cima dos modais (habilidade de mana com escolha aberta) */
+.context-menu { z-index: 300; }
+/* Doação discreta no fim do jogo */
+.kofi { margin-top: 22px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.kofi-btn { font-size: 12px; padding: 2px 10px; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 6px; color: inherit; text-decoration: none; }
+.kofi-btn:hover { background: rgba(255, 255, 255, 0.1); }

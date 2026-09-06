@@ -914,7 +914,7 @@ export function effectivePower(state: GameState, obj: GameObject): number {
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
   const animated = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.power === undefined;
-  const base = obj.faceDown ? 2 : animated ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? obj.card.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : 0); // virada para baixo: 2/2
+  const base = obj.faceDown ? 2 : animated ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : obj.card.power ?? 0); // virada para baixo: 2/2
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.power, 0);
   return base + obj.untilEot.power + untilNext + counters + fromAttachments + staticsFor(state, obj).power + pairedBonus(state, obj).power;
 }
@@ -924,7 +924,7 @@ export function effectiveToughness(state: GameState, obj: GameObject): number {
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
   const animatedT = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.toughness === undefined;
-  const base = obj.faceDown ? 2 : animatedT ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? obj.card.toughness ?? (obj.card.cdaToughness !== undefined ? cdaValue(state, obj, obj.card.cdaToughness) : 0);
+  const base = obj.faceDown ? 2 : animatedT ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? (obj.card.cdaToughness !== undefined ? cdaValue(state, obj, obj.card.cdaToughness) : obj.card.toughness ?? 0);
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.toughness, 0);
   return base + obj.untilEot.toughness + untilNext + counters + fromAttachments + staticsFor(state, obj).toughness + pairedBonus(state, obj).toughness;
 }

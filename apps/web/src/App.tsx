@@ -27,7 +27,7 @@ export function App() {
   const [view, setView] = useState<GameView | null>(null);
   const [syncSeq, setSyncSeq] = useState(0);
   const [log, setLog] = useState<string[]>([]);
-  const [reveal, setReveal] = useState<{ player: PlayerId; cards: string[]; seq: number } | null>(null);
+  const [reveal, setReveal] = useState<{ kind: 'hand' | 'cards'; player: PlayerId; cards: string[]; source?: string; seq: number } | null>(null);
   const [match, setMatch] = useState<MatchStateMsg | null>(null);
   const [sideboard, setSideboard] = useState<SideboardInfo | null>(null);
   /** Número do último jogo cujo resultado o jogador já viu (o sideboard só abre depois). */
@@ -59,7 +59,13 @@ export function App() {
         setSyncSeq((n) => n + 1);
         setScreen('game');
         for (const ev of msg.events) {
-          if (ev.type === 'handRevealed' && ev.player !== msg.view.you) setReveal({ player: ev.player, cards: ev.cards, seq: Date.now() });
+          if (ev.type === 'handRevealed' && ev.player !== msg.view.you) setReveal({ kind: 'hand', player: ev.player, cards: ev.cards, seq: Date.now() });
+          if (ev.type === 'cardsRevealed' && ev.player !== msg.view.you) {
+            // Revelações seguidas da mesma fonte (Ad Nauseam, carta a carta) somam no mesmo painel.
+            setReveal((prev) => prev && prev.kind === 'cards' && prev.player === ev.player && prev.source === ev.source && Date.now() - prev.seq < 20000
+              ? { ...prev, cards: [...prev.cards, ...ev.cards], seq: Date.now() }
+              : { kind: 'cards', player: ev.player, cards: ev.cards, source: ev.source, seq: Date.now() });
+          }
         }
         if (msg.events.length > 0) {
           setLog((prev) => {

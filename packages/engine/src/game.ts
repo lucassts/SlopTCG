@@ -658,7 +658,8 @@ export class Game {
       obj.transformed = true;
     }
     const ok = this.doCastSpellInner(playerId, objectId, targets, x, modeIndex, sacrifices, kicked, useAltCost, altExile, extra);
-    if (!ok && wantBack && obj?.baseCard && obj.zone !== 'stack') { obj.card = obj.baseCard; obj.transformed = false; }
+    // Recusada, ou adiada esperando mana manual (o pedido é reexecutado inteiro depois): volta para a frente.
+    if ((!ok || this.state.pendingPayment) && wantBack && obj?.baseCard && obj.zone !== 'stack') { obj.card = obj.baseCard; obj.transformed = false; }
     return ok;
   }
 

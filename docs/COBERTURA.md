@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-05, v0.31.0 — interface em pt-BR/en-US, configurações, Gaea's Will no cliente; engine igual à v0.30.0, Legacy a 97,5%)
+## Estado (2026-09-05, v0.32.0 — Barrowgoyf, aventura com mana manual, revelações para o oponente, mana com modal aberto, Ko-fi; Legacy a 97,5%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | **v0.30** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -701,6 +701,34 @@ na ordem "⏭ Próxima ação · ⏭ Meu turno · 📌 Prioridade"; contadores d
 zona em duas linhas (`.zone-stack`) para os dois jogadores, com ✋ da
 própria mão; painel da mão revelada é janela arrastável (cabeçalho com
 `pointerdown`) e nasce à direita, sobre a coluna do chat/carta ampliada.
+
+**v0.32.0 — cinco relatos.** **Barrowgoyf**: a CDA compilava certo
+(`cdaToughness {plus: 1, of: cardTypesInGraveyard}`), mas
+`effectiveToughness` preferia `card.toughness` quando definido — e o
+importador transforma "1+*" em 1, então a resistência ficava fixa em 1
+(Tarmogoyf idem). Agora a CDA vence o valor impresso em poder e
+resistência. **Aventura com mana manual** (Questing Druid → Seek the
+Beast): `doCastSpell` troca a face antes de `doCastSpellInner`; com
+`manualMana` o pagamento é adiado (`deferPayment` devolve true) e a carta
+ficava virada para o verso; ao pagar, o pedido inteiro é reexecutado e
+caía em "a carta já está mostrando o verso" — a conjuração falhava e a
+mana ficava no pool, o que o Lucas leu como "cobrou os dois custos". A
+face agora volta para a frente quando a conjuração é adiada. **Revelação
+para o oponente**: evento `cardsRevealed {player, cards, source}` emitido
+por Ad Nauseam, Dark Confidant (`revealTopToHandLoseMv`), reveal do
+topo N, `revealFromHandRemember` e o gambit; o cliente acumula revelações
+seguidas da mesma fonte (Ad Nauseam carta a carta, janela de 20 s) no
+mesmo painel arrastável, com título "X revelou — fonte (n)" e ✕. **Mana
+com modal aberto**: o fundo de todo `.mulligan-overlay` passou a
+`pointer-events: none` (só a caixa captura) e `clickFieldCard`, com uma
+decisão aberta (escolha, pergunta, cemitério, lealdade, cor), aceita só o
+undo do tap e as habilidades de mana da permanente (menu se houver mais
+de uma; `.context-menu` acima dos modais). **Ko-fi**: linha discreta no
+rodapé do pop-up de fim de jogo/partida com link para
+`https://ko-fi.com/cathar1no`. Verificado no navegador: undo/tap da
+Mountain com o cemitério aberto e o rodapé no pop-up de vitória. 482
+testes (m41: Barrowgoyf, aventura automática e com mana manual,
+Ad Nauseam emitindo `cardsRevealed`).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

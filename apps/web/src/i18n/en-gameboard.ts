@@ -296,4 +296,7 @@ export const EN_GAMEBOARD: Record<string, string> = {
   '⚠ carta em modo manual (mecânica ainda não automatizada)': '⚠ card in manual mode (mechanic not automated yet)',
   '⚠ parcialmente automatizada — ajuste manualmente:': '⚠ partially automated — adjust manually:',
   'não foi possível conectar ao servidor': 'could not connect to the server',
+  '{name} revelou — {source} ({n})': '{name} revealed — {source} ({n})',
+  'Gostou? Quer me ajudar a recuperar meus tokens?': 'Enjoying it? Want to help me recover my tokens?',
+  'Pode doar aqui': 'You can donate here',
 };

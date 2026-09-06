@@ -57,6 +57,8 @@ export type GameEvent =
   | { type: 'discarded'; player: PlayerId; objectId: number; cardName: string }
   /** A hand is revealed to everyone (Cabal Therapy naming). */
   | { type: 'handRevealed'; player: PlayerId; cards: string[] }
+  /** Cards revealed to everyone by an effect (Ad Nauseam, Dark Confidant, Brainstorm-style reveals): the opponent sees them in a panel. */
+  | { type: 'cardsRevealed'; player: PlayerId; cards: string[]; source: string }
   | { type: 'cardNamed'; player: PlayerId; name: string }
   | { type: 'poisonChanged'; player: PlayerId; delta: number; total: number }
   | { type: 'crewed'; objectId: number; cardName: string; player: PlayerId }

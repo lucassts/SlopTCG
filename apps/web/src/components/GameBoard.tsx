@@ -143,7 +143,7 @@ export interface GameBoardProps {
   /** Fim de um jogo da série: o jogador leu o resultado e segue para o sideboard. */
   onContinue?: () => void;
   /** Mão revelada do oponente (Duress…): painel que fica aberto até o jogador fechar. */
-  reveal?: { player: PlayerId; cards: string[]; seq: number } | null;
+  reveal?: { kind: 'hand' | 'cards'; player: PlayerId; cards: string[]; source?: string; seq: number } | null;
   onCloseReveal?: () => void;
 }
 
@@ -767,6 +767,22 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       // Undo de mana: clique na permanente virada enquanto a mana flutua.
       if (cv.tapped && cv.undoableTap) {
         onAction({ type: 'undoTap', objectId: cv.objectId });
+        return;
+      }
+      // Com um modal aberto (escolha, pergunta, cemitério…), só habilidades de mana: virar uma fonte para pagar o que está na pilha.
+      const decisionOpen = !!myChoice || !!ask || !!zonePick || !!loyaltyPick || !!colorPick || !!modalPick;
+      if (decisionOpen) {
+        const manaAbs = (cv.card.abilities ?? [])
+          .map((a, i) => ({ a, i }))
+          .filter((x): x is { a: Extract<typeof x.a, { kind: 'activated' }>; i: number } => x.a.kind === 'activated' && !!x.a.isManaAbility && (x.a.zone ?? 'battlefield') === 'battlefield');
+        if (manaAbs.length === 1) startAbility(cv, manaAbs[0].i, manaAbs[0].a);
+        else if (manaAbs.length > 1)
+          setActionMenu({
+            x: Math.min(e?.clientX ?? 200, window.innerWidth - 280),
+            y: Math.min(e?.clientY ?? 200, window.innerHeight - 60 - manaAbs.length * 34),
+            title: cv.card.name,
+            options: manaAbs.map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) })),
+          });
         return;
       }
       const abilities = cv.card.abilities ?? [];
@@ -1575,7 +1591,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {reveal && (
         <div className="reveal-panel" ref={revealRef} style={revealPos ? { left: revealPos.x, top: revealPos.y, right: 'auto' } : undefined} onClick={(e) => e.stopPropagation()}>
           <div className="reveal-head" onPointerDown={dragReveal} title={t('Arraste para mover')}>
-            <span>{t('Mão de {name} ({n})', { name: view.players[reveal.player].name, n: reveal.cards.length })}</span>
+            <span>{reveal.kind === 'hand' ? t('Mão de {name} ({n})', { name: view.players[reveal.player].name, n: reveal.cards.length }) : t('{name} revelou — {source} ({n})', { name: view.players[reveal.player].name, source: reveal.source ?? '', n: reveal.cards.length })}</span>
             <button className="reveal-close" title={t('Fechar')} onClick={onCloseReveal}>✕</button>
           </div>
           <div className="reveal-cards">
@@ -1957,6 +1973,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 )}
               </>
             )}
+            <div className="kofi">
+              <span>{t('Gostou? Quer me ajudar a recuperar meus tokens?')}</span>
+              <a className="kofi-btn" href="https://ko-fi.com/cathar1no" target="_blank" rel="noreferrer">{t('Pode doar aqui')}</a>
+            </div>
           </div>
         );
       })()}
