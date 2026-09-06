@@ -337,14 +337,20 @@ interface ChoiceSetup {
   skipLabel?: string;
 }
 
+/** Tap a permanent for mana through a payment plan: adds what it produces and runs the riders of its intrinsic mana ability (Cephalid Coliseum: "deals 1 damage to you"). */
+export function tapForMana(state: GameState, obj: GameObject, player: PlayerId, produce: import('./types.js').ManaSymbol[], emit: Emit): void {
+  setTapped(state, obj, true, emit);
+  for (const sym of produce) state.players[player].manaPool[sym] += 1;
+  const ability = (obj.card.abilities ?? []).find((a) => a.kind === 'activated' && a.isManaAbility && a.cost.tap && !a.cost.sacrificeSelf && !a.cost.sacrifice && !a.cost.payLife && !a.cost.mana && !a.condition && a.effect.some((e) => e.op === 'addMana' || e.op === 'addManaChoice'));
+  const riders = ability?.kind === 'activated' ? ability.effect.filter((e) => (e.op === 'damage' && e.to === 'controller') || (e.op === 'loseLife' && e.who === 'controller')) : [];
+  if (riders.length > 0) runEffectScript({ state, controller: obj.controller, sourceId: obj.id, sourceName: obj.card.name, targets: [], emit }, riders);
+}
+
 /** Pay a mana cost for a player right now (taps + pool + phyrexian life). Returns false if unaffordable. */
 function payNow(state: GameState, player: PlayerId, cost: string, emit: Emit): boolean {
   const plan = planPayment(state, player, parseCost(cost));
   if (!plan) return false;
-  for (const tap of plan.taps) {
-    setTapped(state, state.objects[tap.objectId], true, emit);
-    for (const sym of tap.produce) state.players[player].manaPool[sym] += 1;
-  }
+  for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], player, tap.produce, emit);
   for (const sym of plan.fromPool) state.players[player].manaPool[sym] = Math.max(0, state.players[player].manaPool[sym] - 1);
   if (plan.lifePaid > 0) changeLife(state, player, -plan.lifePaid, 'mana phyrexiana', emit);
   return true;
@@ -1339,10 +1345,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (text === 'yes') {
         const plan = planPayment(state, item.controller, parseCost(step.cost));
         if (plan) {
-          for (const tap of plan.taps) {
-            setTapped(state, state.objects[tap.objectId], true, emit);
-            for (const sym of tap.produce) state.players[item.controller].manaPool[sym] += 1;
-          }
+          for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], item.controller, tap.produce, emit);
           for (const sym of plan.fromPool)
             state.players[item.controller].manaPool[sym] = Math.max(0, state.players[item.controller].manaPool[sym] - 1);
           if (plan.lifePaid > 0) changeLife(state, item.controller, -plan.lifePaid, 'mana phyrexiana', emit);
@@ -1410,7 +1413,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (text === 'yes') {
         const plan = planPayment(state, ctx.controller, parseCost('{1}'));
         if (plan) {
-          for (const tap of plan.taps) { setTapped(state, state.objects[tap.objectId], true, emit); for (const sym of tap.produce) state.players[ctx.controller].manaPool[sym] += 1; }
+          for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], ctx.controller, tap.produce, emit);
           for (const sym of plan.fromPool) state.players[ctx.controller].manaPool[sym] = Math.max(0, state.players[ctx.controller].manaPool[sym] - 1);
           paid = true;
         }
@@ -1461,7 +1464,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (payer === undefined) return;
       const plan = planPayment(state, payer, parseCost(step.cost));
       if (!plan) return;
-      for (const tap of plan.taps) { setTapped(state, state.objects[tap.objectId], true, emit); for (const sym of tap.produce) state.players[payer].manaPool[sym] += 1; }
+      for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], payer, tap.produce, emit);
       for (const sym of plan.fromPool) state.players[payer].manaPool[sym] = Math.max(0, state.players[payer].manaPool[sym] - 1);
       state.triggerQueue.push({
         sourceId: ctx.sourceId,

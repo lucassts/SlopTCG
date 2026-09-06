@@ -68,6 +68,8 @@ export interface ManaProduction {
   symbols: ManaSymbol[];
   /** true → all symbols at once (Sol Ring); false → pick one (duals, any color). */
   all: boolean;
+  /** The ability hurts its controller (Ancient Tomb, Cephalid Coliseum, painlands): automatic payment uses it last. */
+  painful?: boolean;
 }
 
 export function manaProduction(obj: GameObject): ManaProduction | null {
@@ -75,15 +77,16 @@ export function manaProduction(obj: GameObject): ManaProduction | null {
   for (const a of obj.card.abilities ?? []) {
     if (a.kind !== 'activated' || !a.isManaAbility || !a.cost.tap) continue;
     if (a.cost.sacrificeSelf || a.cost.sacrifice || a.cost.payLife || a.cost.mana || a.condition) continue;
+    const painful = a.effect.some((e) => (e.op === 'damage' && e.to === 'controller') || (e.op === 'loseLife' && e.who === 'controller')) || undefined;
     const fixed = a.effect.find((e) => e.op === 'addMana');
-    if (fixed && fixed.op === 'addMana') { found.push({ symbols: fixed.mana, all: true }); continue; }
+    if (fixed && fixed.op === 'addMana') { found.push({ symbols: fixed.mana, all: true, painful }); continue; }
     const choice = a.effect.find((e) => e.op === 'addManaChoice');
-    if (choice && choice.op === 'addManaChoice') found.push({ symbols: choice.colors ?? [...COLORS], all: false });
+    if (choice && choice.op === 'addManaChoice') found.push({ symbols: choice.colors ?? [...COLORS], all: false, painful });
   }
   if (found.length === 0) return null;
   if (found.length === 1) return found[0];
   // Several tap abilities (a Mountain that is also a Forest under Yavimaya): the player picks one symbol.
-  return { symbols: [...new Set(found.flatMap((f) => f.symbols))], all: false };
+  return { symbols: [...new Set(found.flatMap((f) => f.symbols))], all: false, painful: found.every((f) => f.painful) || undefined };
 }
 
 export interface PaymentPlan {
@@ -121,6 +124,10 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
     const candidates = sources
       .filter((s) => !used.has(s.obj.id) && want(s.produces.symbols) !== null)
       .sort((a, b) => {
+        // Fontes que machucam o controlador ficam por último.
+        const painA = a.produces.painful ? 1 : 0;
+        const painB = b.produces.painful ? 1 : 0;
+        if (painA !== painB) return painA - painB;
         const optA = a.produces.all ? 1 : a.produces.symbols.length;
         const optB = b.produces.all ? 1 : b.produces.symbols.length;
         return optA - optB;

@@ -2761,7 +2761,9 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     if (!parsed || parsed.selfExile) return false;
     if (parsed.steps.length === 0) return false;
     if (zone === 'graveyard' && (cost.sacrificeSelf || cost.tap || cost.exileSelfFromBattlefield)) return false;
-    const manaOnly = parsed.steps.every((e) => e.op === 'addMana' || e.op === 'addManaChoice' || e.op === 'addManaOptions' || e.op === 'addChosenColorMana' || (e.op === 'if' && e.then.every((x) => x.op === 'sacrificeSelf') && !e.else));
+    // Habilidade de mana: só produz mana, com no máximo um efeito colateral sobre o próprio controlador (Cephalid Coliseum: "deals 1 damage to you"; City of Brass-style).
+    const manaOp = (e: EffectStep) => e.op === 'addMana' || e.op === 'addManaChoice' || e.op === 'addManaOptions' || e.op === 'addChosenColorMana';
+    const manaOnly = parsed.steps.some(manaOp) && parsed.steps.every((e) => manaOp(e) || (e.op === 'if' && e.then.every((x) => x.op === 'sacrificeSelf') && !e.else) || (e.op === 'damage' && e.to === 'controller') || (e.op === 'loseLife' && e.who === 'controller'));
     st.abilities.push({
       kind: 'activated',
       zone,

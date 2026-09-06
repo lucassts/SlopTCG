@@ -19,14 +19,14 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-05, v0.29.0 — relatos: Daze/Tundra, mão revelada, alvo no cemitério, yield curto e "próxima ação"; Legacy a 97,5%)
+## Estado (2026-09-05, v0.30.0 — lista Blue Dredge conferida; habilidades de mana com efeito colateral; Legacy a 97,5%)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | **v0.28 (L14)** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | **v0.30** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | **13.795** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | **14.522** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | **4.764** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | 13.795 | **13.795** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | 14.522 | **14.522** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | 4.764 | **4.764** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 
 **Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
 scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
@@ -659,6 +659,27 @@ sem alvo, fechado no ✕) e Dread Return por flashback (três Bears
 sacrificadas, cemitério aberto sozinho, alvo clicado, criatura de volta ao
 campo, carta exilada). Daze e o yield novo: só testes/inspeção. 469
 testes (m39 novo).
+
+**v0.30.0 — lista "Blue Dredge" do Lucas** (Moxfield
+`AL2eAedrEH68hH4yJOXBlw`, 30 cartas distintas, 60 + 15). Todas já
+compilavam full; o simulador do auditor passou em todas (Hogaak "falha"
+porque o auditor tenta pagar com mana, o que a carta proíbe — correto).
+Testes de comportamento novos (m40) para as oito que não tinham: Cephalid
+Coliseum, Otherworldly Gaze, Stern Dismissal, Ashen Rider, Unmask, Careful
+Study, Life from the Loam, Hedge Maze. O teste pegou um erro real:
+**habilidade de mana com efeito colateral** ("{T}: Add {U}. This land
+deals 1 damage to you") não era marcada `isManaAbility`, então ia para a
+pilha e não pagava custo automaticamente. Correção em três pontos:
+`manaOnly` no parser aceita `damage`/`loseLife` sobre o controlador como
+efeito colateral (vale para Ancient Tomb, painlands, City of Brass…);
+`tapForMana` (effects.ts) centraliza o tap de um plano de pagamento e
+roda esses efeitos colaterais (antes o `payWithPlan` e os quatro pagamentos
+internos só somavam mana — Ancient Tomb pagava sem os 2 de dano);
+`manaProduction` marca `painful` e o `planPayment` deixa essas fontes por
+último (o teste do Price of Progress pegou o planejador preferindo a Tomb
+a uma Mountain). Auditor: 13.795 full / 14.522 parciais / 4.764
+manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
+478 testes.
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

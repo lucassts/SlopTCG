@@ -19,7 +19,7 @@ import {
 } from './effects.js';
 import type { GameEvent } from './events.js';
 import { canPay, costCmc, costLabel, parseCost, planPayment } from './mana.js';
-import { applyEnterTapRules, castCardFree, dredgeOptions, phaseInAll } from './effects.js';
+import { applyEnterTapRules, castCardFree, dredgeOptions, phaseInAll, tapForMana } from './effects.js';
 import { sameName } from './state.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
@@ -1379,12 +1379,8 @@ export class Game {
   private payWithPlan(playerId: PlayerId, plan: import('./mana.js').PaymentPlan): void {
     const s = this.state;
     s.reversibleTaps = []; // mana committed: taps are no longer undoable
-    for (const tap of plan.taps) {
-      const src = s.objects[tap.objectId];
-      setTapped(s, src, true, this.emit);
-      // A fonte produz tudo de uma vez (Sol Ring); a sobra fica flutuando.
-      for (const sym of tap.produce) s.players[playerId].manaPool[sym] += 1;
-    }
+    // A fonte produz tudo de uma vez (Sol Ring); a sobra fica flutuando. Efeitos colaterais da habilidade (Coliseum) rodam junto.
+    for (const tap of plan.taps) tapForMana(s, s.objects[tap.objectId], playerId, tap.produce, this.emit);
     for (const sym of plan.fromPool) {
       s.players[playerId].manaPool[sym] = Math.max(0, s.players[playerId].manaPool[sym] - 1);
     }
