@@ -2210,7 +2210,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
     case 'lookAtTop': {
       const who = choicePlayer(ctx, step.who);
       const top = state.players[who].zones.library.slice(0, step.count).map((id) => state.objects[id].card.name);
-      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} olhou o topo da biblioteca de ${state.players[who].name} (${top.join(', ') || 'vazia'})` });
+      emit({ type: 'cardsLooked', viewer: ctx.controller, player: who, zone: 'library', cards: top, source: ctx.sourceName, hiddenFrom: opponentOf(ctx.controller) });
       return;
     }
     case 'lookRandomHand': {
@@ -2219,9 +2219,13 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       if (hand.length === 0) return;
       const r = shuffle([...hand], state.rngState);
       state.rngState = r.state;
-      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${state.players[ctx.controller].name} olhou uma carta aleatória da mão de ${state.players[who].name} (${state.objects[r.items[0]].card.name})` });
+      emit({ type: 'cardsLooked', viewer: ctx.controller, player: who, zone: 'hand', cards: [state.objects[r.items[0]].card.name], source: ctx.sourceName, hiddenFrom: opponentOf(ctx.controller) });
       return;
     }
+    case 'lookAtHand':
+      for (const p of resolveWho(ctx, step.who))
+        emit({ type: 'cardsLooked', viewer: ctx.controller, player: p, zone: 'hand', cards: state.players[p].zones.hand.map((id) => state.objects[id].card.name), source: ctx.sourceName, hiddenFrom: opponentOf(ctx.controller) });
+      return;
     case 'extraTurn':
       for (const p of resolvePlayers(step.who, ctx.controller)) { (state.extraTurns ??= []).push(p); emit({ type: 'fizzled', description: `${state.players[p].name} joga um turno extra depois deste` }); }
       return;

@@ -59,6 +59,8 @@ export type GameEvent =
   | { type: 'handRevealed'; player: PlayerId; cards: string[] }
   /** Cards revealed to everyone by an effect (Ad Nauseam, Dark Confidant, Brainstorm-style reveals): the opponent sees them in a panel. */
   | { type: 'cardsRevealed'; player: PlayerId; cards: string[]; source: string }
+  /** `viewer` looked at hidden cards of `player` (hand or top of library); redacted for the other player. */
+  | { type: 'cardsLooked'; viewer: PlayerId; player: PlayerId; zone: 'hand' | 'library'; cards: string[]; source: string; hiddenFrom: PlayerId }
   | { type: 'cardNamed'; player: PlayerId; name: string }
   | { type: 'poisonChanged'; player: PlayerId; delta: number; total: number }
   | { type: 'crewed'; objectId: number; cardName: string; player: PlayerId }
@@ -103,6 +105,7 @@ export function redactEvent(ev: GameEvent, viewer: PlayerId): GameEvent {
   if ('hiddenFrom' in ev && ev.hiddenFrom === viewer) {
     if (ev.type === 'cardDrawn') return { ...ev, cardName: null };
     if (ev.type === 'zoneChanged') return { ...ev, cardName: null };
+    if (ev.type === 'cardsLooked') return { ...ev, cards: [] };
   }
   return ev;
 }

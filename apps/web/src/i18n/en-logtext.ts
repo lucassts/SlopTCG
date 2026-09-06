@@ -114,4 +114,8 @@ export const EN_LOGTEXT: Record<string, string> = {
   'Fim de partida: {reason}. Vencedor: {winner}.': 'Game over: {reason}. Winner: {winner}.',
   'empate': 'draw',
   '[manual] {player} {text}.': '[manual] {player} {text}.',
+  'o topo da biblioteca de {name}': "the top of {name}'s library",
+  'a mão de {name}': "{name}'s hand",
+  '{source}: {viewer} olhou {where}: {cards}.': '{source}: {viewer} looked at {where}: {cards}.',
+  '{source}: {viewer} olhou {where}.': '{source}: {viewer} looked at {where}.',
 };

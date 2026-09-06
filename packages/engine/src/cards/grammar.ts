@@ -866,7 +866,7 @@ function verbFirst(clause: string, ctx: GCtx, specs: TargetSpec[]): EffectStep[]
   }
   if ((m = clause.match(/^look at (target player's|target opponent's) hand$/i))) {
     specs.push(/opponent/i.test(m[1]) ? { what: 'player', controlledBy: 'opponent' } : { what: 'player' });
-    return [{ op: 'revealHand', who: `target:${ctx.base + specs.length - 1}` }];
+    return [{ op: 'lookAtHand', who: `target:${ctx.base + specs.length - 1}` }];
   }
   if ((m = clause.match(/^prevent the next (\w+|X) damage that would be dealt to (.+?)(?: this turn)?$/i))) {
     const amount: DynAmount | null = m[1] === 'X' ? 'X' : num(m[1]);

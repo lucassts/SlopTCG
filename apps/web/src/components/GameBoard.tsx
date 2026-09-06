@@ -143,7 +143,7 @@ export interface GameBoardProps {
   /** Fim de um jogo da série: o jogador leu o resultado e segue para o sideboard. */
   onContinue?: () => void;
   /** Mão revelada do oponente (Duress…): painel que fica aberto até o jogador fechar. */
-  reveal?: { kind: 'hand' | 'cards'; player: PlayerId; cards: string[]; source?: string; seq: number } | null;
+  reveal?: { kind: 'hand' | 'cards' | 'look'; player: PlayerId; cards: string[]; source?: string; zone?: 'hand' | 'library'; seq: number } | null;
   onCloseReveal?: () => void;
 }
 
@@ -1591,7 +1591,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {reveal && (
         <div className="reveal-panel" ref={revealRef} style={revealPos ? { left: revealPos.x, top: revealPos.y, right: 'auto' } : undefined} onClick={(e) => e.stopPropagation()}>
           <div className="reveal-head" onPointerDown={dragReveal} title={t('Arraste para mover')}>
-            <span>{reveal.kind === 'hand' ? t('Mão de {name} ({n})', { name: view.players[reveal.player].name, n: reveal.cards.length }) : t('{name} revelou — {source} ({n})', { name: view.players[reveal.player].name, source: reveal.source ?? '', n: reveal.cards.length })}</span>
+            <span>{reveal.kind === 'hand' ? t('Mão de {name} ({n})', { name: view.players[reveal.player].name, n: reveal.cards.length }) : reveal.kind === 'look' ? (reveal.zone === 'library' ? t('{source}: topo de {name} ({n})', { source: reveal.source ?? '', name: view.players[reveal.player].name, n: reveal.cards.length }) : t('{source}: mão de {name} ({n})', { source: reveal.source ?? '', name: view.players[reveal.player].name, n: reveal.cards.length })) : t('{name} revelou — {source} ({n})', { name: view.players[reveal.player].name, source: reveal.source ?? '', n: reveal.cards.length })}</span>
             <button className="reveal-close" title={t('Fechar')} onClick={onCloseReveal}>✕</button>
           </div>
           <div className="reveal-cards">

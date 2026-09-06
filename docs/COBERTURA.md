@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-05, v0.32.0 — Barrowgoyf, aventura com mana manual, revelações para o oponente, mana com modal aberto, Ko-fi; Legacy a 97,5%)
+## Estado (2026-09-05, v0.33.0 — "olhar" carta escondida vira painel privado (Urza's Bauble, Peek, topo do grimório); Legacy a 97,5%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | **v0.30** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -729,6 +729,18 @@ rodapé do pop-up de fim de jogo/partida com link para
 Mountain com o cemitério aberto e o rodapé no pop-up de vitória. 482
 testes (m41: Barrowgoyf, aventura automática e com mana manual,
 Ad Nauseam emitindo `cardsRevealed`).
+
+**v0.33.0 — olhar é diferente de revelar.** Urza's Bauble
+(`lookRandomHand`), "look at the top card of target player's library"
+(`lookAtTop`) e "look at target player's hand" (Peek, Gitaxian Probe —
+antes mapeado para `revealHand`, que revelava para os dois) agora emitem
+`cardsLooked {viewer, player, zone, cards, source, hiddenFrom}`; o
+`redactEvent` do servidor esvazia `cards` para o outro jogador, então só
+quem olhou vê os nomes (no log e no painel). O cliente abre o mesmo painel
+arrastável com ✕ para quem olhou ("Urza's Bauble: mão de X (1)" / "…:
+topo de X (n)"); o log do outro lado diz apenas "X olhou a mão de Y".
+Op novo `lookAtHand`. Verificado no navegador em duas abas com Urza's
+Bauble. 483 testes (m41: Bauble e Peek, evento privado e redação).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

@@ -6,6 +6,7 @@ import type { CardDefinition } from '../src/cards/types.js';
 import { Game } from '../src/game.js';
 import type { PlayerId } from '../src/types.js';
 import { effectivePower, effectiveToughness } from '../src/state.js';
+import { redactEvent } from '../src/events.js';
 import { findIn, goToMain1, makeGame, passUntil } from './helpers.js';
 
 const mk = (input: OracleInput): CardDefinition => {
@@ -32,6 +33,8 @@ const barrowgoyf = mk({ name: 'Barrowgoyf', manaCost: '{2}{B}', typeLine: 'Creat
 const druid = mk({ name: 'Questing Druid', manaCost: '{1}{G}', typeLine: 'Creature — Elf Druid', power: 1, toughness: 1, colors: ['G'], layout: 'adventure', oracleText: "Whenever you cast a spell that's white, blue, black, or red, put a +1/+1 counter on this creature.", backFace: { name: 'Seek the Beast', manaCost: '{1}{R}', typeLine: 'Instant — Adventure', colors: ['R'], oracleText: 'Exile the top two cards of your library. Until your next end step, you may play those cards.' } });
 const adNauseam = mk({ name: 'Ad Nauseam', manaCost: '{3}{B}{B}', typeLine: 'Instant', colors: ['B'], oracleText: 'Reveal the top card of your library and put that card into your hand. You lose life equal to its mana value. You may repeat this process any number of times.' });
 const idol = mk({ name: 'Bear Idol', manaCost: '{2}', typeLine: 'Artifact', colors: [], oracleText: '{T}: Add {C}.' });
+const bauble = mk({ name: "Urza's Bauble", manaCost: '{0}', typeLine: 'Artifact', colors: [], oracleText: "{T}, Sacrifice this artifact: Look at a card at random in target player's hand. You draw a card at the beginning of the next turn's upkeep." });
+const peek = mk({ name: 'Peek', manaCost: '{U}', typeLine: 'Instant', colors: ['U'], oracleText: "Look at target player's hand.\nDraw a card." });
 
 describe('M41 · relatos', () => {
   it('Barrowgoyf: poder = tipos nos cemitérios, resistência = tipos + 1, mesmo com "1+*" importado como 1', () => {
@@ -108,5 +111,33 @@ describe('M41 · relatos', () => {
     if (ev?.type === 'cardsRevealed') { expect(ev.player).toBe('p1'); expect(ev.cards).toEqual(['Grizzly Bears']); expect(ev.source).toBe('Ad Nauseam'); }
     expect(game.state.objects[bears].zone).toBe('hand');
     expect(game.state.players.p1.life).toBe(18);
+  });
+
+  it("Urza's Bauble e Peek: olhar é privado — evento cardsLooked só com as cartas para quem olhou", () => {
+    const game = makeGame([...FILLER, bauble, peek], [...FILLER, grizzlyBears], { topP1: [bauble.id, peek.id], topP2: ['grizzly-bears'] });
+    goToMain1(game);
+    const b = put(game, 'p1', bauble.id);
+    put(game, 'p1', 'island');
+    expect(game.apply('p1', { type: 'activateAbility', objectId: b, abilityIndex: 0, targets: [{ kind: 'player', player: 'p2' }] }).ok).toBe(true);
+    const evs = [...game.apply('p1', { type: 'passPriority' }).events, ...game.apply('p2', { type: 'passPriority' }).events];
+    const looked = evs.find((e) => e.type === 'cardsLooked');
+    expect(looked).toBeDefined();
+    if (looked?.type === 'cardsLooked') {
+      expect(looked.viewer).toBe('p1');
+      expect(looked.player).toBe('p2');
+      expect(looked.zone).toBe('hand');
+      expect(looked.cards.length).toBe(1);
+      expect(game.state.players.p2.zones.hand.map((id) => game.state.objects[id].card.name)).toContain(looked.cards[0]);
+      // para o oponente, o evento chega sem as cartas
+      const redacted = redactEvent(looked, 'p2');
+      expect(redacted.type === 'cardsLooked' && redacted.cards.length).toBe(0);
+      expect(redactEvent(looked, 'p1')).toBe(looked);
+    }
+    settle(game);
+    expect(cast(game, 'p1', findIn(game, 'p1', 'hand', peek.id), { targets: [{ kind: 'player', player: 'p2' }] }).ok).toBe(true);
+    const evs2 = [...game.apply('p1', { type: 'passPriority' }).events, ...game.apply('p2', { type: 'passPriority' }).events];
+    const full = evs2.find((e) => e.type === 'cardsLooked');
+    expect(full && full.type === 'cardsLooked' && full.cards.length).toBe(game.state.players.p2.zones.hand.length);
+    expect(evs2.some((e) => e.type === 'handRevealed')).toBe(false);
   });
 });

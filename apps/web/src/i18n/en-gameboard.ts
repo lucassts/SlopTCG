@@ -299,4 +299,6 @@ export const EN_GAMEBOARD: Record<string, string> = {
   '{name} revelou — {source} ({n})': '{name} revealed — {source} ({n})',
   'Gostou? Quer me ajudar a recuperar meus tokens?': 'Enjoying it? Want to help me recover my tokens?',
   'Pode doar aqui': 'You can donate here',
+  '{source}: topo de {name} ({n})': '{source}: top of {name}\'s library ({n})',
+  '{source}: mão de {name} ({n})': '{source}: {name}\'s hand ({n})',
 };

@@ -482,6 +482,8 @@ export type EffectStep =
   /** Look at the top card of a player's library / a random card of a hand (logged for the controller). */
   | { op: 'lookAtTop'; who: WhoSel; count: number }
   | { op: 'lookRandomHand'; who: WhoSel }
+  /** Peek / Gitaxian Probe: the controller looks at that hand (private; the opponent only learns that it happened). */
+  | { op: 'lookAtHand'; who: WhoSel }
   | { op: 'extraTurn'; who: PlayerSel }
   /** "Shuffle ~ into its owner's library" (Green Sun's Zenith). */
   | { op: 'shuffleSelfIntoLibrary' }

@@ -206,6 +206,12 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return t('{card} foi codificada em {creature}.', { card: ev.cardName, creature: ev.creatureName });
     case 'hideawayExiled':
       return t('{player} escondeu uma carta com {source}.', { player: name(ev.player), source: ev.sourceName });
+    case 'cardsLooked': {
+      const where = ev.zone === 'library' ? t('o topo da biblioteca de {name}', { name: name(ev.player) }) : t('a mão de {name}', { name: name(ev.player) });
+      return ev.cards.length > 0
+        ? t('{source}: {viewer} olhou {where}: {cards}.', { source: ev.source, viewer: name(ev.viewer), where, cards: ev.cards.join(', ') })
+        : t('{source}: {viewer} olhou {where}.', { source: ev.source, viewer: name(ev.viewer), where });
+    }
     case 'handRevealed':
       return t('{player} revelou a mão: {cards}.', { player: name(ev.player), cards: ev.cards.length > 0 ? ev.cards.join(', ') : t('(vazia)') });
     case 'shuffled':
