@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CountedCard, DeckSpec, GameView, LobbyPlayer, MatchStateMsg, PlayerAction, ServerMessage } from '@sloptcg/protocol';
+import type { CountedCard, DeckSpec, GameView, LobbyPlayer, MatchStateMsg, PlayerAction, PlayerId, ServerMessage } from '@sloptcg/protocol';
 import { GameBoard } from './components/GameBoard';
 import { Home } from './components/Home';
 import { Lobby } from './components/Lobby';
@@ -25,6 +25,7 @@ export function App() {
   const [view, setView] = useState<GameView | null>(null);
   const [syncSeq, setSyncSeq] = useState(0);
   const [log, setLog] = useState<string[]>([]);
+  const [reveal, setReveal] = useState<{ player: PlayerId; cards: string[]; seq: number } | null>(null);
   const [match, setMatch] = useState<MatchStateMsg | null>(null);
   const [sideboard, setSideboard] = useState<SideboardInfo | null>(null);
   /** Número do último jogo cujo resultado o jogador já viu (o sideboard só abre depois). */
@@ -55,6 +56,9 @@ export function App() {
         setView(msg.view);
         setSyncSeq((n) => n + 1);
         setScreen('game');
+        for (const ev of msg.events) {
+          if (ev.type === 'handRevealed' && ev.player !== msg.view.you) setReveal({ player: ev.player, cards: ev.cards, seq: Date.now() });
+        }
         if (msg.events.length > 0) {
           setLog((prev) => {
             const lines = msg.events
@@ -187,6 +191,8 @@ export function App() {
           onAction={sendAction}
           onExit={exitToHome}
           onContinue={match?.phase === 'sideboarding' ? () => setResultSeen(match.gameNumber) : undefined}
+          reveal={reveal}
+          onCloseReveal={() => setReveal(null)}
         />
       )}
       {error && <div className="error-toast">{error}</div>}

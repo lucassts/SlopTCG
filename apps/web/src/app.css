@@ -585,3 +585,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .name-suggestions { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow-y: auto; width: min(360px, 80vw); margin: 8px auto; }
 .name-suggestion { text-align: left; padding: 6px 10px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; color: inherit; cursor: pointer; font: inherit; }
 .name-suggestion:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* Mão revelada (Duress): painel flutuante, não bloqueia o jogo */
+.reveal-panel { position: fixed; left: 12px; top: 56px; z-index: 40; background: rgba(18, 20, 28, 0.96); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 10px; padding: 8px 10px; max-width: min(720px, 70vw); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); }
+.reveal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-weight: 600; margin-bottom: 6px; }
+.reveal-close { background: transparent; border: 1px solid rgba(255, 255, 255, 0.25); color: inherit; border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.reveal-cards { display: flex; flex-wrap: wrap; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.reveal-cards .card-face { width: 96px; height: 134px; }

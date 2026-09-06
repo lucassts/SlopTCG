@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-05, v0.28.1 — prioridade nos gatilhos de capítulo de Saga; engine igual à v0.28.0, Legacy a 97,5%)
+## Estado (2026-09-05, v0.29.0 — relatos: Daze/Tundra, mão revelada, alvo no cemitério, yield curto e "próxima ação"; Legacy a 97,5%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | **v0.28 (L14)** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -626,6 +626,39 @@ resposta ou passe para resolver" (botão "Resolver"). Mágicas e demais
 gatilhos próprios continuam passando sozinhos. Verificado no navegador com
 Urza's Saga no turno 1. Skateboard conferida: compila full (gatilho de
 entrada vira alvo, +1/+0 e ímpeto ao equipado, equipar {1}).
+
+**v0.29.0 — cinco relatos do Lucas.** (1) **Daze com Tundra**: a engine já
+aceitava qualquer terreno com subtipo Island (`matchFilter` por
+`subtype`), mas escolhia sozinha o terreno devolvido (virado primeiro,
+senão o primeiro); agora o cliente pede qual terreno devolver como o
+primeiro pick (`Targeting.altReturnPick`) e manda `altReturnLand` na
+ação; a engine valida contra o filtro e cai no automático se não vier.
+(2) **Mão revelada** (Duress, Thoughtseize, Peacekeeper): a escolha
+`discard` com `chooser: 'caster'` passa a emitir `handRevealed` com a mão
+inteira antes de filtrar, então a revelação acontece mesmo sem carta que
+sirva; o cliente (`App` guarda o último `handRevealed` de outro jogador e
+passa `reveal` ao `GameBoard`) mostra um painel flutuante `.reveal-panel`
+com as cartas por nome (`CardFace name=`), que não bloqueia o jogo e fica
+aberto até o ✕. (3) **Alvo no cemitério** (Dread Return, Reanimate): a
+engine já distinguia `ownedBy: 'you'` (Dread Return só no próprio
+cemitério) de "from a graveyard" (Reanimate em qualquer um), mas o
+cliente não tinha como clicar numa carta do cemitério: agora o visor de
+zona marca as cartas `targetable`, o clique vira `addTarget`, e quando o
+próximo spec tem `zone: 'graveyard'` o cemitério certo abre sozinho
+(`ownedBy` decide de quem). O relato "as três criaturas não são
+sacrificadas" era consequência: sem alvo, a conjuração nunca completava;
+o custo já era validado pela engine (`flashback.sacrificeCount`). Rótulo
+do botão de flashback agora diz "sacrifique 3 criaturas"; log "voltou
+para a mão" corrigido por destino (`ev.to`). (4) **Textos curtos**:
+"⏭ Passando até: <etapa>" e "Capítulo N de X na pilha". (5) **Yield
+"Próxima ação"**: `YieldState.kind 'action'` guarda o maior id da pilha
+ao começar; qualquer item novo na pilha (mágica, habilidade ou gatilho de
+qualquer jogador) interrompe; nunca "chega" sozinho. Verificado no
+navegador: Duress contra mão de sete Islands (painel com as sete cartas,
+sem alvo, fechado no ✕) e Dread Return por flashback (três Bears
+sacrificadas, cemitério aberto sozinho, alvo clicado, criatura de volta ao
+campo, carta exilada). Daze e o yield novo: só testes/inspeção. 469
+testes (m39 novo).
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

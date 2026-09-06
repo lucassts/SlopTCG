@@ -47,7 +47,9 @@ function loadStops(): StopsConfig {
 
 /** One-shot auto-yield (MTGO F-keys): pass priority until the target moment. */
 interface YieldState {
-  kind: 'nextStep' | 'combat' | 'mainPhase' | 'endStep' | 'myTurn' | 'step';
+  kind: 'nextStep' | 'combat' | 'mainPhase' | 'endStep' | 'myTurn' | 'step' | 'action';
+  /** kind 'action': maior id da pilha quando o yield começou — qualquer item novo (mágica, habilidade, gatilho) interrompe. */
+  stackMax?: number;
   /** kind 'step': passa até esta etapa começar (próxima ocorrência, em qualquer turno). */
   target?: Step;
   step: Step;
@@ -61,6 +63,7 @@ const YIELD_LABEL: Record<YieldState['kind'], string> = {
   endStep: 'próxima etapa final',
   myTurn: 'meu próximo turno',
   step: 'a etapa escolhida',
+  action: 'próxima ação',
 };
 
 /** Transient card pop-up when a card lands in a relevant zone. */
@@ -93,6 +96,8 @@ interface Targeting {
   sacCount?: number;
   /** Cast via alternative cost (Force of Will). */
   useAltCost?: boolean;
+  /** Daze: the first pick is the land returned to hand. */
+  altReturnPick?: boolean;
   /** Before sacrifices/targets: pick N cards from hand to exile (alt cost). */
   handPickCount?: number;
   handPickColor?: string;
@@ -136,9 +141,12 @@ export interface GameBoardProps {
   onExit: () => void;
   /** Fim de um jogo da série: o jogador leu o resultado e segue para o sideboard. */
   onContinue?: () => void;
+  /** Mão revelada do oponente (Duress…): painel que fica aberto até o jogador fechar. */
+  reveal?: { player: PlayerId; cards: string[]; seq: number } | null;
+  onCloseReveal?: () => void;
 }
 
-export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onContinue }: GameBoardProps) {
+export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onContinue, reveal, onCloseReveal }: GameBoardProps) {
   const you = view.you;
   const oppId: PlayerId = you === 'p1' ? 'p2' : 'p1';
   const me = view.players[you];
@@ -245,6 +253,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     if (pd && 'player' in pd && pd.player === you) return true;
     if (v.combatAwaiting === 'attackers' && v.activePlayer === you) return true;
     if (v.combatAwaiting === 'blockers' && v.activePlayer === oppId) return true;
+    if (yieldUntil?.kind === 'action' && v.stack.some((i) => i.id > (yieldUntil.stackMax ?? -1))) return true;
     return false;
   };
 
@@ -257,6 +266,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       case 'endStep': return moved && v.step === 'end';
       case 'myTurn': return v.activePlayer === you && v.turn !== y.turn;
       case 'step': return moved && v.step === y.target;
+      case 'action': return false; // só termina interrompido (item novo na pilha) ou por decisão
     }
   };
 
@@ -281,7 +291,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       return;
     }
     setHoldPriority(false);
-    setYieldUntil({ kind, target, step: view.step, turn: view.turn });
+    setYieldUntil({ kind, target, step: view.step, turn: view.turn, stackMax: kind === 'action' ? Math.max(-1, ...view.stack.map((i) => i.id)) : undefined });
   };
 
   // ------------------------------------------- pop-ups de zona (toasts)
@@ -371,10 +381,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           else onAction({ type: 'ninjutsu', objectId: t.objectId, attackerId: atk.id });
         }
       } else if (t.kind === 'spell') {
-        // Ordem dos picks: cartas da mão (custo alternativo) → sacrifícios → alvos.
+        // Ordem dos picks: terreno devolvido (Daze) → cartas da mão (custo alternativo) → sacrifícios → alvos.
+        const altReturnLand = t.altReturnPick && t.chosen[0]?.kind === 'object' ? t.chosen[0].id : undefined;
+        const chosen = t.altReturnPick ? t.chosen.slice(1) : t.chosen;
         const handPick = t.handPickCount ?? 0;
-        const altExile = t.chosen.slice(0, handPick).flatMap((c) => (c.kind === 'object' ? [c.id] : []));
-        const afterHand = t.chosen.slice(handPick);
+        const altExile = chosen.slice(0, handPick).flatMap((c) => (c.kind === 'object' ? [c.id] : []));
+        const afterHand = chosen.slice(handPick);
         const sacCount = t.sacCount ?? 0;
         const sacrifices = afterHand
           .slice(0, sacCount)
@@ -392,6 +404,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           face: t.face,
           fuse: t.fuse,
           useAltCost: t.useAltCost,
+          altReturnLand,
           altExile: handPick > 0 && t.method !== 'retrace' && !t.handPickDiscard ? altExile : undefined,
           discards: t.method === 'retrace' || t.handPickDiscard ? altExile : undefined,
           method: t.method,
@@ -433,6 +446,14 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       setTargeting({ ...t });
     }
   };
+
+  // Alvo no cemitério (Dread Return, Reanimate): abre o cemitério certo sozinho.
+  useEffect(() => {
+    if (!targeting) return;
+    const spec = targeting.specs[targeting.chosen.length] as { zone?: string; ownedBy?: string } | undefined;
+    if (spec?.zone === 'graveyard' && !zonePick) setZonePick({ player: spec.ownedBy === 'opponent' ? oppId : you, zone: 'graveyard' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targeting]);
 
   const addTarget = (choice: TargetChoice) => {
     if (!targeting) return;
@@ -557,7 +578,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     if (!alt) return;
     const exCount = alt.exileFromHand?.count ?? 0;
     const exSpecs = Array.from({ length: exCount }, () => ({ what: 'carta da sua mão para exilar' }));
-    const specs = [...exSpecs, ...(def.spellTargets ?? [])];
+    // Daze: o jogador escolhe qual terreno devolve (Tundra e Volcanic Island contam como Ilha).
+    const landSpecs = alt.returnLand ? [{ what: `terreno seu para devolver à mão (${alt.label})` }] : [];
+    const specs = [...landSpecs, ...exSpecs, ...(def.spellTargets ?? [])];
     if (specs.length === 0) {
       onAction({ type: 'castSpell', objectId: cv.objectId, useAltCost: true, altExile: [] });
       return;
@@ -569,6 +592,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       chosen: [],
       label: `${def.name} (${alt.label})`,
       useAltCost: true,
+      altReturnPick: landSpecs.length > 0 || undefined,
       handPickCount: exCount,
       handPickColor: alt.exileFromHand?.filter.color,
     });
@@ -922,11 +946,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
     if (awaitingMyBlocks) return 'Clique num bloqueador seu, depois no atacante; confirme';
     if (view.combatAwaiting) return 'Aguardando o oponente…';
-    if (yieldUntil) return `⏭ Passando automaticamente até ${yieldUntil.kind === 'step' && yieldUntil.target ? `o início de ${stepName(yieldUntil.target)}` : YIELD_LABEL[yieldUntil.kind]} — clique de novo para cancelar`;
+    if (yieldUntil) return `⏭ Passando até: ${yieldUntil.kind === 'step' && yieldUntil.target ? stepName(yieldUntil.target) : YIELD_LABEL[yieldUntil.kind]}`;
     if (holdPriority && myPriority) return '📌 Segurando a prioridade — jogue mais mágicas ou passe manualmente';
     if (myPriority && view.stack.length > 0) {
       const top = view.stack[view.stack.length - 1];
-      if (top.controller === you && top.chapter !== undefined) return `Capítulo ${top.chapter} de ${top.cardName} na pilha — ative habilidades em resposta ou passe para resolver`;
+      if (top.controller === you && top.chapter !== undefined) return `Capítulo ${top.chapter} de ${top.cardName} na pilha`;
       return 'Responder à pilha ou resolver';
     }
     if (myPriority && (view.step === 'main1' || view.step === 'main2') && view.activePlayer === you)
@@ -1048,6 +1072,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 onClick={(e) => { e.stopPropagation(); startYield('myTurn'); }}
               >
                 ⏭ Meu turno
+              </button>
+              <button
+                className={yieldUntil?.kind === 'action' ? 'yield-on' : ''}
+                title="Passar até a próxima ação: qualquer mágica, habilidade ou gatilho que entre na pilha devolve o controle"
+                onClick={(e) => { e.stopPropagation(); startYield('action'); }}
+              >
+                ⏭ Próxima ação
               </button>
               <button
                 className={holdPriority ? 'yield-on' : ''}
@@ -1511,6 +1542,20 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         </div>
       )}
 
+      {/* -------- mão revelada do oponente (Duress, Peacekeeper): fica aberta até fechar -------- */}
+      {reveal && (
+        <div className="reveal-panel" onClick={(e) => e.stopPropagation()}>
+          <div className="reveal-head">
+            <span>Mão de {view.players[reveal.player].name} ({reveal.cards.length})</span>
+            <button className="reveal-close" title="Fechar" onClick={onCloseReveal}>✕</button>
+          </div>
+          <div className="reveal-cards">
+            {reveal.cards.length === 0 && <div className="muted">vazia</div>}
+            {reveal.cards.map((n, i) => <CardFace key={`${n}-${i}`} name={n} title={n} />)}
+          </div>
+        </div>
+      )}
+
       {/* -------- menu de contexto (modo manual) -------- */}
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
@@ -1731,7 +1776,19 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               {view.players[zonePick.player][zonePick.zone].length === 0 && <div className="muted">vazio</div>}
               {view.players[zonePick.player][zonePick.zone].map((c) => (
                 <div key={c.objectId} style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
-                  <CardTile card={c} size="hand" onContextMenu={(e) => openMenu(e, c)} />
+                  <CardTile
+                    card={c}
+                    size="hand"
+                    targetable={isTargetableCard(c)}
+                    onClick={(e) => {
+                      if (!targeting) return;
+                      e.stopPropagation();
+                      const nextSpec = targeting.specs[targeting.chosen.length + 1] as { zone?: string } | undefined;
+                      if (nextSpec?.zone !== 'graveyard') setZonePick(null);
+                      addTarget({ kind: 'object', id: c.objectId });
+                    }}
+                    onContextMenu={(e) => openMenu(e, c)}
+                  />
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.flashback && (
                     <button
                       onClick={() => {
@@ -1739,7 +1796,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                         beginCast(c, undefined, true);
                       }}
                     >
-                      ⚡ Flashback {c.card.flashback.payLife ? `${c.card.flashback.cost}, ${c.card.flashback.payLife} de vida` : c.card.flashback.cost ?? (c.card.flashback.sacrifice ? `(sacrifique ${c.card.flashback.sacrifice.what === 'creature' ? 'uma criatura' : 'uma permanente'})` : '')}
+                      ⚡ Flashback {c.card.flashback.payLife ? `${c.card.flashback.cost}, ${c.card.flashback.payLife} de vida` : c.card.flashback.cost ?? (c.card.flashback.sacrifice ? `(sacrifique ${(c.card.flashback.sacrificeCount ?? 1) > 1 ? `${c.card.flashback.sacrificeCount} ${c.card.flashback.sacrifice.what === 'creature' ? 'criaturas' : 'permanentes'}` : c.card.flashback.sacrifice.what === 'creature' ? 'uma criatura' : 'uma permanente'})` : '')}
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.castMethods?.some((m) => m.kind === 'escape') && (

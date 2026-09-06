@@ -68,6 +68,7 @@ export interface GameOptions {
 /** Extra options of a castSpell action (alternative methods, costs, faces). */
 interface CastExtra {
   method?: Extract<import('./actions.js').PlayerAction, { type: 'castSpell' }>['method'];
+  altReturnLand?: number;
   escapeExile?: number[];
   faceDown?: boolean;
   buyback?: boolean;
@@ -336,6 +337,7 @@ export class Game {
       case 'castSpell':
         return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices, action.kicked, action.useAltCost, action.altExile, {
           method: action.method,
+          altReturnLand: action.altReturnLand,
           escapeExile: action.escapeExile,
           faceDown: action.faceDown,
           buyback: action.buyback,
@@ -917,7 +919,10 @@ export class Game {
     let altLand: GameObject | undefined;
     if (alt?.returnLand) {
       const lands = s.players[playerId].zones.battlefield.map((id) => s.objects[id]).filter((o) => matchFilter({ controller: playerId, sourceId: obj.id }, alt.returnLand!, o));
-      altLand = lands.find((o) => o.tapped) ?? lands[0];
+      if (extra.altReturnLand !== undefined) {
+        altLand = lands.find((o) => o.id === extra.altReturnLand);
+        if (!altLand) { this.fail(playerId, `${card.name}: esse terreno não serve para o custo alternativo (${alt.label})`); return false; }
+      } else altLand = lands.find((o) => o.tapped) ?? lands[0];
       if (!altLand) { this.fail(playerId, `${card.name}: você precisa controlar um terreno para devolver`); return false; }
     }
     if (useAltCost && viaFlashback)

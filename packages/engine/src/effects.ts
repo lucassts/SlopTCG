@@ -373,6 +373,8 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const victim = choicePlayer(ctx, step.who);
       // Duress-style: the caster looks at that hand and picks.
       const decider = step.chooser === 'caster' ? controller : victim;
+      // Duress/Thoughtseize: a mão inteira é revelada, mesmo sem carta que sirva para o descarte.
+      if (decider !== victim) ctx.emit({ type: 'handRevealed', player: victim, cards: state.players[victim].zones.hand.map((id) => state.objects[id].card.name) });
       const hand = state.players[victim].zones.hand.filter((id) =>
         cardMatchesFilter(state.objects[id].card, step.filter),
       );

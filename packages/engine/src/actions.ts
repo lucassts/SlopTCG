@@ -33,6 +33,8 @@ export type PlayerAction =
       useAltCost?: boolean;
       /** Hand cards exiled to pay the alternative cost. */
       altExile?: number[];
+      /** Daze: the land returned to hand as the alternative cost (chosen by the player; any matching land if omitted). */
+      altReturnLand?: number;
       /** Alternative casting method (evoke, dash, blitz, escape, foretold…, or 'suspend' to exile with time counters). */
       method?:
         | 'evoke' | 'dash' | 'blitz' | 'escape' | 'surge' | 'prowl' | 'spectacle' | 'foretold' | 'plotted' | 'warp' | 'suspend'

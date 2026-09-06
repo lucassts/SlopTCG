@@ -71,7 +71,7 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
         case 'exiled':
           return `${card} foi exilada.`;
         case 'returned':
-          return `${card} voltou para a mão.`;
+          return ev.to === 'hand' ? `${card} voltou para a mão.` : ev.to === 'battlefield' ? `${card} voltou para o campo de batalha.` : ev.to === 'library' ? `${card} voltou para a biblioteca.` : `${card} foi para ${ev.to === 'graveyard' ? 'o cemitério' : ev.to === 'exile' ? 'o exílio' : ev.to}.`;
         case 'manual':
           return null; // evento 'manualAction' cobre
         default:
