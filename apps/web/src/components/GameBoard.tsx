@@ -5,6 +5,7 @@ import type { Step, TargetChoice } from '@sloptcg/engine';
 type CastMethodKind = NonNullable<CardView['card']['castMethods']>[number]['kind'];
 import { CardFace, CardTile, HoverPreview } from './CardTile';
 import { stepName } from '../logText';
+import { t, useLang } from '../i18n';
 
 const STEPS = [
   'untap', 'upkeep', 'draw', 'main1', 'combatBegin', 'declareAttackers',
@@ -147,6 +148,7 @@ export interface GameBoardProps {
 }
 
 export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onContinue, reveal, onCloseReveal }: GameBoardProps) {
+  const [lang, setLang] = useLang();
   const you = view.you;
   const oppId: PlayerId = you === 'p1' ? 'p2' : 'p1';
   const me = view.players[you];
@@ -170,7 +172,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   // modal no mesmo padrão das decisões da engine — nada de confirm()/prompt() do navegador.
   const [ask, setAsk] = useState<{ title: string; text: string; kind: 'confirm' | 'number'; yes?: string; no?: string; resolve: (v: string | null) => void } | null>(null);
   const [askValue, setAskValue] = useState('');
-  const askConfirm = (title: string, text: string, yes = 'Sim', no = 'Não') =>
+  const askConfirm = (title: string, text: string, yes = t('Sim'), no = t('Não')) =>
     new Promise<boolean>((resolve) => setAsk({ title, text, kind: 'confirm', yes, no, resolve: (v) => resolve(v === 'yes') }));
   const askNumber = (title: string, text: string, defaultValue = '0') =>
     new Promise<number | null>((resolve) => {
@@ -182,8 +184,23 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const [colorPick, setColorPick] = useState<{ objectId: number; abilityIndex: number; colors: string[]; name: string } | null>(null);
   const [nameText, setNameText] = useState('');
   const [nameSuggestions, setNameSuggestions] = useState<string[]>([]);
+  // Painel da mão revelada: janela arrastável (padrão: coluna da direita, sobre o chat/carta ampliada).
+  const [revealPos, setRevealPos] = useState<{ x: number; y: number } | null>(null);
+  const revealRef = useRef<HTMLDivElement>(null);
+  const dragReveal = (e: React.PointerEvent) => {
+    const el = revealRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const offX = e.clientX - rect.left;
+    const offY = e.clientY - rect.top;
+    const move = (ev: PointerEvent) => setRevealPos({ x: Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - offX)), y: Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - offY)) });
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    e.preventDefault();
+  };
   const [showManual, setShowManual] = useState(false);
-  const [showStops, setShowStops] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [stops, setStops] = useState<StopsConfig>(loadStops);
   const [chatText, setChatText] = useState('');
   const [concedeArmed, setConcedeArmed] = useState(false);
@@ -495,52 +512,52 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const castable = def.automation !== 'manual';
     const opts: ActionMenu['options'] = [];
     if (def.types.includes('Land') && castable) {
-      opts.push({ label: '⛰ Jogar terreno', run: () => onAction({ type: 'playLand', objectId: cv.objectId }) });
+      opts.push({ label: t('⛰ Jogar terreno'), run: () => onAction({ type: 'playLand', objectId: cv.objectId }) });
     }
     // Leva 5b: verso conjurável (MDFC, aventura, carta dividida).
     const back = def.backFace;
     if (back && (def.faceLayout === 'modal_dfc' || def.faceLayout === 'adventure' || def.faceLayout === 'split') && back.automation !== 'manual' && !back.aftermath) {
-      if (back.types.includes('Land')) opts.push({ label: `⛰ Jogar terreno — verso: ${back.name}`, run: () => onAction({ type: 'playLand', objectId: cv.objectId, face: 'back' }) });
-      else if (back.spellModes && back.spellModes.length > 0) opts.push({ label: `✨ Conjurar verso — ${back.name} ${back.manaCost ?? ''} (escolher modo)`, run: () => setModalPick({ ...cv, card: back }) });
-      else opts.push({ label: `✨ Conjurar ${def.faceLayout === 'adventure' ? 'aventura' : 'verso'} — ${back.name} ${back.manaCost ?? ''}`, run: () => beginCast(cv, undefined, false, { face: 'back' }) });
+      if (back.types.includes('Land')) opts.push({ label: t('⛰ Jogar terreno — verso: {name}', { name: back.name }), run: () => onAction({ type: 'playLand', objectId: cv.objectId, face: 'back' }) });
+      else if (back.spellModes && back.spellModes.length > 0) opts.push({ label: t('✨ Conjurar verso — {name} {cost} (escolher modo)', { name: back.name, cost: back.manaCost ?? '' }), run: () => setModalPick({ ...cv, card: back }) });
+      else opts.push({ label: t('✨ Conjurar {kind} — {name} {cost}', { kind: def.faceLayout === 'adventure' ? t('aventura') : t('verso'), name: back.name, cost: back.manaCost ?? '' }), run: () => beginCast(cv, undefined, false, { face: 'back' }) });
     }
     if (!def.types.includes('Land') && castable) {
       if (def.spellModes && def.spellModes.length > 0)
-        opts.push({ label: `✨ Conjurar ${def.manaCost ?? ''} (escolher modo)`, run: () => setModalPick(cv) });
-      else opts.push({ label: `✨ Conjurar ${def.manaCost ?? ''}`, run: () => beginCast(cv, undefined) });
+        opts.push({ label: t('✨ Conjurar {cost} (escolher modo)', { cost: def.manaCost ?? '' }), run: () => setModalPick(cv) });
+      else opts.push({ label: t('✨ Conjurar {cost}', { cost: def.manaCost ?? '' }), run: () => beginCast(cv, undefined) });
       if (def.altCost)
-        opts.push({ label: `⚡ Conjurar — ${def.altCost.label}`, run: () => beginAltCast(cv) });
+        opts.push({ label: t('⚡ Conjurar — {label}', { label: def.altCost.label }), run: () => beginAltCast(cv) });
       // Leva 2: métodos alternativos de conjuração a partir da mão.
       for (const cm of def.castMethods ?? []) {
         if (cm.kind === 'escape' || cm.kind === 'foretold' || cm.kind === 'plotted' || cm.kind === 'mayhem' || cm.kind === 'retrace') continue;
         if (cm.kind === 'sneak') {
           if (view.step === 'declareBlockers' && view.activePlayer === you && me.battlefield.some((c) => c.attacking && !c.wasBlocked))
             opts.push({
-              label: `🥷 Conjurar — ${cm.label}`,
-              run: () => setTargeting({ kind: 'ninjutsu', objectId: cv.objectId, specs: [{ what: 'sua criatura atacante não bloqueada' }], chosen: [], label: `${def.name}: sneak — escolha o atacante`, method: 'sneak' }),
+              label: t('🥷 Conjurar — {label}', { label: cm.label }),
+              run: () => setTargeting({ kind: 'ninjutsu', objectId: cv.objectId, specs: [{ what: 'sua criatura atacante não bloqueada' }], chosen: [], label: t('{name}: sneak — escolha o atacante', { name: def.name }), method: 'sneak' }),
             });
           continue;
         }
-        opts.push({ label: `⚡ Conjurar — ${cm.label}`, run: () => beginCast(cv, undefined, false, { method: cm.kind }) });
+        opts.push({ label: t('⚡ Conjurar — {label}', { label: cm.label }), run: () => beginCast(cv, undefined, false, { method: cm.kind }) });
       }
       if (def.entwine && def.spellModes)
-        opts.push({ label: `⚡ Conjurar — entwine ${def.entwine} (todos os modos)`, run: () => beginCast(cv, undefined, false, { entwine: true }) });
+        opts.push({ label: t('⚡ Conjurar — entwine {cost} (todos os modos)', { cost: def.entwine }), run: () => beginCast(cv, undefined, false, { entwine: true }) });
       if (def.fuse && def.backFace)
-        opts.push({ label: `⚡ Fundir — ${def.name} + ${def.backFace.name} (${def.manaCost ?? ''}${def.backFace.manaCost ?? ''})`, run: () => beginCast(cv, undefined, false, { fuse: true }) });
+        opts.push({ label: t('⚡ Fundir — {a} + {b} ({cost})', { a: def.name, b: def.backFace.name, cost: `${def.manaCost ?? ''}${def.backFace.manaCost ?? ''}` }), run: () => beginCast(cv, undefined, false, { fuse: true }) });
       if (cv.miracleAvailable) {
         const mir = def.castMethods?.find((m) => m.kind === 'miracle');
-        if (mir) opts.unshift({ label: `✨ Milagre! Conjurar por ${mir.cost}`, run: () => beginCast(cv, undefined, false, { method: 'miracle' }) });
+        if (mir) opts.unshift({ label: t('✨ Milagre! Conjurar por {cost}', { cost: mir.cost }), run: () => beginCast(cv, undefined, false, { method: 'miracle' }) });
       }
       if (def.morph)
-        opts.push({ label: `🔒 Conjurar virada para baixo {3} (${def.morph.disguise ? 'disfarce' : 'metamorfose'} ${def.morph.cost})`, run: () => onAction({ type: 'castSpell', objectId: cv.objectId, faceDown: true }) });
+        opts.push({ label: t('🔒 Conjurar virada para baixo {3} ({kind} {cost})', { kind: def.morph.disguise ? t('disfarce') : t('metamorfose'), cost: def.morph.cost }), run: () => onAction({ type: 'castSpell', objectId: cv.objectId, faceDown: true }) });
       if (def.suspend)
-        opts.push({ label: `⏳ Suspender ${def.suspend.count} — ${def.suspend.cost}`, run: () => onAction({ type: 'castSpell', objectId: cv.objectId, method: 'suspend' }) });
+        opts.push({ label: t('⏳ Suspender {n} — {cost}', { n: def.suspend.count, cost: def.suspend.cost }), run: () => onAction({ type: 'castSpell', objectId: cv.objectId, method: 'suspend' }) });
       if (def.ninjutsu && view.step === 'declareBlockers' && view.activePlayer === you) {
         const unblocked = me.battlefield.filter((c) => c.attacking && !c.wasBlocked);
         if (unblocked.length > 0)
           opts.push({
-            label: `🥷 Ninjutsu ${def.ninjutsu} (troca por atacante não bloqueado)`,
-            run: () => setTargeting({ kind: 'ninjutsu', objectId: cv.objectId, specs: [{ what: 'sua criatura atacante não bloqueada' }], chosen: [], label: `${def.name}: ninjutsu — escolha o atacante` }),
+            label: t('🥷 Ninjutsu {cost} (troca por atacante não bloqueado)', { cost: def.ninjutsu }),
+            run: () => setTargeting({ kind: 'ninjutsu', objectId: cv.objectId, specs: [{ what: 'sua criatura atacante não bloqueada' }], chosen: [], label: t('{name}: ninjutsu — escolha o atacante', { name: def.name }) }),
           });
       }
     }
@@ -551,12 +568,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     });
     if (def.cycling)
       opts.push({
-        label: `♻ Reciclar (${def.cycling.mana ?? ''}${def.cycling.life ? `${def.cycling.life} vidas` : ''}${def.cycling.sacrifice ? `sacrificar ${def.cycling.sacrifice.what === 'land' ? 'um terreno' : 'uma permanente'}` : ''})`,
+        label: t('♻ Reciclar ({cost})', { cost: `${def.cycling.mana ?? ''}${def.cycling.life ? t('{n} vidas', { n: def.cycling.life }) : ''}${def.cycling.sacrifice ? t('sacrificar {what}', { what: def.cycling.sacrifice.what === 'land' ? t('um terreno') : t('uma permanente') }) : ''}` }),
         run: () => beginCycle(cv),
       });
     if (!castable) {
-      opts.push({ label: '⚠ Manual: → campo de batalha', run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'battlefield' }) });
-      opts.push({ label: '⚠ Manual: → cemitério', run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'graveyard' }) });
+      opts.push({ label: t('⚠ Manual: → campo de batalha'), run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'battlefield' }) });
+      opts.push({ label: t('⚠ Manual: → cemitério'), run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'graveyard' }) });
     }
     if (opts.length === 0) return;
     if (opts.length === 1) {
@@ -609,27 +626,27 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const def = (extra.face === 'back' || extra.method === 'disturb') && cv.card.backFace ? cv.card.backFace : cv.card;
     let x: number | undefined;
     if (def.manaCost && def.manaCost.includes('{X}')) {
-      const n = await askNumber(def.name, 'Escolha o valor de X', '1');
+      const n = await askNumber(def.name, t('Escolha o valor de X'), '1');
       if (n === null) return;
       x = n;
     }
     let kicked: boolean | undefined;
     let kickerTimes: number | undefined;
     if (def.kicker && def.multikicker) {
-      const n = await askNumber(def.name, `Quantas vezes pagar ${def.kicker.cost}? (0 = nenhuma)`, '0');
+      const n = await askNumber(def.name, t('Quantas vezes pagar {cost}? (0 = nenhuma)', { cost: def.kicker.cost }), '0');
       if (n === null) return;
       kickerTimes = n;
       kicked = kickerTimes > 0;
     } else if (def.kicker) {
       kicked = def.kicker.sacrifice
-        ? await askConfirm(def.name, 'Barganhar? Você sacrifica um artefato, encantamento ou ficha ao conjurar (escolhido a seguir).', 'Barganhar', 'Sem barganha')
-        : await askConfirm(def.name, def.kicker.label ? `${def.kicker.label}?` : `Pagar o kicker ${def.kicker.cost}?`, 'Pagar', 'Não pagar');
+        ? await askConfirm(def.name, t('Barganhar? Você sacrifica um artefato, encantamento ou ficha ao conjurar (escolhido a seguir).'), t('Barganhar'), t('Sem barganha'))
+        : await askConfirm(def.name, def.kicker.label ? `${def.kicker.label}?` : t('Pagar o kicker {cost}?', { cost: def.kicker.cost }), t('Pagar'), t('Não pagar'));
     }
     let buyback: boolean | undefined;
-    if (def.buyback && !extra.method) buyback = await askConfirm(def.name, `Pagar buyback ${def.buyback}? (a mágica volta para a mão)`, 'Pagar', 'Não pagar');
+    if (def.buyback && !extra.method) buyback = await askConfirm(def.name, t('Pagar buyback {cost}? (a mágica volta para a mão)', { cost: def.buyback }), t('Pagar'), t('Não pagar'));
     let replicateTimes: number | undefined;
     if (def.replicate && !extra.method) {
-      const n = await askNumber(def.name, `Quantas vezes pagar replicar ${def.replicate}? (0 = nenhuma; cada uma cria uma cópia)`, '0');
+      const n = await askNumber(def.name, t('Quantas vezes pagar replicar {cost}? (0 = nenhuma; cada uma cria uma cópia)', { cost: def.replicate }), '0');
       if (n === null) return;
       replicateTimes = n;
     }
@@ -640,16 +657,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const emergeSac = extra.method === 'emerge' ? 'criatura para sacrificar (emergir)' : undefined;
     let eitherDiscard = false;
     if (def.additionalCost?.either) {
-      eitherDiscard = !(await askConfirm(def.name, 'Custo adicional: sacrificar uma criatura ou descartar uma carta?', `Sacrificar ${def.additionalCost.sacrifice?.what === 'creature' ? 'uma criatura' : 'uma permanente'}`, 'Descartar uma carta'));
+      eitherDiscard = !(await askConfirm(def.name, t('Custo adicional: sacrificar uma criatura ou descartar uma carta?'), t('Sacrificar {what}', { what: def.additionalCost.sacrifice?.what === 'creature' ? t('uma criatura') : t('uma permanente') }), t('Descartar uma carta')));
     }
     const sacCount = def.additionalCost?.sacrifice && !eitherDiscard ? def.additionalCost.count ?? 1 : fbSac ? def.flashback?.sacrificeCount ?? 1 : bargainSac || emergeSac ? 1 : 0;
     const sacSpecs = Array.from({ length: sacCount }, () => ({
       what: def.additionalCost?.sacrifice?.what ?? fbSac?.what ?? emergeSac ?? bargainSac ?? 'permanent',
     }));
     // Custo adicional de vida (Leva 5): confirmação explícita.
-    if (def.additionalCost?.payLife && !(await askConfirm(def.name, `Pagar ${def.additionalCost.payLife} pontos de vida como custo adicional?`, 'Pagar', 'Cancelar'))) return;
+    if (def.additionalCost?.payLife && !(await askConfirm(def.name, t('Pagar {n} pontos de vida como custo adicional?', { n: def.additionalCost.payLife }), t('Pagar'), t('Cancelar')))) return;
     // Casualty N (Leva 5b): sacrifício opcional para copiar a mágica.
-    const casualtyPick = def.casualty !== undefined && (await askConfirm(def.name, `Casualty ${def.casualty}: sacrificar uma criatura com poder ${def.casualty} ou mais para copiar a mágica?`, 'Sacrificar', 'Não'));
+    const casualtyPick = def.casualty !== undefined && (await askConfirm(def.name, t('Casualty {n}: sacrificar uma criatura com poder {n} ou mais para copiar a mágica?', { n: def.casualty }), t('Sacrificar'), t('Não')));
     if (casualtyPick) sacSpecs.push({ what: `criatura com poder ${def.casualty} ou mais para sacrificar (casualty)` });
     // Retrace: uma carta de terreno da mão para descartar, antes de tudo. Custo adicional de descarte: N cartas da mão.
     const escalateDiscards = def.escalate?.discard ? Math.max(0, (extra.modes?.length ?? 0) - 1) * def.escalate.discard : 0;
@@ -676,7 +693,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : extra.modes ? `${def.name} — ${extra.modes.map((i) => def.spellModes?.[i]?.label).join(' + ')}` : def.name;
-      const label = handPickCount > 0 ? `${base} (escolha ${extra.method === 'retrace' ? 'o terreno' : 'a(s) carta(s)'} a descartar primeiro)` : sacCount > 0 ? `${base} (escolha o sacrifício primeiro)` : base;
+      const label = handPickCount > 0 ? t('{base} (escolha {what} a descartar primeiro)', { base, what: extra.method === 'retrace' ? t('o terreno') : t('a(s) carta(s)') }) : sacCount > 0 ? t('{base} (escolha o sacrifício primeiro)', { base }) : base;
       setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
     }
   };
@@ -686,7 +703,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const cyc = cv.card.cycling;
     if (!cyc) return;
     if (cyc.sacrifice)
-      setTargeting({ kind: 'cycle', objectId: cv.objectId, specs: [{ what: cyc.sacrifice.what === 'land' ? 'terreno para sacrificar (reciclar)' : 'permanente para sacrificar (reciclar)' }], chosen: [], label: `${cv.card.name}: reciclar — escolha o sacrifício` });
+      setTargeting({ kind: 'cycle', objectId: cv.objectId, specs: [{ what: cyc.sacrifice.what === 'land' ? 'terreno para sacrificar (reciclar)' : 'permanente para sacrificar (reciclar)' }], chosen: [], label: t('{name}: reciclar — escolha o sacrifício', { name: cv.card.name }) });
     else onAction({ type: 'cycle', objectId: cv.objectId });
   };
 
@@ -707,13 +724,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         picked.push(c.objectId);
         if (seen.size >= cm.escapeTypes) break;
       }
-      if (seen.size < cm.escapeTypes) { alert(`Escapar precisa de ${cm.escapeTypes} tipos de carta entre as outras cartas do cemitério (há ${seen.size}).`); return; }
+      if (seen.size < cm.escapeTypes) { alert(t('Escapar precisa de {n} tipos de carta entre as outras cartas do cemitério (há {have}).', { n: cm.escapeTypes, have: seen.size })); return; }
       beginCast(cv, undefined, false, { method: 'escape', escapeExile: picked });
       return;
     }
     const need = cm.exileFromGraveyard ?? 0;
     if (others.length < need) {
-      alert(`Escapar precisa exilar ${need} outras cartas do cemitério (você tem ${others.length}).`);
+      alert(t('Escapar precisa exilar {n} outras cartas do cemitério (você tem {have}).', { n: need, have: others.length }));
       return;
     }
     beginCast(cv, undefined, false, { method: 'escape', escapeExile: others.slice(0, need) });
@@ -765,9 +782,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         .filter(({ a }) => (a.zone ?? 'battlefield') === 'battlefield' && !cv.faceDown)
         .map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) }));
       if (cv.card.crew !== undefined && !cv.crewed)
-        opts.unshift({ label: `🚗 Tripular ${cv.card.crew} (vira criatura até o fim do turno)`, run: () => crewVehicle(cv) });
+        opts.unshift({ label: t('🚗 Tripular {n} (vira criatura até o fim do turno)', { n: cv.card.crew }), run: () => crewVehicle(cv) });
       if (cv.faceDown && cv.card.morph)
-        opts.unshift({ label: `🔓 Virar para cima — ${cv.card.morph.cost}`, run: () => onAction({ type: 'turnFaceUp', objectId: cv.objectId }) });
+        opts.unshift({ label: t('🔓 Virar para cima — {cost}', { cost: cv.card.morph.cost }), run: () => onAction({ type: 'turnFaceUp', objectId: cv.objectId }) });
       if (opts.length === 0) return;
       if (opts.length === 1) {
         opts[0].run();
@@ -847,11 +864,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     } else {
       const label =
         discardCount > 0
-          ? `${cv.card.name}: ${ability.text} (escolha o descarte primeiro)`
+          ? t('{name}: {text} (escolha o descarte primeiro)', { name: cv.card.name, text: ability.text })
           : tapPick
-            ? `${cv.card.name}: ${ability.text} (escolha a criatura a virar)`
+            ? t('{name}: {text} (escolha a criatura a virar)', { name: cv.card.name, text: ability.text })
             : sacCount > 0
-              ? `${cv.card.name}: ${ability.text} (${returnCost ? 'escolha o que devolver à mão primeiro' : 'escolha o sacrifício primeiro'})`
+              ? t('{name}: {text} ({which})', { name: cv.card.name, text: ability.text, which: returnCost ? t('escolha o que devolver à mão primeiro') : t('escolha o sacrifício primeiro') })
               : `${cv.card.name}: ${ability.text}`;
       setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined, tapPick: tapPick || undefined });
     }
@@ -871,7 +888,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       total += c.power ?? 0;
     }
     if (total < need) {
-      onAction({ type: 'chat', text: `(não há criaturas desviradas suficientes para tripular ${cv.card.name})` });
+      onAction({ type: 'chat', text: t('(não há criaturas desviradas suficientes para tripular {name})', { name: cv.card.name }) });
       return;
     }
     onAction({ type: 'crew', objectId: cv.objectId, creatures: picked });
@@ -901,14 +918,14 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const enemyWalkers = opp.battlefield.filter((c) => c.card.types.includes('Planeswalker'));
     if (attackSel.size > 0 && enemyWalkers.length > 0) {
       const pw = enemyWalkers[0];
-      if (await askConfirm('Ataque', `Atacar ${pw.card.name} em vez do jogador?`, 'Planeswalker', 'Jogador'))
+      if (await askConfirm(t('Ataque'), t('Atacar {name} em vez do jogador?', { name: pw.card.name }), t('Planeswalker'), t('Jogador')))
         defendTarget = pw.objectId;
     }
     // Exert: pergunta por atacante que permite ("you may exert ~ as it attacks").
     const exerted: number[] = [];
     for (const id of attackSel) {
       const c = me.battlefield.find((x) => x.objectId === id);
-      if (c?.card.canExert && (await askConfirm(c.card.name, 'Exert? (não desvira no seu próximo turno)', 'Exert', 'Não'))) exerted.push(id);
+      if (c?.card.canExert && (await askConfirm(c.card.name, t('Exert? (não desvira no seu próximo turno)'), t('Exert'), t('Não')))) exerted.push(id);
     }
     onAction({ type: 'declareAttackers', attackers: [...attackSel], defendTarget, exerted: exerted.length > 0 ? exerted : undefined });
   };
@@ -931,71 +948,73 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     if (view.mulligan) {
       if (myMulligan)
         return mullTaken > 0
-          ? `Mulligan ${mullTaken}: mantenha escolhendo ${mullTaken} carta(s) para o fundo, ou compre 7 de novo`
-          : 'Decida sua mão inicial';
-      return 'Aguardando o oponente decidir a mão…';
+          ? t('Mulligan {n}: mantenha escolhendo {n} carta(s) para o fundo, ou compre 7 de novo', { n: mullTaken })
+          : t('Decida sua mão inicial');
+      return t('Aguardando o oponente decidir a mão…');
     }
-    if (view.pendingDecision?.type === 'chooseMode' && view.pendingDecision.player !== you) return 'Aguardando o oponente escolher um modo…';
-    if (targeting) return `${targeting.label}: escolha o alvo (${targeting.chosen.length + 1}/${targeting.specs.length}) — Esc cancela`;
-    if (myPayment) return `Pague ${myPayment.cost} para ${myPayment.cardName}: clique nas suas fontes de mana`;
-    if (payment) return 'Aguardando o oponente pagar a mana…';
+    if (view.pendingDecision?.type === 'chooseMode' && view.pendingDecision.player !== you) return t('Aguardando o oponente escolher um modo…');
+    if (targeting) return t('{label}: escolha o alvo ({n}/{total}) — Esc cancela', { label: targeting.label, n: targeting.chosen.length + 1, total: targeting.specs.length });
+    if (myPayment) return t('Pague {cost} para {name}: clique nas suas fontes de mana', { cost: myPayment.cost, name: myPayment.cardName });
+    if (payment) return t('Aguardando o oponente pagar a mana…');
     if (myChoice) return myChoice.prompt;
-    if (effectChoice) return 'Aguardando a escolha do oponente…';
-    if (triggerTargets && triggerTargets.player !== you) return 'Aguardando o oponente escolher alvos…';
-    if (myDiscard) return `Descarte ${discardCount} carta(s): selecione na mão e confirme`;
-    if (awaitingMyAttack) return 'Escolha seus atacantes e confirme';
-    if (awaitingMyBlocks) return 'Clique num bloqueador seu, depois no atacante; confirme';
-    if (view.combatAwaiting) return 'Aguardando o oponente…';
-    if (yieldUntil) return `⏭ Passando até: ${yieldUntil.kind === 'step' && yieldUntil.target ? stepName(yieldUntil.target) : YIELD_LABEL[yieldUntil.kind]}`;
-    if (holdPriority && myPriority) return '📌 Segurando a prioridade — jogue mais mágicas ou passe manualmente';
+    if (effectChoice) return t('Aguardando a escolha do oponente…');
+    if (triggerTargets && triggerTargets.player !== you) return t('Aguardando o oponente escolher alvos…');
+    if (myDiscard) return t('Descarte {n} carta(s): selecione na mão e confirme', { n: discardCount });
+    if (awaitingMyAttack) return t('Escolha seus atacantes e confirme');
+    if (awaitingMyBlocks) return t('Clique num bloqueador seu, depois no atacante; confirme');
+    if (view.combatAwaiting) return t('Aguardando o oponente…');
+    if (yieldUntil) return t('⏭ Passando até: {target}', { target: yieldUntil.kind === 'step' && yieldUntil.target ? stepName(yieldUntil.target) : t(YIELD_LABEL[yieldUntil.kind]) });
+    if (holdPriority && myPriority) return t('📌 Segurando a prioridade — jogue mais mágicas ou passe manualmente');
     if (myPriority && view.stack.length > 0) {
       const top = view.stack[view.stack.length - 1];
-      if (top.controller === you && top.chapter !== undefined) return `Capítulo ${top.chapter} de ${top.cardName} na pilha`;
-      return 'Responder à pilha ou resolver';
+      if (top.controller === you && top.chapter !== undefined) return t('Capítulo {n} de {name} na pilha', { n: top.chapter, name: top.cardName });
+      return t('Responder à pilha ou resolver');
     }
     if (myPriority && (view.step === 'main1' || view.step === 'main2') && view.activePlayer === you)
-      return 'Sua fase principal — jogue cartas ou passe';
-    if (myPriority) return 'Você tem a prioridade';
-    return 'Aguardando o oponente…';
+      return t('Sua fase principal — jogue cartas ou passe');
+    if (myPriority) return t('Você tem a prioridade');
+    return t('Aguardando o oponente…');
   })();
 
   return (
-    <div className="table" onClick={() => { setMenu(null); setShowStops(false); setActionMenu(null); }}>
+    <div className="table" onClick={() => { setMenu(null); setShowSettings(false); setActionMenu(null); }}>
       {/* -------- oponente -------- */}
       <div className={`opp-bar player-bar ${view.priority === oppId ? 'priority-holder' : ''}`}>
         <div
           className={`life ${targeting ? 'targetable' : ''}`}
           onClick={() => clickPlayer(oppId)}
-          title={targeting ? 'Escolher como alvo' : `${opp.name}`}
+          title={targeting ? t('Escolher como alvo') : `${opp.name}`}
         >
           {opp.life}
         </div>
         <strong>{opp.name}</strong>
-        {opp.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {opp.poison}</span>}
-        {opp.energy > 0 && <span className="zone-pill" title="Energia">⚡ {opp.energy}</span>}
-        {view.monarch === oppId && <span className="zone-pill" title="Monarca: compra uma carta no fim do turno">👑 monarca</span>}
-        {view.initiative === oppId && <span className="zone-pill" title="Iniciativa: aventura-se em Undercity na manutenção">🗡 iniciativa</span>}
+        {opp.poison > 0 && <span className="zone-pill" title={t('Marcadores de veneno (10 = derrota)')}>☠ {opp.poison}</span>}
+        {opp.energy > 0 && <span className="zone-pill" title={t('Energia')}>⚡ {opp.energy}</span>}
+        {view.monarch === oppId && <span className="zone-pill" title={t('Monarca: compra uma carta no fim do turno')}>{t('👑 monarca')}</span>}
+        {view.initiative === oppId && <span className="zone-pill" title={t('Iniciativa: aventura-se em Undercity na manutenção')}>{t('🗡 iniciativa')}</span>}
         {opp.dungeon && <span className="zone-pill" title={opp.dungeon.name}>🏰 {opp.dungeon.room}</span>}
-        {opp.completedDungeons > 0 && <span className="zone-pill" title="Masmorras completadas">🏆 {opp.completedDungeons}</span>}
-        {view.activePlayer === oppId && <span className="zone-pill">turno dele</span>}
-        <span className="zone-pill" title="Cartas na mão">✋ {opp.handSize}</span>
-        <span className="zone-pill" title="Cartas na biblioteca">📚 {opp.librarySize}</span>
-        <span
-          className="zone-pill"
-          style={{ cursor: 'pointer' }}
-          title="Ver cemitério"
-          onClick={(e) => { e.stopPropagation(); setZonePick({ player: oppId, zone: 'graveyard' }); }}
-        >
-          🪦 {opp.graveyard.length}
-        </span>
-        <span
-          className="zone-pill"
-          style={{ cursor: 'pointer' }}
-          title="Ver exílio"
-          onClick={(e) => { e.stopPropagation(); setZonePick({ player: oppId, zone: 'exile' }); }}
-        >
-          🌀 {opp.exile.length}
-        </span>
+        {opp.completedDungeons > 0 && <span className="zone-pill" title={t('Masmorras completadas')}>🏆 {opp.completedDungeons}</span>}
+        {view.activePlayer === oppId && <span className="zone-pill">{t('turno dele')}</span>}
+        <div className="zone-stack">
+          <span className="zone-pill" title={t('Cartas na mão')}>✋ {opp.handSize}</span>
+          <span className="zone-pill" title={t('Cartas na biblioteca')}>📚 {opp.librarySize}</span>
+          <span
+            className="zone-pill"
+            style={{ cursor: 'pointer' }}
+            title={t('Ver cemitério')}
+            onClick={(e) => { e.stopPropagation(); setZonePick({ player: oppId, zone: 'graveyard' }); }}
+          >
+            🪦 {opp.graveyard.length}
+          </span>
+          <span
+            className="zone-pill"
+            style={{ cursor: 'pointer' }}
+            title={t('Ver exílio')}
+            onClick={(e) => { e.stopPropagation(); setZonePick({ player: oppId, zone: 'exile' }); }}
+          >
+            🌀 {opp.exile.length}
+          </span>
+        </div>
         <ManaChips pool={opp.manaPool} />
       </div>
 
@@ -1029,72 +1048,66 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             <span
               key={s}
               className={`phase-step ${view.step === s ? 'current' : ''} ${stoppable ? 'clickable' : ''} ${targeted ? 'yield-target' : ''}`}
-              title={stoppable ? `${stepName(s)} — clique para passar automaticamente até esta etapa começar` : stepName(s)}
+              title={stoppable ? t('{step} — clique para passar automaticamente até esta etapa começar', { step: stepName(s) }) : stepName(s)}
               onClick={(e) => { e.stopPropagation(); if (stoppable && view.status === 'playing' && !view.mulligan) startYield('step', s); }}
             >
-              {STEP_SHORT[s]}
+              {t(STEP_SHORT[s])}
             </span>
           );
         })}
-        <span className={`storm-counter ${view.spellsCastThisTurn > 0 ? 'active' : ''}`} title="Mágicas conjuradas neste turno (contagem de tempestade)">
-          ⛈ Tempestade {view.spellsCastThisTurn}
+        <span className={`storm-counter ${view.spellsCastThisTurn > 0 ? 'active' : ''}`} title={t('Mágicas conjuradas neste turno (contagem de tempestade)')}>
+          {t('⛈ Tempestade')} {view.spellsCastThisTurn}
         </span>
         <div className="phase-actions">
           {promptText && <span className="prompt-banner">{promptText}</span>}
-          {targeting && <button onClick={() => setTargeting(null)}>Cancelar</button>}
-          {myPayment && <button onClick={() => onAction({ type: 'cancelPayment' })}>Cancelar pagamento</button>}
+          {targeting && <button onClick={() => setTargeting(null)}>{t('Cancelar')}</button>}
+          {myPayment && <button onClick={() => onAction({ type: 'cancelPayment' })}>{t('Cancelar pagamento')}</button>}
           {awaitingMyAttack && (
             <button className="primary" onClick={confirmAttack}>
-              {attackSel.size > 0 ? `Atacar com ${attackSel.size}` : 'Não atacar'}
+              {attackSel.size > 0 ? t('Atacar com {n}', { n: attackSel.size }) : t('Não atacar')}
             </button>
           )}
           {awaitingMyBlocks && (
             <button className="primary" onClick={confirmBlocks}>
-              {blockSel.size > 0 ? `Confirmar ${blockSel.size} bloqueio(s)` : 'Não bloquear'}
+              {blockSel.size > 0 ? t('Confirmar {n} bloqueio(s)', { n: blockSel.size }) : t('Não bloquear')}
             </button>
           )}
           {myDiscard && (
             <button className="primary" disabled={discardSel.size !== discardCount}
               onClick={() => onAction({ type: 'chooseDiscard', objectIds: [...discardSel] })}>
-              Descartar {discardSel.size}/{discardCount}
+              {t('Descartar')} {discardSel.size}/{discardCount}
             </button>
           )}
           {myPriority && !view.combatAwaiting && !myDiscard && !view.mulligan && (
             <button onClick={() => onAction({ type: 'passPriority' })}>
-              {view.stack.length > 0 ? 'Resolver' : 'Passar'}
+              {view.stack.length > 0 ? t('Resolver') : t('Passar')}
             </button>
           )}
           {view.status === 'playing' && !view.mulligan && (
-            <div className="yield-group" title="Auto-yield: passa a prioridade sozinho até o momento escolhido">
-              <button
-                className={yieldUntil?.kind === 'myTurn' ? 'yield-on' : ''}
-                title="Passar até o meu próximo turno"
-                onClick={(e) => { e.stopPropagation(); startYield('myTurn'); }}
-              >
-                ⏭ Meu turno
-              </button>
+            <div className="yield-group" title={t('Auto-yield: passa a prioridade sozinho até o momento escolhido')}>
               <button
                 className={yieldUntil?.kind === 'action' ? 'yield-on' : ''}
-                title="Passar até a próxima ação: qualquer mágica, habilidade ou gatilho que entre na pilha devolve o controle"
+                title={t('Passar até a próxima ação: qualquer mágica, habilidade ou gatilho que entre na pilha devolve o controle')}
                 onClick={(e) => { e.stopPropagation(); startYield('action'); }}
               >
-                ⏭ Próxima ação
+                {t('⏭ Próxima ação')}
+              </button>
+              <button
+                className={yieldUntil?.kind === 'myTurn' ? 'yield-on' : ''}
+                title={t('Passar até o meu próximo turno')}
+                onClick={(e) => { e.stopPropagation(); startYield('myTurn'); }}
+              >
+                {t('⏭ Meu turno')}
               </button>
               <button
                 className={holdPriority ? 'yield-on' : ''}
-                title="Segurar a prioridade: nada é passado automaticamente — empilhe várias mágicas antes de resolver"
+                title={t('Segurar a prioridade: nada é passado automaticamente — empilhe várias mágicas antes de resolver')}
                 onClick={(e) => { e.stopPropagation(); setYieldUntil(null); setHoldPriority(!holdPriority); }}
               >
-                📌
+                {t('📌 Prioridade')}
               </button>
             </div>
           )}
-          <button
-            title="Paradas automáticas"
-            onClick={(e) => { e.stopPropagation(); setShowStops(!showStops); }}
-          >
-            ⏱
-          </button>
         </div>
       </div>
 
@@ -1132,41 +1145,44 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         <div className={`life ${targeting ? 'targetable' : ''}`} onClick={() => clickPlayer(you)}>
           {me.life}
         </div>
-        {me.poison > 0 && <span className="zone-pill" title="Marcadores de veneno (10 = derrota)">☠ {me.poison}</span>}
-        {me.energy > 0 && <span className="zone-pill" title="Energia">⚡ {me.energy}</span>}
-        {view.monarch === you && <span className="zone-pill" title="Monarca: você compra uma carta no fim do seu turno">👑 monarca</span>}
-        {view.initiative === you && <span className="zone-pill" title="Iniciativa: você se aventura em Undercity na sua manutenção">🗡 iniciativa</span>}
+        {me.poison > 0 && <span className="zone-pill" title={t('Marcadores de veneno (10 = derrota)')}>☠ {me.poison}</span>}
+        {me.energy > 0 && <span className="zone-pill" title={t('Energia')}>⚡ {me.energy}</span>}
+        {view.monarch === you && <span className="zone-pill" title={t('Monarca: você compra uma carta no fim do seu turno')}>{t('👑 monarca')}</span>}
+        {view.initiative === you && <span className="zone-pill" title={t('Iniciativa: você se aventura em Undercity na sua manutenção')}>{t('🗡 iniciativa')}</span>}
         {me.dungeon && <span className="zone-pill" title={me.dungeon.name}>🏰 {me.dungeon.room}</span>}
-        {me.completedDungeons > 0 && <span className="zone-pill" title="Masmorras completadas">🏆 {me.completedDungeons}</span>}
-        {me.dredgeArmed && <span className="zone-pill" title="A próxima compra será substituída por dragar">♻ {me.dredgeArmed}</span>}
-        <span className="zone-pill" title="Cartas na biblioteca">📚 {me.librarySize}</span>
-        {me.libraryTop && <span className="zone-pill" title="Topo da sua biblioteca (revelado para você)">🔝 {me.libraryTop.card.name}</span>}
-        <span
-          className="zone-pill"
-          style={{ cursor: 'pointer' }}
-          title="Ver cemitério"
-          onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'graveyard' }); }}
-        >
-          🪦 {me.graveyard.length}
-        </span>
-        <span
-          className="zone-pill"
-          style={{ cursor: 'pointer' }}
-          title="Ver exílio"
-          onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'exile' }); }}
-        >
-          🌀 {me.exile.length}
-        </span>
-        {me.sideboardSize > 0 && (
+        {me.completedDungeons > 0 && <span className="zone-pill" title={t('Masmorras completadas')}>🏆 {me.completedDungeons}</span>}
+        {me.dredgeArmed && <span className="zone-pill" title={t('A próxima compra será substituída por dragar')}>♻ {me.dredgeArmed}</span>}
+        {me.libraryTop && <span className="zone-pill" title={t('Topo da sua biblioteca (revelado para você)')}>🔝 {me.libraryTop.card.name}</span>}
+        <div className="zone-stack">
+          <span className="zone-pill" title={t('Cartas na mão')}>✋ {me.handSize}</span>
+          <span className="zone-pill" title={t('Cartas na biblioteca')}>📚 {me.librarySize}</span>
           <span
             className="zone-pill"
             style={{ cursor: 'pointer' }}
-            title="Sideboard (fora do jogo): Wishes e Karn buscam daqui"
-            onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'sideboard' }); }}
+            title={t('Ver cemitério')}
+            onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'graveyard' }); }}
           >
-            📦 {me.sideboardSize}
+            🪦 {me.graveyard.length}
           </span>
-        )}
+          <span
+            className="zone-pill"
+            style={{ cursor: 'pointer' }}
+            title={t('Ver exílio')}
+            onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'exile' }); }}
+          >
+            🌀 {me.exile.length}
+          </span>
+          {me.sideboardSize > 0 && (
+            <span
+              className="zone-pill"
+              style={{ cursor: 'pointer' }}
+              title={t('Sideboard (fora do jogo): Wishes e Karn buscam daqui')}
+              onClick={(e) => { e.stopPropagation(); setZonePick({ player: you, zone: 'sideboard' }); }}
+            >
+              📦 {me.sideboardSize}
+            </span>
+          )}
+        </div>
         <ManaChips pool={me.manaPool} />
         <div className="hand-row">
           {(me.hand ?? []).map((c) => (
@@ -1181,7 +1197,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             />
           ))}
         </div>
-        <button onClick={(e) => { e.stopPropagation(); setShowManual(!showManual); }} title="Ações manuais (Tier 3)">
+        <button onClick={(e) => { e.stopPropagation(); setShowManual(!showManual); }} title={t('Ações manuais (Tier 3)')}>
           🛠
         </button>
       </div>
@@ -1190,8 +1206,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       <div className="side-panel">
         <div className="phase-strip" style={{ justifyContent: 'space-between' }}>
           <span className="panel-title">
-            {match ? `Jogo ${match.gameNumber} (${match.wins[you]}–${match.wins[oppId]}) · ` : ''}
-            Turno {view.turn} · {stepName(view.step)}
+            {match ? t('Jogo {n} ({w}–{l}) · ', { n: match.gameNumber, w: match.wins[you], l: match.wins[oppId] }) : ''}
+            {t('Turno {n} · {step}', { n: view.turn, step: stepName(view.step) })}
           </span>
           <button
             className="danger"
@@ -1212,29 +1228,29 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               }
             }}
           >
-            {concedeArmed ? 'Confirmar?' : 'Conceder'}
+            {concedeArmed ? t('Confirmar?') : t('Conceder')}
           </button>
         </div>
         <HoverPreview slot />
         {showManual && (
           <div className="stack-panel">
-            <div className="panel-title">Modo manual — tudo fica no log</div>
+            <div className="panel-title">{t('Modo manual — tudo fica no log')}</div>
             <div className="manual-drawer">
-              <button onClick={() => onAction({ type: 'manualDraw', count: 1 })}>Comprar carta</button>
-              <button onClick={() => onAction({ type: 'manualLife', player: you, delta: 1 })}>+1 vida</button>
-              <button onClick={() => onAction({ type: 'manualLife', player: you, delta: -1 })}>-1 vida</button>
-              <button onClick={() => onAction({ type: 'manualUntapAll' })}>Desvirar tudo</button>
-              <button onClick={() => onAction({ type: 'manualShuffle' })}>Embaralhar</button>
+              <button onClick={() => onAction({ type: 'manualDraw', count: 1 })}>{t('Comprar carta')}</button>
+              <button onClick={() => onAction({ type: 'manualLife', player: you, delta: 1 })}>{t('+1 vida')}</button>
+              <button onClick={() => onAction({ type: 'manualLife', player: you, delta: -1 })}>{t('-1 vida')}</button>
+              <button onClick={() => onAction({ type: 'manualUntapAll' })}>{t('Desvirar tudo')}</button>
+              <button onClick={() => onAction({ type: 'manualShuffle' })}>{t('Embaralhar')}</button>
               <button
                 onClick={() => {
-                  const name = prompt('Nome da ficha:', 'Goblin');
+                  const name = prompt(t('Nome da ficha:'), 'Goblin');
                   if (!name) return;
-                  const pt = prompt('Poder/resistência (ex.: 1/1):', '1/1') ?? '1/1';
+                  const pt = prompt(t('Poder/resistência (ex.: 1/1):'), '1/1') ?? '1/1';
                   const m = pt.match(/(\d+)\s*\/\s*(\d+)/);
                   onAction({ type: 'manualToken', name, power: m ? parseInt(m[1], 10) : 1, toughness: m ? parseInt(m[2], 10) : 1 });
                 }}
               >
-                Criar ficha
+                {t('Criar ficha')}
               </button>
             </div>
           </div>
@@ -1244,9 +1260,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             <div key={i} className={i >= log.length - 6 ? 'recent' : ''}>{line}</div>
           ))}
         </div>
-        <div className="row">
+        <div className="row chat-row">
           <input
-            placeholder="chat…"
+            placeholder={t('chat…')}
             value={chatText}
             onChange={(e) => setChatText(e.target.value)}
             onKeyDown={(e) => {
@@ -1256,13 +1272,20 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               }
             }}
           />
+          <button
+            className={`gear-btn ${showSettings ? 'yield-on' : ''}`}
+            title={t('Configurações')}
+            onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
+          >
+            ⚙
+          </button>
         </div>
       </div>
 
       {/* -------- pilha (pop-up com as cartas, estilo MTGO) -------- */}
       {view.stack.length > 0 && (
         <div className="stack-popup" onClick={(e) => e.stopPropagation()}>
-          <div className="panel-title">Pilha — a da esquerda resolve primeiro</div>
+          <div className="panel-title">{t('Pilha — a da esquerda resolve primeiro')}</div>
           <div className="stack-cards">
             {[...view.stack].reverse().map((item, i) => (
               <div
@@ -1272,9 +1295,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 style={targeting ? { cursor: 'crosshair' } : undefined}
                 title={item.description}
               >
-                <CardFace def={item.card} name={item.cardName} badge={i === 0 ? 'próxima' : undefined} title={item.description} />
+                <CardFace def={item.card} name={item.cardName} badge={i === 0 ? t('próxima') : undefined} title={item.description} />
                 <div className="stack-desc">
-                  {item.kind === 'copy' ? '⧉ cópia — ' : item.kind === 'ability' ? '⚙ ' : ''}
+                  {item.kind === 'copy' ? t('⧉ cópia — ') : item.kind === 'ability' ? '⚙ ' : ''}
                   {item.description}
                 </div>
               </div>
@@ -1286,17 +1309,17 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {/* -------- pop-ups de zona (carta foi para cemitério/exílio) -------- */}
       {zoneToasts.length > 0 && (
         <div className="zone-toasts">
-          {zoneToasts.map((t) => (
+          {zoneToasts.map((z) => (
             <div
-              key={t.key}
+              key={z.key}
               className="zone-toast"
-              title="Clique para abrir a zona"
-              onClick={(e) => { e.stopPropagation(); setZonePick({ player: t.player, zone: t.zone }); }}
+              title={t('Clique para abrir a zona')}
+              onClick={(e) => { e.stopPropagation(); setZonePick({ player: z.player, zone: z.zone }); }}
             >
-              <CardFace def={t.card.card} />
+              <CardFace def={z.card.card} />
               <div className="zone-toast-label">
-                <strong>{t.card.card.name}</strong>
-                <span>{t.label} de {view.players[t.player].name}</span>
+                <strong>{z.card.card.name}</strong>
+                <span>{t('{label} de {name}', { label: t(z.label), name: view.players[z.player].name })}</span>
               </div>
             </div>
           ))}
@@ -1304,18 +1327,24 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       )}
 
       {/* -------- paradas automáticas -------- */}
-      {showStops && (
-        <div className="context-menu stops-panel" style={{ right: 12, top: 60 }} onClick={(e) => e.stopPropagation()}>
-          <div className="panel-title" style={{ padding: '4px 10px' }}>Parar automaticamente em:</div>
+      {showSettings && (
+        <div className="context-menu stops-panel settings-panel" onClick={(e) => e.stopPropagation()}>
+          <div className="panel-title" style={{ padding: '4px 10px' }}>{t('Configurações')}</div>
+          <div className="settings-row">
+            <span className="muted">{t('Idioma')}</span>
+            <button className={lang === 'pt-BR' ? 'yield-on' : ''} onClick={() => setLang('pt-BR')}>Português (BR)</button>
+            <button className={lang === 'en-US' ? 'yield-on' : ''} onClick={() => setLang('en-US')}>English (US)</button>
+          </div>
+          <div className="panel-title" style={{ padding: '4px 10px' }}>{t('Parar automaticamente em:')}</div>
           <div className="stops-grid">
             <span />
-            <span className="muted">meu turno</span>
-            <span className="muted">oponente</span>
+            <span className="muted">{t('meu turno')}</span>
+            <span className="muted">{t('oponente')}</span>
             {STOPPABLE.map((s) => (
               <StopRow key={s} step={s} stops={stops} onChange={saveStops} />
             ))}
           </div>
-          <button onClick={() => saveStops(DEFAULT_STOPS)}>Restaurar padrão</button>
+          <button onClick={() => saveStops(DEFAULT_STOPS)}>{t('Restaurar padrão')}</button>
         </div>
       )}
 
@@ -1328,7 +1357,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               {opt.label}
             </button>
           ))}
-          <button className="danger" onClick={() => setActionMenu(null)}>Cancelar</button>
+          <button className="danger" onClick={() => setActionMenu(null)}>{t('Cancelar')}</button>
         </div>
       )}
 
@@ -1337,7 +1366,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         <div className="mulligan-overlay" onClick={() => setColorPick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>{colorPick.name}</h2>
-            <div className="muted">Escolha a cor da mana:</div>
+            <div className="muted">{t('Escolha a cor da mana:')}</div>
             <div className="row" style={{ justifyContent: 'center' }}>
               {colorPick.colors.map((c) => (
                 <button
@@ -1360,7 +1389,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 </button>
               ))}
             </div>
-            <button className="danger" onClick={() => setColorPick(null)}>Cancelar</button>
+            <button className="danger" onClick={() => setColorPick(null)}>{t('Cancelar')}</button>
           </div>
         </div>
       )}
@@ -1370,7 +1399,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         <div className="mulligan-overlay">
           <div className="mulligan-box">
             <h2>{view.pendingDecision.cardName}</h2>
-            <div className="muted">Escolha um modo:</div>
+            <div className="muted">{t('Escolha um modo:')}</div>
             {view.pendingDecision.modes.map((label, i) => (
               <button key={i} onClick={() => onAction({ type: 'chooseMode', mode: i })}>
                 {label}
@@ -1400,9 +1429,9 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             )}
             <div className="row">
               <button className="primary" disabled={ask.kind === 'number' && askValue.trim() === ''} onClick={() => answerAsk(ask.kind === 'number' ? askValue.trim() : 'yes')}>
-                {ask.kind === 'number' ? 'Confirmar' : ask.yes ?? 'Sim'}
+                {ask.kind === 'number' ? t('Confirmar') : ask.yes ?? t('Sim')}
               </button>
-              <button onClick={() => answerAsk(ask.kind === 'number' ? null : 'no')}>{ask.kind === 'number' ? 'Cancelar' : ask.no ?? 'Não'}</button>
+              <button onClick={() => answerAsk(ask.kind === 'number' ? null : 'no')}>{ask.kind === 'number' ? t('Cancelar') : ask.no ?? t('Não')}</button>
             </div>
           </div>
         </div>
@@ -1411,14 +1440,14 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {myChoice && myChoice.mode === 'confirm' && (
         <div className="mulligan-overlay light">
           <div className="mulligan-box">
-            <h2>Decisão</h2>
+            <h2>{t('Decisão')}</h2>
             <div className="muted">{myChoice.prompt}</div>
             <div className="row">
               <button className="primary" onClick={() => onAction({ type: 'effectChoice', picks: [], text: 'yes' })}>
-                Sim
+                {t('Sim')}
               </button>
               <button onClick={() => onAction({ type: 'effectChoice', picks: [], text: 'no' })}>
-                Não
+                {t('Não')}
               </button>
             </div>
           </div>
@@ -1429,7 +1458,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {myChoice && myChoice.mode === 'chooseColor' && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>Escolha uma cor</h2>
+            <h2>{t('Escolha uma cor')}</h2>
             <div className="muted">{myChoice.prompt}</div>
             <div className="row" style={{ justifyContent: 'center' }}>
               {['W', 'U', 'B', 'R', 'G'].map((c) => (
@@ -1446,11 +1475,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {myChoice && myChoice.mode === 'chooseType' && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>Escolha um tipo de criatura</h2>
+            <h2>{t('Escolha um tipo de criatura')}</h2>
             <div className="muted">{myChoice.prompt}</div>
             <input
               autoFocus
-              placeholder="ex.: Goblin"
+              placeholder={t('ex.: Goblin')}
               value={nameText}
               onChange={(e) => setNameText(e.target.value)}
               onKeyDown={(e) => {
@@ -1462,7 +1491,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               style={{ width: 'min(300px, 80vw)' }}
             />
             <button className="primary" disabled={!nameText.trim()} onClick={() => { onAction({ type: 'effectChoice', picks: [], text: nameText.trim() }); setNameText(''); }}>
-              Confirmar
+              {t('Confirmar')}
             </button>
           </div>
         </div>
@@ -1472,7 +1501,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {myChoice && myChoice.mode === 'number' && (
         <div className="mulligan-overlay light">
           <div className="mulligan-box">
-            <h2>Escolha um número</h2>
+            <h2>{t('Escolha um número')}</h2>
             <div className="muted">{myChoice.prompt}</div>
             <input
               autoFocus
@@ -1496,7 +1525,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 setNameText('');
               }}
             >
-              Confirmar
+              {t('Confirmar')}
             </button>
           </div>
         </div>
@@ -1504,11 +1533,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {myChoice && myChoice.mode === 'nameCard' && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>Nomear carta</h2>
+            <h2>{t('Nomear carta')}</h2>
             <div className="muted">{myChoice.prompt}</div>
             <input
               autoFocus
-              placeholder="ex.: Lightning Bolt"
+              placeholder={t('ex.: Lightning Bolt')}
               value={nameText}
               onChange={(e) => setNameText(e.target.value)}
               onKeyDown={(e) => {
@@ -1536,7 +1565,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 setNameText('');
               }}
             >
-              Confirmar
+              {t('Confirmar')}
             </button>
           </div>
         </div>
@@ -1544,13 +1573,13 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- mão revelada do oponente (Duress, Peacekeeper): fica aberta até fechar -------- */}
       {reveal && (
-        <div className="reveal-panel" onClick={(e) => e.stopPropagation()}>
-          <div className="reveal-head">
-            <span>Mão de {view.players[reveal.player].name} ({reveal.cards.length})</span>
-            <button className="reveal-close" title="Fechar" onClick={onCloseReveal}>✕</button>
+        <div className="reveal-panel" ref={revealRef} style={revealPos ? { left: revealPos.x, top: revealPos.y, right: 'auto' } : undefined} onClick={(e) => e.stopPropagation()}>
+          <div className="reveal-head" onPointerDown={dragReveal} title={t('Arraste para mover')}>
+            <span>{t('Mão de {name} ({n})', { name: view.players[reveal.player].name, n: reveal.cards.length })}</span>
+            <button className="reveal-close" title={t('Fechar')} onClick={onCloseReveal}>✕</button>
           </div>
           <div className="reveal-cards">
-            {reveal.cards.length === 0 && <div className="muted">vazia</div>}
+            {reveal.cards.length === 0 && <div className="muted">{t('vazia')}</div>}
             {reveal.cards.map((n, i) => <CardFace key={`${n}-${i}`} name={n} title={n} />)}
           </div>
         </div>
@@ -1559,22 +1588,22 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {/* -------- menu de contexto (modo manual) -------- */}
       {menu && (
         <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          <div className="panel-title" style={{ padding: '4px 10px' }}>{menu.card.card.name} (manual)</div>
+          <div className="panel-title" style={{ padding: '4px 10px' }}>{menu.card.card.name} {t('(manual)')}</div>
           {menu.card.card.cycling && (me.hand ?? []).some((c) => c.objectId === menu.card.objectId) && (
             <MenuItem
-              label={`♻ Reciclar (${menu.card.card.cycling.mana ?? ''}${menu.card.card.cycling.life ? `${menu.card.card.cycling.life} vidas` : ''})`}
+              label={t('♻ Reciclar ({cost})', { cost: `${menu.card.card.cycling.mana ?? ''}${menu.card.card.cycling.life ? t('{n} vidas', { n: menu.card.card.cycling.life }) : ''}` })}
               onPick={() => beginCycle(menu.card)}
             />
           )}
-          <MenuItem label="→ campo de batalha" onPick={() => moveTo(menu.card, 'battlefield')} />
-          <MenuItem label="→ cemitério" onPick={() => moveTo(menu.card, 'graveyard')} />
-          <MenuItem label="→ exílio" onPick={() => moveTo(menu.card, 'exile')} />
-          <MenuItem label="→ mão" onPick={() => moveTo(menu.card, 'hand')} />
-          <MenuItem label="→ topo da biblioteca" onPick={() => moveTo(menu.card, 'library', 'top')} />
-          <MenuItem label="→ fundo da biblioteca" onPick={() => moveTo(menu.card, 'library', 'bottom')} />
-          <MenuItem label={menu.card.tapped ? 'desvirar' : 'virar'} onPick={() => onAction({ type: 'manualTap', objectId: menu.card.objectId, tapped: !menu.card.tapped })} />
+          <MenuItem label={t('→ campo de batalha')} onPick={() => moveTo(menu.card, 'battlefield')} />
+          <MenuItem label={t('→ cemitério')} onPick={() => moveTo(menu.card, 'graveyard')} />
+          <MenuItem label={t('→ exílio')} onPick={() => moveTo(menu.card, 'exile')} />
+          <MenuItem label={t('→ mão')} onPick={() => moveTo(menu.card, 'hand')} />
+          <MenuItem label={t('→ topo da biblioteca')} onPick={() => moveTo(menu.card, 'library', 'top')} />
+          <MenuItem label={t('→ fundo da biblioteca')} onPick={() => moveTo(menu.card, 'library', 'bottom')} />
+          <MenuItem label={menu.card.tapped ? t('desvirar') : t('virar')} onPick={() => onAction({ type: 'manualTap', objectId: menu.card.objectId, tapped: !menu.card.tapped })} />
           <MenuItem label="+1/+1" onPick={() => onAction({ type: 'manualCounter', objectId: menu.card.objectId, counter: '+1/+1', delta: 1 })} />
-          <MenuItem label="-1 marcador +1/+1" onPick={() => onAction({ type: 'manualCounter', objectId: menu.card.objectId, counter: '+1/+1', delta: -1 })} />
+          <MenuItem label={t('-1 marcador +1/+1')} onPick={() => onAction({ type: 'manualCounter', objectId: menu.card.objectId, counter: '+1/+1', delta: -1 })} />
         </div>
       )}
 
@@ -1582,7 +1611,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {view.mulligan && view.status === 'playing' && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>Mão inicial{mullTaken > 0 ? ` — mulligan ${mullTaken}` : ''}</h2>
+            <h2>{t('Mão inicial')}{mullTaken > 0 ? t(' — mulligan {n}', { n: mullTaken }) : ''}</h2>
             <div className="mulligan-hand">
               {(me.hand ?? []).map((c) => (
                 <CardTile
@@ -1598,17 +1627,17 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               <>
                 {mullTaken > 0 && (
                   <div className="muted">
-                    Para manter, escolha {mullTaken} carta(s) para o fundo da biblioteca ({bottomSel.size}/{mullTaken}).
+                    {t('Para manter, escolha {n} carta(s) para o fundo da biblioteca ({sel}/{n}).', { n: mullTaken, sel: bottomSel.size })}
                   </div>
                 )}
                 {(me.hand ?? []).filter((c) => c.card.openingHand && !bottomSel.has(c.objectId)).map((c) => (
                   <div key={c.objectId} className="row" style={{ alignItems: 'center', gap: 8 }}>
-                    <span className="muted">{c.card.name}: começar o jogo com ela no campo de batalha?</span>
+                    <span className="muted">{t('{name}: começar o jogo com ela no campo de batalha?', { name: c.card.name })}</span>
                     <button
                       className={leyOut.has(c.objectId) ? '' : 'primary'}
                       onClick={() => { const next = new Set(leyOut); if (next.has(c.objectId)) next.delete(c.objectId); else next.add(c.objectId); setLeyOut(next); }}
                     >
-                      {leyOut.has(c.objectId) ? 'Não, fica na mão' : 'Sim, no campo'}
+                      {leyOut.has(c.objectId) ? t('Não, fica na mão') : t('Sim, no campo')}
                     </button>
                   </div>
                 ))}
@@ -1618,18 +1647,18 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     disabled={bottomSel.size !== mullTaken}
                     onClick={() => onAction({ type: 'keepHand', bottom: [...bottomSel], beginOnBattlefield: (me.hand ?? []).filter((c) => c.card.openingHand && !bottomSel.has(c.objectId) && !leyOut.has(c.objectId)).map((c) => c.objectId) })}
                   >
-                    Manter mão
+                    {t('Manter mão')}
                   </button>
                   <button disabled={mullTaken >= 7} onClick={() => onAction({ type: 'mulligan' })}>
-                    Mulligan (comprar 7 de novo)
+                    {t('Mulligan (comprar 7 de novo)')}
                   </button>
                 </div>
               </>
             ) : (
-              <div className="muted">Mão mantida. Aguardando o oponente…</div>
+              <div className="muted">{t('Mão mantida. Aguardando o oponente…')}</div>
             )}
             <div className="muted">
-              Oponente: {view.mulligan.phase[oppId] === 'kept' ? 'manteve' : `decidindo (mulligan ${view.mulligan.taken[oppId]})`}
+              {t('Oponente:')} {view.mulligan.phase[oppId] === 'kept' ? t('manteve') : t('decidindo (mulligan {n})', { n: view.mulligan.taken[oppId] })}
             </div>
           </div>
         </div>
@@ -1639,7 +1668,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {myChoice && (myChoice.mode === 'cards' || myChoice.mode === 'scry' || myChoice.mode === 'order') && myChoice.options && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>{myChoice.mode === 'scry' ? 'Vidência' : myChoice.mode === 'order' ? 'Ordem' : 'Escolha'}</h2>
+            <h2>{myChoice.mode === 'scry' ? t('Vidência') : myChoice.mode === 'order' ? t('Ordem') : t('Escolha')}</h2>
             <div className="muted">{myChoice.prompt}</div>
             <div className="mulligan-hand choice-hand">
               {myChoice.options.map((c) => (
@@ -1660,18 +1689,18 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               ))}
             </div>
             {myChoice.mode === 'scry' && (
-              <div className="muted">Selecionadas vão para o fundo; as demais continuam no topo, na mesma ordem.</div>
+              <div className="muted">{t('Selecionadas vão para o fundo; as demais continuam no topo, na mesma ordem.')}</div>
             )}
             {myChoice.mode === 'order' && (
-              <div className="muted">Clique nas cartas na ordem em que ficarão: 1 é o topo da biblioteca.</div>
+              <div className="muted">{t('Clique nas cartas na ordem em que ficarão: 1 é o topo da biblioteca.')}</div>
             )}
             <button
               className="primary"
               disabled={choiceSel.size < myChoice.min || choiceSel.size > myChoice.max}
               onClick={() => onAction({ type: 'effectChoice', picks: [...choiceSel] })}
             >
-              Confirmar ({choiceSel.size}
-              {myChoice.min === myChoice.max ? `/${myChoice.max}` : ` de até ${myChoice.max}`})
+              {t('Confirmar')} ({choiceSel.size}
+              {myChoice.min === myChoice.max ? `/${myChoice.max}` : t(' de até {max}', { max: myChoice.max })})
             </button>
             {myChoice.skipLabel && (
               <button onClick={() => { setChoiceSel(new Set()); onAction({ type: 'effectChoice', picks: [] }); }}>{myChoice.skipLabel}</button>
@@ -1688,7 +1717,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             {modalPick.card.spellModeChoice ? (
               <>
                 <div className="muted">
-                  Escolha {modalPick.card.spellModeChoice.min === modalPick.card.spellModeChoice.max ? modalPick.card.spellModeChoice.min : `de ${modalPick.card.spellModeChoice.min} a ${Math.min(modalPick.card.spellModeChoice.max, modalPick.card.spellModes?.length ?? 0)}`} modo(s):
+                  {t('Escolha {n} modo(s):', { n: modalPick.card.spellModeChoice.min === modalPick.card.spellModeChoice.max ? modalPick.card.spellModeChoice.min : t('de {a} a {b}', { a: modalPick.card.spellModeChoice.min, b: Math.min(modalPick.card.spellModeChoice.max, modalPick.card.spellModes?.length ?? 0) }) })}
                 </div>
                 {(modalPick.card.spellModes ?? []).map((m, i) => (
                   <button
@@ -1715,12 +1744,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     beginCast(cv, undefined, false, { modes });
                   }}
                 >
-                  Conjurar com {modalSel.size} modo(s)
+                  {t('Conjurar com {n} modo(s)', { n: modalSel.size })}
                 </button>
               </>
             ) : (
               <>
-                <div className="muted">Escolha um modo:</div>
+                <div className="muted">{t('Escolha um modo:')}</div>
                 {(modalPick.card.spellModes ?? []).map((m, i) => (
                   <button
                     key={i}
@@ -1735,7 +1764,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 ))}
               </>
             )}
-            <button className="danger" onClick={() => { setModalPick(null); setModalSel(new Set()); }}>Cancelar</button>
+            <button className="danger" onClick={() => { setModalPick(null); setModalSel(new Set()); }}>{t('Cancelar')}</button>
           </div>
         </div>
       )}
@@ -1745,7 +1774,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         <div className="mulligan-overlay" onClick={() => setLoyaltyPick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>{loyaltyPick.card.name}</h2>
-            <div className="muted">Lealdade: {loyaltyPick.counters['loyalty'] ?? 0}</div>
+            <div className="muted">{t('Lealdade:')} {loyaltyPick.counters['loyalty'] ?? 0}</div>
             {(loyaltyPick.card.abilities ?? []).map((a, i) =>
               a.kind === 'loyalty' ? (
                 <button
@@ -1760,7 +1789,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 </button>
               ) : null,
             )}
-            <button className="danger" onClick={() => setLoyaltyPick(null)}>Cancelar</button>
+            <button className="danger" onClick={() => setLoyaltyPick(null)}>{t('Cancelar')}</button>
           </div>
         </div>
       )}
@@ -1770,10 +1799,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         <div className="mulligan-overlay" onClick={() => setZonePick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>
-              {zonePick.zone === 'graveyard' ? 'Cemitério' : zonePick.zone === 'exile' ? 'Exílio' : 'Sideboard (fora do jogo)'} de {view.players[zonePick.player].name}
+              {t('{zone} de {name}', { zone: zonePick.zone === 'graveyard' ? t('Cemitério') : zonePick.zone === 'exile' ? t('Exílio') : t('Sideboard (fora do jogo)'), name: view.players[zonePick.player].name })}
             </h2>
             <div className="mulligan-hand choice-hand">
-              {view.players[zonePick.player][zonePick.zone].length === 0 && <div className="muted">vazio</div>}
+              {view.players[zonePick.player][zonePick.zone].length === 0 && <div className="muted">{t('vazio')}</div>}
               {view.players[zonePick.player][zonePick.zone].map((c) => (
                 <div key={c.objectId} style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
                   <CardTile
@@ -1789,6 +1818,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     }}
                     onContextMenu={(e) => openMenu(e, c)}
                   />
+                  {zonePick.zone === 'graveyard' && zonePick.player === you && c.castableFromGraveyard && myPriority && (
+                    <button onClick={() => { setZonePick(null); beginCast(c, undefined); }}>{t('⚡ Conjurar do cemitério')}</button>
+                  )}
+                  {zonePick.zone === 'graveyard' && zonePick.player === you && c.playableFromGraveyard && myPriority && (
+                    <button onClick={() => { setZonePick(null); onAction({ type: 'playLand', objectId: c.objectId }); }}>{t('🏞 Jogar terreno do cemitério')}</button>
+                  )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.flashback && (
                     <button
                       onClick={() => {
@@ -1796,7 +1831,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                         beginCast(c, undefined, true);
                       }}
                     >
-                      ⚡ Flashback {c.card.flashback.payLife ? `${c.card.flashback.cost}, ${c.card.flashback.payLife} de vida` : c.card.flashback.cost ?? (c.card.flashback.sacrifice ? `(sacrifique ${(c.card.flashback.sacrificeCount ?? 1) > 1 ? `${c.card.flashback.sacrificeCount} ${c.card.flashback.sacrifice.what === 'creature' ? 'criaturas' : 'permanentes'}` : c.card.flashback.sacrifice.what === 'creature' ? 'uma criatura' : 'uma permanente'})` : '')}
+                      {t('⚡ Flashback')} {c.card.flashback.payLife ? t('{cost}, {n} de vida', { cost: c.card.flashback.cost ?? '', n: c.card.flashback.payLife }) : c.card.flashback.cost ?? (c.card.flashback.sacrifice ? t('(sacrifique {what})', { what: (c.card.flashback.sacrificeCount ?? 1) > 1 ? `${c.card.flashback.sacrificeCount} ${c.card.flashback.sacrifice.what === 'creature' ? t('criaturas') : t('permanentes')}` : c.card.flashback.sacrifice.what === 'creature' ? t('uma criatura') : t('uma permanente') }) : '')}
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.castMethods?.some((m) => m.kind === 'escape') && (
@@ -1812,7 +1847,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     ))}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.backFace?.aftermath && myPriority && (
                     <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { face: 'back' }); }}>
-                      ⚡ Aftermath — conjurar {c.card.backFace.name} {c.card.backFace.manaCost ?? ''} (do cemitério)
+                      {t('⚡ Aftermath — conjurar {name} {cost} (do cemitério)', { name: c.card.backFace.name, cost: c.card.backFace.manaCost ?? '' })}
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you &&
@@ -1825,23 +1860,23 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     )}
                   {zonePick.zone === 'exile' && zonePick.player === you && c.playableNow && myPriority && (
                     c.card.types.includes('Land') ? (
-                      <button onClick={() => { setZonePick(null); onAction({ type: 'playLand', objectId: c.objectId }); }}>⛰ Jogar terreno (do exílio, este turno)</button>
+                      <button onClick={() => { setZonePick(null); onAction({ type: 'playLand', objectId: c.objectId }); }}>{t('⛰ Jogar terreno (do exílio, este turno)')}</button>
                     ) : (
-                      <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>✨ Conjurar {c.card.manaCost ?? ''} (do exílio, este turno)</button>
+                      <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>{t('✨ Conjurar {cost} (do exílio, este turno)', { cost: c.card.manaCost ?? '' })}</button>
                     )
                   )}
                   {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs === 'adventure' && myPriority && (
-                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>✨ Conjurar {c.card.name} {c.card.manaCost ?? ''} (de volta da aventura)</button>
+                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>{t('✨ Conjurar {name} {cost} (de volta da aventura)', { name: c.card.name, cost: c.card.manaCost ?? '' })}</button>
                   )}
                   {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs && (c.exiledAs === 'foretold' || c.exiledAs === 'plotted' || c.exiledAs === 'warped') && (
                     <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: c.exiledAs as CastMethodKind }); }}>
-                      ⚡ Conjurar ({c.exiledAs === 'foretold' ? `prever ${c.card.castMethods?.find((m) => m.kind === 'foretold')?.cost ?? ''}` : c.exiledAs === 'plotted' ? 'tramada, de graça' : 'warp, de graça'})
+                      {t('⚡ Conjurar ({how})', { how: c.exiledAs === 'foretold' ? t('prever {cost}', { cost: c.card.castMethods?.find((m) => m.kind === 'foretold')?.cost ?? '' }) : c.exiledAs === 'plotted' ? t('tramada, de graça') : t('warp, de graça') })}
                     </button>
                   )}
                 </div>
               ))}
             </div>
-            <button onClick={() => setZonePick(null)}>Fechar</button>
+            <button onClick={() => setZonePick(null)}>{t('Fechar')}</button>
           </div>
         </div>
       )}
@@ -1850,12 +1885,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {view.starter && !view.starter.chosen && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>Quem começa?</h2>
+            <h2>{t('Quem começa?')}</h2>
             {view.starter.rolls[you] > 0 ? (
               <>
                 <div className="roll-row">
                   <div className={`roll-die ${view.starter.winner === you ? 'winner' : ''}`}>
-                    <div className="muted">Você</div>
+                    <div className="muted">{t('Você')}</div>
                     <strong>{view.starter.rolls[you]}</strong>
                   </div>
                   <div className={`roll-die ${view.starter.winner === oppId ? 'winner' : ''}`}>
@@ -1864,23 +1899,23 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                   </div>
                 </div>
                 {view.starter.rerolls > 0 && (
-                  <div className="muted">({view.starter.rerolls} empate(s) rerolado(s) automaticamente)</div>
+                  <div className="muted">{t('({n} empate(s) rerolado(s) automaticamente)', { n: view.starter.rerolls })}</div>
                 )}
               </>
             ) : (
-              <div className="muted">Quem perdeu o jogo anterior decide quem começa.</div>
+              <div className="muted">{t('Quem perdeu o jogo anterior decide quem começa.')}</div>
             )}
             {view.starter.winner === you ? (
               <div className="row">
                 <button className="primary" onClick={() => onAction({ type: 'chooseStarter', first: you })}>
-                  Eu começo
+                  {t('Eu começo')}
                 </button>
                 <button onClick={() => onAction({ type: 'chooseStarter', first: oppId })}>
-                  {opp.name} começa
+                  {t('{name} começa', { name: opp.name })}
                 </button>
               </div>
             ) : (
-              <div className="muted">Aguardando {opp.name} decidir…</div>
+              <div className="muted">{t('Aguardando {name} decidir…', { name: opp.name })}</div>
             )}
           </div>
         </div>
@@ -1894,31 +1929,31 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             {decided ? (
               <>
                 <div>
-                  {match!.wins[you] >= 2 ? '🏆 Você venceu a partida!' : `${opp.name} venceu a partida.`}
+                  {match!.wins[you] >= 2 ? t('🏆 Você venceu a partida!') : t('{name} venceu a partida.', { name: opp.name })}
                 </div>
                 <div style={{ fontSize: 18 }}>
-                  Resultado final: você {match!.wins[you]} × {match!.wins[oppId]} {opp.name}
+                  {t('Resultado final: você {w} × {l} {name}', { w: match!.wins[you], l: match!.wins[oppId], name: opp.name })}
                 </div>
-                <button className="primary" onClick={onExit}>Voltar ao início</button>
+                <button className="primary" onClick={onExit}>{t('Voltar ao início')}</button>
               </>
             ) : (
               <>
                 <div>
                   {view.winner === 'draw'
-                    ? `Jogo ${gameNo}: empate.`
+                    ? t('Jogo {n}: empate.', { n: gameNo })
                     : view.winner === you
-                      ? `🏆 Você venceu o jogo ${gameNo}!`
-                      : `Você perdeu o jogo ${gameNo} — ${opp.name} venceu.`}
+                      ? t('🏆 Você venceu o jogo {n}!', { n: gameNo })
+                      : t('Você perdeu o jogo {n} — {name} venceu.', { n: gameNo, name: opp.name })}
                 </div>
                 {match && (
                   <div style={{ fontSize: 18 }}>
-                    Placar: você {match.wins[you]} × {match.wins[oppId]} {opp.name}
+                    {t('Placar: você {w} × {l} {name}', { w: match.wins[you], l: match.wins[oppId], name: opp.name })}
                   </div>
                 )}
                 {onContinue ? (
-                  <button className="primary" onClick={onContinue}>Ir para o sideboard</button>
+                  <button className="primary" onClick={onContinue}>{t('Ir para o sideboard')}</button>
                 ) : (
-                  <div className="muted">Preparando o sideboard…</div>
+                  <div className="muted">{t('Preparando o sideboard…')}</div>
                 )}
               </>
             )}
@@ -1946,7 +1981,7 @@ function StopRow({ step, stops, onChange }: { step: Step; stops: StopsConfig; on
   };
   return (
     <>
-      <span className="stops-label">{STEP_SHORT[step]}</span>
+      <span className="stops-label">{t(STEP_SHORT[step])}</span>
       <input type="checkbox" checked={stops.myTurn.includes(step)} onChange={() => toggle('myTurn')} />
       <input type="checkbox" checked={stops.oppTurn.includes(step)} onChange={() => toggle('oppTurn')} />
     </>
@@ -1960,7 +1995,7 @@ function ManaChips({ pool }: { pool: Record<string, number> }) {
   const chips = Object.entries(pool).filter(([, n]) => n > 0);
   if (chips.length === 0) return null;
   return (
-    <div className="mana-pool" title="Mana flutuante">
+    <div className="mana-pool" title={t('Mana flutuante')}>
       {chips.map(([sym, n]) => (
         <span key={sym} className="mana-chip" style={{ background: COLORS[sym] }}>{n}</span>
       ))}

@@ -1,6 +1,7 @@
 import type { CardView } from '@sloptcg/protocol';
 import { imageUrlById, imageUrlByName } from '../scryfall';
 import { useEffect, useState } from 'react';
+import { t } from '../i18n';
 
 // ------------------------------------------------------------ hover preview
 // Qualquer carta com o mouse em cima emite este evento; o <HoverPreview/>
@@ -26,7 +27,7 @@ export function HoverPreview({ slot = false }: { slot?: boolean } = {}) {
   if (slot) {
     // Slot fixo no topo do painel lateral (acima do log/chat): a carta grande aparece aqui.
     return (
-      <div className="preview-slot" title={url ? '' : 'Passe o mouse sobre uma carta'}>
+      <div className="preview-slot" title={url ? '' : t('Passe o mouse sobre uma carta')}>
         {url && <img src={url} alt="" draggable={false} />}
       </div>
     );
@@ -181,10 +182,10 @@ function tooltip(card: CardView): string {
   if (d.manaCost) parts.push(d.manaCost);
   parts.push(d.types.join(' ') + (d.subtypes.length > 0 ? ` — ${d.subtypes.join(' ')}` : ''));
   if (d.text) parts.push(d.text);
-  if (d.automation === 'manual') parts.push('⚠ carta em modo manual (mecânica ainda não automatizada)');
+  if (d.automation === 'manual') parts.push(t('⚠ carta em modo manual (mecânica ainda não automatizada)'));
   if (d.automation === 'partial')
     parts.push(
-      '⚠ parcialmente automatizada — ajuste manualmente:\n' +
+      t('⚠ parcialmente automatizada — ajuste manualmente:') + '\n' +
         (d.automationNotes ?? []).map((n) => `• ${n}`).join('\n'),
     );
   return parts.join('\n');

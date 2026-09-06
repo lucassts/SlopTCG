@@ -6,6 +6,7 @@ import type { CardDefinition } from '../src/cards/types.js';
 import type { Game } from '../src/game.js';
 import type { PlayerId } from '../src/types.js';
 import { effectivePower, hasKeyword } from '../src/state.js';
+import { viewFor } from '../src/view.js';
 import { findIn, goToMain1, makeGame, passUntil } from './helpers.js';
 
 const mk = (input: OracleInput): CardDefinition => {
@@ -102,6 +103,7 @@ describe('M28 · jogo', () => {
     goToMain1(game);
     const art = put(game, 'p1', idol.id);
     const bolt = put(game, 'p1', 'lightning-bolt', 'graveyard');
+    const gyLand = put(game, 'p1', 'forest', 'graveyard'); // antes do Will: depois dele, tudo que iria ao cemitério é exilado
     for (let i = 0; i < 4; i++) put(game, 'p1', 'swamp');
     let w: number;
     try { w = findIn(game, 'p1', 'library', will.id); } catch { w = findIn(game, 'p1', 'hand', will.id); game.apply('p1', { type: 'manualMove', objectId: w, to: 'library', position: 'bottom' }); }
@@ -124,6 +126,13 @@ describe('M28 · jogo', () => {
     expect(game.state.players.p1.graveyardCastPermission?.keep).toBe(true);
     put(game, 'p1', 'mountain');
     untapAll(game, 'p1');
+    // A view avisa o cliente: o Bolt no cemitério pode ser conjurado e um terreno no cemitério pode ser jogado (só para o dono).
+    const mine = viewFor(game.state, 'p1').players.p1.graveyard;
+    expect(mine.find((c) => c.objectId === bolt)?.castableFromGraveyard).toBe(true);
+    expect(mine.find((c) => c.objectId === gyLand)?.playableFromGraveyard).toBe(true);
+    expect(mine.find((c) => c.objectId === gyLand)?.castableFromGraveyard).toBeUndefined();
+    const theirs = viewFor(game.state, 'p2').players.p1.graveyard;
+    expect(theirs.find((c) => c.objectId === bolt)?.castableFromGraveyard).toBeUndefined();
     expect(cast(game, 'p1', bolt, { targets: [{ kind: 'player', player: 'p2' }] }).ok).toBe(true);
     settle(game);
     expect(game.state.players.p2.life).toBe(17);

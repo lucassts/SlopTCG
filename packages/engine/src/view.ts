@@ -2,6 +2,7 @@
  * Per-player redacted views. The server sends these — never raw GameState —
  * so a client physically cannot see the opponent's hand or either library.
  */
+import { cardMatchesFilter } from './cards/types.js';
 import type { CardDefinition } from './cards/types.js';
 import { effectivePower, effectiveToughness, staticConditionHolds, type GameState, type GameObject } from './state.js';
 import { opponentOf, PLAYER_IDS, type ManaPool, type PlayerId, type Step, type TargetChoice } from './types.js';
@@ -23,6 +24,10 @@ export interface CardView {
   isToken: boolean;
   /** This tap-for-mana can still be undone by its controller. */
   undoableTap: boolean;
+  /** Viewer's graveyard: this card may be cast from there right now (Gaea's Will, Emry, Hogaak…). */
+  castableFromGraveyard?: boolean;
+  /** Viewer's graveyard: this land may be played from there right now (Gaea's Will, Crucible of Worlds). */
+  playableFromGraveyard?: boolean;
   /** Vehicle crewed this turn (is a creature). */
   crewed: boolean;
   /** Morph/Disguise: currently face down (the controller still sees the real card). */
@@ -221,7 +226,18 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
           ? cardView(state, state.objects[p.zones.library[0]])
           : undefined,
       battlefield: p.zones.battlefield.map((id) => cardView(state, state.objects[id], viewer)),
-      graveyard: p.zones.graveyard.map((id) => cardView(state, state.objects[id])),
+      graveyard: p.zones.graveyard.map((id) => {
+        const cv = cardView(state, state.objects[id]);
+        if (p.id === viewer) {
+          const o = state.objects[id];
+          const perm = p.graveyardCastPermission;
+          const permOk = !!perm && perm.untilTurn === state.turn && cardMatchesFilter(o.card, perm.filter);
+          const isLand = o.card.types.includes('Land');
+          if (!isLand && (permOk || o.castableFromGraveyardTurn === state.turn || !!o.card.castFromGraveyardSelf)) cv.castableFromGraveyard = true;
+          if (isLand && ((!!perm && perm.untilTurn === state.turn && !!perm.lands) || p.zones.battlefield.some((bid) => !!state.objects[bid]?.card.playLandsFromGraveyard))) cv.playableFromGraveyard = true;
+        }
+        return cv;
+      }),
       sideboardSize: p.zones.sideboard.length,
       sideboard: pid === viewer ? p.zones.sideboard.map((id) => cardView(state, state.objects[id])) : [],
       // Cartas exiladas "para depois" (foretell, suspend…) são viradas para baixo para o oponente.

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t, useLang } from '../i18n';
 import type { CountedCard, MatchStateMsg, PlayerId } from '@sloptcg/protocol';
 import { HoverPreview } from './CardTile';
 import { DeckColumn, DeckModeToggle, type DeckViewMode } from './DeckView';
@@ -22,6 +23,7 @@ function loadMode(): DeckViewMode {
 
 /** Between match games: move cards between mainboard and sideboard. */
 export function Sideboard({ info, match, you, onSubmit, onReady }: SideboardProps) {
+  useLang();
   const [main, setMain] = useState<CountedCard[]>(info.main);
   const [side, setSide] = useState<CountedCard[]>(info.side);
   const [dirty, setDirty] = useState(false);
@@ -78,42 +80,42 @@ export function Sideboard({ info, match, you, onSubmit, onReady }: SideboardProp
     <div className="screen-center">
       <HoverPreview />
       <div className="brand">
-        Sideboard
+        {t('Sideboard')}
         <small>
-          Jogo {match.gameNumber} encerrado · placar {match.wins[you]}–{match.wins[oppId]}
+          {t('Jogo {n} encerrado · placar {you}–{opp}', { n: match.gameNumber, you: match.wins[you], opp: match.wins[oppId] })}
         </small>
       </div>
       <div className="home-card" style={{ width: mode === 'grid' ? 'min(1100px, 96vw)' : 'min(720px, 94vw)' }}>
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <DeckModeToggle mode={mode} onChange={saveMode} />
-          <span className="muted">arraste as cartas entre as colunas, ou clique para mover</span>
+          <span className="muted">{t('arraste as cartas entre as colunas, ou clique para mover')}</span>
         </div>
         <div className="sb-columns">
           <DeckColumn
-            title="Deck"
+            title={t('Deck')}
             cards={main}
             mode={mode}
             onCardClick={toSide}
-            clickHint="mover para o sideboard"
+            clickHint={t('mover para o sideboard')}
             dragId="main"
             onDropCard={(name) => toMain(name)}
           />
           <DeckColumn
-            title="Sideboard"
+            title={t('Sideboard')}
             cards={side}
             mode={mode}
             onCardClick={toMain}
-            clickHint="mover para o deck"
+            clickHint={t('mover para o deck')}
             dragId="side"
             onDropCard={(name) => toSide(name)}
           />
         </div>
         <button className="primary" disabled={info.ready && !dirty} onClick={confirm}>
-          {info.ready && !dirty ? 'Aguardando o oponente…' : `Pronto para o jogo ${match.gameNumber + 1}`}
+          {info.ready && !dirty ? t('Aguardando o oponente…') : t('Pronto para o jogo {n}', { n: match.gameNumber + 1 })}
         </button>
         <div className="muted" style={{ textAlign: 'center' }}>
-          {info.opponentReady ? 'O oponente já está pronto.' : 'O oponente ainda está ajustando o deck.'}
-          {' '}Quem perdeu o jogo anterior escolhe quem começa.
+          {info.opponentReady ? t('O oponente já está pronto.') : t('O oponente ainda está ajustando o deck.')}
+          {' '}{t('Quem perdeu o jogo anterior escolhe quem começa.')}
         </div>
       </div>
     </div>

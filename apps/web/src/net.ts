@@ -1,5 +1,6 @@
 /** WebSocket client with rejoin support. */
 import type { ClientMessage, ServerMessage } from '@sloptcg/protocol';
+import { t } from './i18n';
 
 const env = (import.meta as { env?: Record<string, string | boolean> }).env ?? {};
 
@@ -39,7 +40,7 @@ export class NetClient {
         this.onStatus('open');
         resolve();
       };
-      ws.onerror = () => reject(new Error('não foi possível conectar ao servidor'));
+      ws.onerror = () => reject(new Error(t('não foi possível conectar ao servidor')));
       ws.onclose = () => {
         if (this.ws === ws) {
           this.ws = null;

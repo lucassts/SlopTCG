@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-05, v0.30.0 — lista Blue Dredge conferida; habilidades de mana com efeito colateral; Legacy a 97,5%)
+## Estado (2026-09-05, v0.31.0 — interface em pt-BR/en-US, configurações, Gaea's Will no cliente; engine igual à v0.30.0, Legacy a 97,5%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | **v0.30** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -677,7 +677,31 @@ roda esses efeitos colaterais (antes o `payWithPlan` e os quatro pagamentos
 internos só somavam mana — Ancient Tomb pagava sem os 2 de dano);
 `manaProduction` marca `painful` e o `planPayment` deixa essas fontes por
 último (o teste do Price of Progress pegou o planejador preferindo a Tomb
-a uma Mountain). Auditor: 13.795 full / 14.522 parciais / 4.764
+a uma Mountain).
+
+**v0.31.0 — interface** (seis pedidos do Lucas; engine só ganhou dois
+campos na view). **Gaea's Will / conjurar do cemitério**: a engine já
+tinha a permissão (`graveyardCastPermission`, com `keep` e `lands`), mas
+o cliente não oferecia nada; agora `CardView.castableFromGraveyard` e
+`playableFromGraveyard` (só para o dono, calculados em `viewFor` com a
+mesma regra do `doCastSpell`/`doPlayLand`: permissão do turno, Emry,
+Hogaak, Crucible) e o visor do cemitério mostra "⚡ Conjurar do cemitério"
+e "🏞 Jogar terreno do cemitério". **Idioma pt-BR/en-US**:
+`apps/web/src/i18n.ts` (`t(pt, vars)`, `useLang()`, chave = texto pt-BR,
+dicionários por arquivo em `apps/web/src/i18n/en-*.ts`, {KEYS} chaves);
+todos os textos do cliente (GameBoard, Lobby, Home, Sideboard, App, log)
+passam por `t()`. **Limite conhecido**: textos gerados pela engine
+(prompts das escolhas — "escolha 1 carta…", rótulos de habilidade —
+"Adicionar {{G}}", descrições de eventos `fizzled`) continuam em
+português mesmo em en-US; traduzi-los exige um dicionário na engine ou
+chaves estruturadas nos eventos — próximo passo se o Lucas quiser.
+**Configurações**: engrenagem ao lado da caixa do chat abre painel com
+idioma e as paradas automáticas (o ⏱ saiu da barra). **Layout**: yields
+na ordem "⏭ Próxima ação · ⏭ Meu turno · 📌 Prioridade"; contadores de
+zona em duas linhas (`.zone-stack`) para os dois jogadores, com ✋ da
+própria mão; painel da mão revelada é janela arrastável (cabeçalho com
+`pointerdown`) e nasce à direita, sobre a coluna do chat/carta ampliada.
+ Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.
 

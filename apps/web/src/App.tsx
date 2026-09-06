@@ -5,6 +5,7 @@ import { Home } from './components/Home';
 import { Lobby } from './components/Lobby';
 import { Sideboard } from './components/Sideboard';
 import { eventText } from './logText';
+import { t, useLang } from './i18n';
 import { clearSession, loadSession, NetClient, saveSession, type Session } from './net';
 
 type Screen = 'home' | 'lobby' | 'game';
@@ -17,6 +18,7 @@ interface SideboardInfo {
 }
 
 export function App() {
+  useLang();
   const netRef = useRef<NetClient | null>(null);
   const [screen, setScreen] = useState<Screen>('home');
   const [connecting, setConnecting] = useState(false);
@@ -96,7 +98,7 @@ export function App() {
               await net.connect();
               net.send({ type: 'rejoin', roomCode: saved.roomCode, token: saved.token });
             } catch {
-              showError('conexão perdida — tentando de novo…');
+              showError(t('conexão perdida — tentando de novo…'));
             }
           }, 1500);
         }
@@ -131,7 +133,7 @@ export function App() {
     try {
       (await connect()).send({ type: 'createRoom', playerName: name });
     } catch (err) {
-      showError(err instanceof Error ? err.message : 'falha ao conectar');
+      showError(err instanceof Error ? err.message : t('falha ao conectar'));
     }
   };
 
@@ -139,7 +141,7 @@ export function App() {
     try {
       (await connect()).send({ type: 'joinRoom', roomCode: code, playerName: name });
     } catch (err) {
-      showError(err instanceof Error ? err.message : 'falha ao conectar');
+      showError(err instanceof Error ? err.message : t('falha ao conectar'));
     }
   };
 
