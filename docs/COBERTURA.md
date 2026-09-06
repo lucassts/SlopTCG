@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-05, v0.28.0 — Leva 14: Loki, phasing, Chain Lightning; Legacy a 97,5%)
+## Estado (2026-09-05, v0.28.1 — prioridade nos gatilhos de capítulo de Saga; engine igual à v0.28.0, Legacy a 97,5%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | **v0.28 (L14)** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -613,6 +613,19 @@ copiar?" (auto-não se não conseguir pagar); pagando, entra em
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,3% → 97,5%
 (377 de 509 full, 132 com lacuna). Próximo peso: Wastescape Battlemage
 (kicker com duas opções de custo e gatilho condicional a qual kicker).
+
+**v0.28.1 — responder ao próprio gatilho de capítulo** (relato do Lucas:
+com o capítulo III da Urza's Saga na pilha ele não conseguia gerar o
+Constructo do capítulo II antes da busca). Causa: o cliente passa a
+prioridade sozinho sempre que o topo da pilha é do próprio jogador
+(comportamento Arena, em `shouldAutoPass`), o que engolia os gatilhos de
+capítulo. Correção: `StackItemView.chapter` exposto pela view; quando o
+topo é um gatilho de capítulo seu e não há yield ativo, o cliente segura a
+prioridade e o prompt vira "Capítulo N de X na pilha — ative habilidades em
+resposta ou passe para resolver" (botão "Resolver"). Mágicas e demais
+gatilhos próprios continuam passando sozinhos. Verificado no navegador com
+Urza's Saga no turno 1. Skateboard conferida: compila full (gatilho de
+entrada vira alvo, +1/+0 e ímpeto ao equipado, equipar {1}).
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

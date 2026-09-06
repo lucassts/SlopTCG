@@ -924,7 +924,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     if (view.combatAwaiting) return 'Aguardando o oponente…';
     if (yieldUntil) return `⏭ Passando automaticamente até ${yieldUntil.kind === 'step' && yieldUntil.target ? `o início de ${stepName(yieldUntil.target)}` : YIELD_LABEL[yieldUntil.kind]} — clique de novo para cancelar`;
     if (holdPriority && myPriority) return '📌 Segurando a prioridade — jogue mais mágicas ou passe manualmente';
-    if (myPriority && view.stack.length > 0) return 'Responder à pilha ou resolver';
+    if (myPriority && view.stack.length > 0) {
+      const top = view.stack[view.stack.length - 1];
+      if (top.controller === you && top.chapter !== undefined) return `Capítulo ${top.chapter} de ${top.cardName} na pilha — ative habilidades em resposta ou passe para resolver`;
+      return 'Responder à pilha ou resolver';
+    }
     if (myPriority && (view.step === 'main1' || view.step === 'main2') && view.activePlayer === you)
       return 'Sua fase principal — jogue cartas ou passe';
     if (myPriority) return 'Você tem a prioridade';
@@ -1915,7 +1919,10 @@ function shouldAutoPass(view: GameView, stops: StopsConfig, yielding: boolean): 
   if (view.combatAwaiting) return false;
   if (view.stack.length > 0) {
     // Yield ativo passa sobre tudo; senão só sobre a própria mágica (Arena).
-    return yielding || view.stack[view.stack.length - 1].controller === view.you;
+    // Gatilho de capítulo de Saga seu: segura, para dar tempo de usar as habilidades dos capítulos anteriores (Urza's Saga).
+    const top = view.stack[view.stack.length - 1];
+    if (top.controller === view.you && top.chapter !== undefined && !yielding) return false;
+    return yielding || top.controller === view.you;
   }
   if (yielding) return true;
   const myTurn = view.activePlayer === view.you;

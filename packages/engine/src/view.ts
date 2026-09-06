@@ -69,6 +69,8 @@ export interface StackItemView {
   kind: 'spell' | 'ability' | 'copy';
   /** Abilities: activated (vs triggered) — Stifle-style targeting. */
   activated?: boolean;
+  /** Saga chapter triggers: the chapter number (the client holds priority on your own). */
+  chapter?: number;
   /** For spells: the card object's id (usable as a counterspell target). */
   sourceId: number;
   controller: PlayerId;
@@ -250,6 +252,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
         id: item.id,
         kind: item.kind,
       activated: item.activated || undefined,
+        chapter: item.chapter,
         sourceId: item.sourceId,
         controller: item.controller,
         cardName: hidden ? FACE_DOWN_CARD.name : item.cardName,
