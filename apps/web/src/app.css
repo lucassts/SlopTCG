@@ -405,28 +405,28 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
 /* --------------------------------------------------- pilha (pop-up visual) */
 .stack-popup {
+  /* Coluna da direita, como os outros pop-ups: não cobre o campo nem a barra de ações. */
   position: fixed;
-  left: calc((100% - 300px) / 2);
-  top: 14%;
-  transform: translateX(-50%);
+  right: 12px;
+  top: 56px;
+  width: min(300px, 90vw);
   z-index: 150;
   background: rgba(17, 20, 28, 0.96);
   border: 1px solid var(--accent);
   border-radius: 14px;
   padding: 10px 14px;
   box-shadow: 0 12px 44px rgba(0, 0, 0, 0.65);
-  max-width: min(760px, calc(100vw - 340px));
 }
 .stack-cards { display: flex; gap: 12px; overflow-x: auto; padding: 8px 2px 4px; }
 .stack-card {
   flex-shrink: 0;
-  width: 120px;
+  width: 84px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.stack-card .card-face { width: 120px; height: 167px; }
+.stack-card .card-face { width: 84px; height: 117px; }
 .stack-card.mine .card-face { box-shadow: 0 0 0 2px var(--ok); border-radius: 8px; }
 .stack-card.theirs .card-face { box-shadow: 0 0 0 2px var(--blue); border-radius: 8px; }
 .stack-card:hover .card-face { transform: scale(1.6); z-index: 40; position: relative; }

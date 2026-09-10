@@ -214,6 +214,7 @@ function parseSimpleEffect(clause: string): EffectStep[] | null {
     return n === null ? null : [{ op: 'putCounters', what: 'self', counter: m[2], count: n }];
   }
   if (/^sacrifice ~$/i.test(clause) || /^sacrifice it$/i.test(clause)) return [{ op: 'sacrificeSelf' }];
+  if (/^manifest dread$/i.test(clause)) return [{ op: 'manifestDread' }];
   if ((m = clause.match(/^add ((?:\{[WUBRGC]\})+)$/i))) {
     return [{ op: 'addMana', who: 'controller', mana: [...m[1].matchAll(/\{([WUBRGC])\}/g)].map((x) => x[1] as Color | 'C') }];
   }
@@ -1257,7 +1258,7 @@ interface ParseState {
   flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
   flags11: Partial<Pick<CardDefinition, 'landsMultiManaColorless' | 'extraManaOnCreatureTap'>>;
   flags12: Partial<Pick<CardDefinition, 'yourSpellsUncounterable' | 'grantWardLifeOthers' | 'cageNoEnterFromGraveyardLibrary' | 'cageNoCastFromGraveyardLibrary' | 'nonbasicLandsAreMountains'>>;
-  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle' | 'allPermanentsArtifacts' | 'allColorless' | 'manaAnyColor' | 'allCardsChosenColor' | 'controlOpponentSearches' | 'companion' | 'uncounterableColors' | 'demonstrate' | 'creatureOffBattlefield' | 'conditionalCreature' | 'cauldron' | 'noUntapNonbasicLands' | 'opponentsSorcerySpeedOnly' | 'creaturesLoseAbilities' | 'laviniaCap'>>;
+  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle' | 'allPermanentsArtifacts' | 'allColorless' | 'manaAnyColor' | 'allCardsChosenColor' | 'controlOpponentSearches' | 'companion' | 'uncounterableColors' | 'demonstrate' | 'creatureOffBattlefield' | 'conditionalCreature' | 'cauldron' | 'noUntapNonbasicLands' | 'opponentsSorcerySpeedOnly' | 'creaturesLoseAbilities' | 'laviniaCap' | 'chancellor'>>;
   flashbackPayLife?: number;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
@@ -2115,6 +2116,32 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   }
   if (/^Nonbasic lands don't untap during their controllers' untap steps\.$/i.test(line)) { st.flags13.noUntapNonbasicLands = true; return true; }
   if (/^Each opponent can cast spells only any time they could cast a sorcery\.$/i.test(line)) { st.flags13.opponentsSorcerySpeedOnly = true; return true; }
+  // ---- Leva 23: Sheltered by Ghosts, Chancellor of the Annex, Call Forth the Tempest, Curie
+  if ((m = line.match(/^Enchanted creature gets ([+-]\d+)\/([+-]\d+) and has (.+?),? and ward (\{\d+\})\.$/i))) {
+    const kws = keywordList(m[3]);
+    if (!kws) return false;
+    st.attachEffect = { ...(st.attachEffect ?? {}), power: parseInt(m[1], 10), toughness: parseInt(m[2], 10), keywords: [...(st.attachEffect?.keywords ?? []), ...kws], ward: manaValueOfCost(m[4]) };
+    return true;
+  }
+  if ((m = line.match(/^You may reveal this card from your opening hand\. If you do, when each opponent casts their first spell of the game, counter that spell unless that player pays ((?:\{[^}]+\})+)\.$/i))) { st.flags13.chancellor = { cost: m[1] }; return true; }
+  if ((m = line.match(/^Whenever an opponent casts a spell, counter it unless that player pays ((?:\{[^}]+\})+)\.$/i))) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'opponentCastsSpell' }, effect: [{ op: 'counterUnlessPay', what: 'triggering', cost: m[1] }], text: `anula a mágica do oponente a menos que ele pague ${m[1]}` });
+    return true;
+  }
+  if (isSpell && /^~ deals damage to each creature your opponents control equal to the total mana value of other spells you've cast this turn\.$/i.test(line)) {
+    st.spellEffect.push({ op: 'damageEach', filter: { what: 'creature', controlledBy: 'opponent' }, amount: { mvOtherSpellsCastThisTurn: true } });
+    return true;
+  }
+  if (/^Whenever ~ deals combat damage to a player, draw cards equal to its base power\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'combatDamageToPlayer', self: true }, effect: [{ op: 'draw', who: 'controller', count: { basePowerOf: 'self' } }], text: 'compre cartas igual ao poder base' });
+    return true;
+  }
+  if ((m = line.match(/^((?:\{[^}]+\})+), Exile another nontoken (.+?) you control: ~ becomes a copy of the exiled creature, except it has "(.+)"\.$/i))) {
+    const info = parseNounG(m[2]);
+    if (!info || info.player || info.zone) return false;
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1], exile: { ...info.filter, other: true, nontoken: true, controlledBy: 'you' } }, effect: [{ op: 'becomeCopy', what: 'self', fromCostExile: true, keep: 'triggered' }], text: `vira uma cópia da criatura exilada (mantendo: ${m[3]})` });
+    return true;
+  }
   // ---- Leva 22: Lavinia, Void Mirror, Undermountain Adventurer
   if (/^Each opponent can't cast noncreature spells with mana value greater than the number of lands that player controls\.$/i.test(line)) { st.flags13.laviniaCap = true; return true; }
   if (/^Whenever an opponent casts a spell, if no mana was spent to cast it, counter that spell\.$/i.test(line)) {

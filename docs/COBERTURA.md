@@ -19,19 +19,19 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-10, v0.37.0 — Manamorphose, Borne Upon a Wind, Undermountain Adventurer, Lavinia, Void Mirror; Legacy a 99,0%)
+## Estado (2026-09-10, v0.38.0 — Sheltered by Ghosts, Chancellor of the Annex, Call Forth the Tempest, Curie, Abhorrent Oculus; Legacy a 99,1%)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | **v0.37** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | 13.795 | 13.795 | 13.801 | 13.857 | **13.876** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | 14.522 | 14.522 | 14.516 | 14.495 | **14.480** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | 4.764 | 4.764 | 4.764 | 4.729 | **4.725** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | 13.795 | 13.795 | 13.801 | 13.857 | 13.876 | **13.890** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | 14.522 | 14.522 | 14.516 | 14.495 | 14.480 | **14.471** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | 4.764 | 4.764 | 4.764 | 4.729 | 4.725 | **4.720** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 
 **Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
 scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
 mede quanto do que se joga já é full (META% × cópias). Legacy: **43,7% →
-67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0, **94,9%** na v0.23.0, **95,1%** na v0.24.0, **95,4%** na v0.25.0, **97,3%** na v0.27.0, **97,5%** na v0.28.0, **97,8%** na v0.35.0, **98,9%** na v0.36.0 e **99,0%** na v0.37.0. Relatórios em `data/meta/<formato>-gap.md`.
+67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0, **94,9%** na v0.23.0, **95,1%** na v0.24.0, **95,4%** na v0.25.0, **97,3%** na v0.27.0, **97,5%** na v0.28.0, **97,8%** na v0.35.0, **98,9%** na v0.36.0, **99,0%** na v0.37.0 e **99,1%** na v0.38.0. Relatórios em `data/meta/<formato>-gap.md`.
 
 A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
 "outra face não modelada" restam 143 (versos cujo texto ainda não compila).
@@ -885,6 +885,41 @@ no navegador: Void Mirror anulou Ornithopter {0}; Lightning Bolt pago com
 Mountain resolveu sem gatilho. Auditor: 13.876 full / 14.480 parciais /
 4.725 manuais, 0 estruturais, 39 de simulação. Legacy 98,9% → 99,0% (419
 de 509 full, 90 com lacuna). 529 testes (m44: 7).
+
+**v0.38.0 — Sheltered by Ghosts, Chancellor of the Annex, Call Forth the
+Tempest, Curie, Abhorrent Oculus.** **Manifestar pavor** (Oculus): op de
+escolha `manifestDread` — olha as duas do topo, a escolhida entra virada
+para baixo como 2/2 (`obj.faceDown` + `obj.manifested`), a outra vai para
+o cemitério; `turnFaceUp` aceita carta manifestada que seja criatura,
+pagando o custo de mana (morph continua pelo custo de morph); a carta
+volta a ficar virada para cima ao sair do campo (`moveWithEvent`);
+`pushTrigger` ignora permanentes viradas para baixo (sem habilidades);
+`CardView.manifested` e botão "🔓 Virar para cima" no cliente.
+**Chancellor**: `card.chancellor = { cost }`; ao manter a mão inicial, a
+carta é revelada automaticamente (`obj.chancellorRevealed`, evento
+`cardsRevealed`) e a primeira mágica do oponente recebe o gatilho
+`counterUnlessPay` a partir da carta na mão (`chancellorUsed`); a linha
+"Whenever an opponent casts a spell, counter it unless that player pays"
+virou regra explícita — a gramática antiga anulava a própria Chancellor
+(pronome "it" resolvido como `self`) e pedia o pagamento ao controlador
+errado. **Call Forth the Tempest**: `player.mvCastThisTurn` acumula o
+valor de mana de cada mágica conjurada (paga ou de graça, X incluído) e
+zera na limpeza; `DynAmount.mvOtherSpellsCastThisTurn` desconta a própria.
+**Curie**: custo `exile` em habilidade ativada (escolhido como sacrifício;
+`StackItem.costExiledId` → `ctx.costExiledId`); `becomeCopy` com
+`fromCostExile` + `keep: 'triggered'` (mantém o gatilho de compra, não a
+ativada); `DynAmount.basePowerOf` usa `basePowerOf()` extraído de
+`effectivePower`. **Sheltered by Ghosts**: "gets +N/+N and has K and ward
+{N}" em `attachEffect` (ward já era cobrado em `wardTax`). **UI**: o
+pop-up da pilha saiu do centro (cobria Passar/Resolver em 1024×768 e
+1280×720) e foi para a coluna da direita, como os outros pop-ups.
+Verificado no navegador: manifestar pavor ponta a ponta (decisão, 2/2
+virada, oponente vê "Carta virada para baixo", virar para cima por {2}{U})
+e o pop-up da pilha na direita com o botão livre. Auditor: 13.890 full /
+14.471 parciais / 4.720 manuais, 0 estruturais, 40 de simulação (a nova
+é o simulador não escolher o custo de exílio da Curie, como já acontece
+com estacionar). Legacy 99,0% → 99,1% (424 de 509 full, 85 com lacuna).
+535 testes (m45: 7).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

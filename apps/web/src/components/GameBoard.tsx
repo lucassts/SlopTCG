@@ -834,8 +834,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         .map(({ a, i }) => ({ label: `⚙ ${a.text}`, run: () => startAbility(cv, i, a) }));
       if (cv.card.crew !== undefined && !cv.crewed)
         opts.unshift({ label: t('🚗 Tripular {n} (vira criatura até o fim do turno)', { n: cv.card.crew }), run: () => crewVehicle(cv) });
-      if (cv.faceDown && cv.card.morph)
-        opts.unshift({ label: t('🔓 Virar para cima — {cost}', { cost: cv.card.morph.cost }), run: () => onAction({ type: 'turnFaceUp', objectId: cv.objectId }) });
+      if (cv.faceDown && (cv.card.morph || (cv.manifested && cv.card.types.includes('Creature'))))
+        opts.unshift({ label: t('🔓 Virar para cima — {cost}', { cost: cv.card.morph?.cost ?? cv.card.manaCost ?? '{0}' }), run: () => onAction({ type: 'turnFaceUp', objectId: cv.objectId }) });
       if (opts.length === 0) return;
       if (opts.length === 1) {
         opts[0].run();
@@ -899,10 +899,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const beginAbility = (
     cv: CardView,
     idx: number,
-    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; returnToHand?: { what?: string }; discard?: number; tapCreature?: boolean } },
+    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; returnToHand?: { what?: string }; exile?: { what?: string }; discard?: number; tapCreature?: boolean } },
   ) => {
     const returnCost = typeof ability.cost === 'object' ? ability.cost.returnToHand : undefined;
-    const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice ?? returnCost : undefined;
+    const exileCost = typeof ability.cost === 'object' ? ability.cost.exile : undefined;
+    const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice ?? returnCost ?? exileCost : undefined;
     const discardCount = typeof ability.cost === 'object' ? ability.cost.discard ?? 0 : 0;
     const tapPick = typeof ability.cost === 'object' ? !!ability.cost.tapCreature : false;
     const sacCount = sacFilter ? 1 : 0;
@@ -919,7 +920,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           : tapPick
             ? t('{name}: {text} (escolha a criatura a virar)', { name: cv.card.name, text: ability.text })
             : sacCount > 0
-              ? t('{name}: {text} ({which})', { name: cv.card.name, text: ability.text, which: returnCost ? t('escolha o que devolver à mão primeiro') : t('escolha o sacrifício primeiro') })
+              ? t('{name}: {text} ({which})', { name: cv.card.name, text: ability.text, which: returnCost ? t('escolha o que devolver à mão primeiro') : exileCost ? t('escolha o que exilar primeiro') : t('escolha o sacrifício primeiro') })
               : `${cv.card.name}: ${ability.text}`;
       setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined, tapPick: tapPick || undefined });
     }

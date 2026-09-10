@@ -287,6 +287,8 @@ export function moveWithEvent(
   position: 'top' | 'bottom' = 'top',
 ): void {
   const from = obj.zone;
+  // A face-down permanent is revealed as it leaves the battlefield.
+  if (from === 'battlefield' && to !== 'battlefield' && (obj.faceDown || obj.manifested)) { obj.faceDown = false; obj.manifested = undefined; }
   // Unearth: if it would leave the battlefield, exile it instead.
   if (obj.unearthed && from === 'battlefield' && to !== 'exile') to = 'exile';
   // "If ~ would die, exile it instead" / "If a creature (an opponent controls) would die, exile it instead."

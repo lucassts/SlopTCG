@@ -219,6 +219,10 @@ export type DynAmount =
   | 'X'
   /** "the total mana value of other permanents you control" (Summon: Bahamut). */
   | { sumManaValue: FilterSpec }
+  /** Curie: "draw cards equal to its base power". */
+  | { basePowerOf: SubjectRef }
+  /** Call Forth the Tempest: total mana value of the other spells you've cast this turn. */
+  | { mvOtherSpellsCastThisTurn: true }
   /** Boast (Broadside Bombardiers): "2 plus the sacrificed permanent's mana value". */
   | { sacrificedManaValuePlus: number }
   | { per: FilterSpec }
@@ -539,7 +543,9 @@ export type EffectStep =
   | { op: 'extractName' }
   // ---- Leva 6a (Legacy, parte 5)
   /** Thespian's Stage: the source becomes a copy of the target, keeping the ability that has this op. */
-  | { op: 'becomeCopy'; what: SubjectRef }
+  | { op: 'becomeCopy'; what: SubjectRef; /** Curie: copy the permanent exiled as this ability's cost. */ fromCostExile?: boolean; /** Curie: keep this card's triggered abilities instead of the ability carrying this op. */ keep?: 'triggered' }
+  /** (choice) Manifest dread: look at the top two, one enters face down as a 2/2, the other goes to the graveyard. */
+  | { op: 'manifestDread' }
   /** Raph & Mikey: reveal from the top until a matching card; it enters (tapped, attacking); the rest goes to the bottom in random order. */
   | { op: 'revealUntil'; filter: FilterSpec; tapped?: boolean; attacking?: boolean }
   /** Emry: the target card in your graveyard may be cast this turn. */
@@ -919,6 +925,8 @@ export interface ActivatedAbility extends LevelGate {
     sacrificeSelf?: boolean;
     /** Sacrifice another permanent matching this filter (chosen in the action). */
     sacrifice?: FilterSpec;
+    /** Curie: "Exile another nontoken artifact creature you control" as a cost (chosen like a sacrifice). */
+    exile?: FilterSpec;
     /** Pay N life (requires having at least N). */
     payLife?: number;
     /** Discard N cards from hand (chosen in the action). */
@@ -1107,6 +1115,8 @@ export interface CardDefinition {
   creaturesLoseAbilities?: boolean;
   /** Lavinia: opponents can't cast noncreature spells with mana value greater than the number of lands they control. */
   laviniaCap?: boolean;
+  /** Chancellor of the Annex: revealed from the opening hand, each opponent's first spell of the game is countered unless they pay. */
+  chancellor?: { cost: string };
   /** Arena of Glory: mana that gives haste to a creature spell it pays for (approximation: the next creature spell this turn). */
   hasteMana?: boolean;
   /** Wastescape Battlemage: "Kicker {A} and/or {B}" — a second, independent kicker cost. */

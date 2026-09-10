@@ -102,6 +102,7 @@ export const EN_GAMEBOARD: Record<string, string> = {
   '{name}: {text} ({which})': '{name}: {text} ({which})',
   'escolha o que devolver à mão primeiro': 'choose what to return to hand first',
   'escolha o sacrifício primeiro': 'choose the sacrifice first',
+  'escolha o que exilar primeiro': 'choose what to exile first',
   '(não há criaturas desviradas suficientes para tripular {name})': '(not enough untapped creatures to crew {name})',
   'Atacar {name} em vez do jogador?': 'Attack {name} instead of the player?',
   'Exert? (não desvira no seu próximo turno)': "Exert? (it won't untap during your next untap step)",

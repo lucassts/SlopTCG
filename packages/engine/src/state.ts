@@ -111,6 +111,11 @@ export interface GameObject {
   lastCounters?: Record<string, number>;
   /** Morph/Disguise: on the battlefield as a face-down 2/2 with no abilities. */
   faceDown?: boolean;
+  /** Manifest dread: face-down 2/2 that may be turned up for its mana cost if it's a creature card. */
+  manifested?: boolean;
+  /** Chancellor of the Annex: revealed from the opening hand / its first-spell trigger already used. */
+  chancellorRevealed?: boolean;
+  chancellorUsed?: boolean;
   /** Unearth: exiled instead of going anywhere else when it leaves. */
   unearthed?: boolean;
   /** How it was cast (evoke/dash/blitz…) — drives what happens on resolution. */
@@ -290,6 +295,8 @@ export interface StackItem {
   sacrificedPower?: number;
   /** Boast: mana value of the permanent sacrificed as a cost. */
   sacrificedManaValue?: number;
+  /** Curie: the permanent exiled as this ability's cost. */
+  costExiledId?: number;
   /** Cast via flashback: the card is exiled instead of going to the graveyard. */
   flashback?: boolean;
   /** Activated (vs triggered) ability — for Stifle-style targeting. */
@@ -327,6 +334,8 @@ export interface PlayerState {
   sorceriesAsFlashUntilTurn?: number;
   /** Borne Upon a Wind: every spell has flash during this turn. */
   spellsAsFlashTurn?: number;
+  /** Call Forth the Tempest: total mana value of spells cast this turn. */
+  mvCastThisTurn?: number;
   /** Arena of Glory: the next creature spell cast this turn gains haste. */
   hasteManaTurn?: number;
   /** Firebending: mana that survives step changes until the end of combat. */
@@ -898,6 +907,13 @@ function attachmentBonus(state: GameState, obj: GameObject): { power: number; to
 }
 
 /** Characteristic-defining P/T ("~'s power is equal to the number of…"): a DynAmount evaluated from the object's controller. */
+/** Base power (printed / CDA / band / face-down 2), before counters, attachments and pumps. */
+export function basePowerOf(state: GameState, obj: GameObject): number {
+  const band = currentBand(obj);
+  const animated = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.power === undefined;
+  return obj.faceDown ? 2 : obj.baseOverrideEot ? obj.baseOverrideEot.power : animated ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : obj.card.power ?? 0); // virada para baixo: 2/2
+}
+
 export function cdaValue(state: GameState, obj: GameObject, amount: import('./cards/types.js').DynAmount): number {
   const me = obj.controller;
   if (typeof amount === 'number') return amount;
@@ -959,7 +975,7 @@ export function effectivePower(state: GameState, obj: GameObject): number {
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
   const animated = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.power === undefined;
-  const base = obj.faceDown ? 2 : obj.baseOverrideEot ? obj.baseOverrideEot.power : animated ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : obj.card.power ?? 0); // virada para baixo: 2/2
+  const base = basePowerOf(state, obj);
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.power, 0);
   return base + obj.untilEot.power + untilNext + counters + fromAttachments + staticsFor(state, obj).power + pairedBonus(state, obj).power;
 }

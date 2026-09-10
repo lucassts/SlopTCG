@@ -34,6 +34,8 @@ export interface CardView {
   crewed: boolean;
   /** Morph/Disguise: currently face down (the controller still sees the real card). */
   faceDown?: boolean;
+  /** Manifest dread: may be turned face up for its mana cost if it's a creature card. */
+  manifested?: boolean;
   /** Leva 5b: double-faced permanent currently showing its back face. */
   transformed?: boolean;
   /** "As ~ enters, choose a color": the chosen color (for "add {C} or one mana of the chosen color"). */
@@ -188,6 +190,7 @@ function cardView(state: GameState, obj: GameObject, viewer?: PlayerId): CardVie
     objectId: obj.id,
     card,
     faceDown: obj.faceDown || undefined,
+    manifested: obj.manifested || undefined,
     transformed: obj.transformed || undefined,
     tapped: obj.tapped,
     damage: obj.damage,

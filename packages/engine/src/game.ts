@@ -249,6 +249,14 @@ export class Game {
       this.applyEnterTapRules(ley);
       this.emit({ type: 'fizzled', description: `${player.name} começa o jogo com ${ley.card.name} no campo de batalha` });
     }
+    // Chancellors: "You may reveal this card from your opening hand. If you do, …" — revelada automaticamente.
+    for (const id of [...player.zones.hand]) {
+      const ch = s.objects[id];
+      if (!ch.card.chancellor) continue;
+      ch.chancellorRevealed = true;
+      this.emit({ type: 'cardsRevealed', player: playerId, cards: [ch.card.name], source: 'mão inicial' });
+      this.emit({ type: 'fizzled', description: `${player.name} revela ${ch.card.name} da mão inicial: a primeira mágica do oponente será anulada a menos que pague ${ch.card.chancellor.cost}` });
+    }
     if (PLAYER_IDS.every((p) => mull.phase[p] === 'kept')) {
       s.mulligan = null;
       this.beginFirstTurn();
@@ -1234,6 +1242,7 @@ export class Game {
     s.priority = playerId;
     s.players[playerId].spellsCastThisTurn = (s.players[playerId].spellsCastThisTurn ?? 0) + 1;
     s.players[playerId].spellsCastThisGame = (s.players[playerId].spellsCastThisGame ?? 0) + 1;
+    s.players[playerId].mvCastThisTurn = (s.players[playerId].mvCastThisTurn ?? 0) + manaValueOf(card.manaCost) + (x ?? 0);
     if (!card.types.includes('Creature')) s.players[playerId].noncreatureSpellsThisTurn = (s.players[playerId].noncreatureSpellsThisTurn ?? 0) + 1;
     this.emit({ type: 'spellCast', player: playerId, objectId: obj.id, cardName: card.name, targets });
     if (copies > 0) this.emit({ type: 'copiesCreated', cardName: card.name, count: copies, reason: 'storm' });
@@ -1267,13 +1276,16 @@ export class Game {
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
     const obj = s.objects[objectId];
-    if (!obj || obj.zone !== 'battlefield' || obj.controller !== playerId || !obj.faceDown || !obj.card.morph)
+    const manifestUp = !!obj && !!obj.manifested && obj.card.types.includes('Creature') && !obj.card.morph;
+    if (!obj || obj.zone !== 'battlefield' || obj.controller !== playerId || !obj.faceDown || (!obj.card.morph && !manifestUp))
       { this.fail(playerId, 'isso não é uma permanente sua virada para baixo'); return false; }
-    const plan = planPayment(s, playerId, parseCost(obj.card.morph.cost));
+    const upCost = obj.card.morph ? obj.card.morph.cost : obj.card.manaCost ?? '{0}';
+    const plan = planPayment(s, playerId, parseCost(upCost));
     if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
     this.payWithPlan(playerId, plan);
     obj.faceDown = false;
-    if (obj.card.morph.megamorph) {
+    obj.manifested = undefined;
+    if (obj.card.morph?.megamorph) {
       const total = (obj.counters['+1/+1'] ?? 0) + 1;
       obj.counters['+1/+1'] = total;
       this.emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: '+1/+1', delta: 1, total });
@@ -1589,10 +1601,10 @@ export class Game {
 
     // Sacrifice-another cost (Viscera Seer): validated before paying anything.
     const abilitySacs = sacrifices ?? [];
-    const costPick = ability.cost.sacrifice ?? ability.cost.returnToHand;
+    const costPick = ability.cost.sacrifice ?? ability.cost.returnToHand ?? ability.cost.exile;
     if (costPick) {
       if (abilitySacs.length !== 1)
-        { this.fail(playerId, ability.cost.returnToHand ? 'escolha 1 permanente para devolver à mão como custo' : 'escolha 1 permanente para sacrificar como custo'); return false; }
+        { this.fail(playerId, ability.cost.returnToHand ? 'escolha 1 permanente para devolver à mão como custo' : ability.cost.exile ? 'escolha 1 permanente para exilar como custo' : 'escolha 1 permanente para sacrificar como custo'); return false; }
       const sacObj = s.objects[abilitySacs[0]];
       if (!sacObj || sacObj.zone !== 'battlefield' || sacObj.controller !== playerId)
         { this.fail(playerId, 'custo inválido'); return false; }
@@ -1679,7 +1691,7 @@ export class Game {
       moveWithEvent(s, c, 'graveyard', 'discarded', this.emit);
       this.emit({ type: 'discarded', player: playerId, objectId: id, cardName: c.card.name });
     }
-    for (const id of abilitySacs) moveWithEvent(s, s.objects[id], ability.cost.returnToHand ? 'hand' : 'graveyard', ability.cost.returnToHand ? 'returned' : 'sacrificed', this.emit);
+    for (const id of abilitySacs) moveWithEvent(s, s.objects[id], ability.cost.returnToHand ? 'hand' : ability.cost.exile ? 'exile' : 'graveyard', ability.cost.returnToHand ? 'returned' : ability.cost.exile ? 'exiled' : 'sacrificed', this.emit);
     if (ability.cost.sacrificeSelf) moveWithEvent(s, obj, 'graveyard', 'sacrificed', this.emit);
     if (ability.exileSelf && obj.zone === 'graveyard') moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
 
@@ -1721,6 +1733,7 @@ export class Game {
       description: `${obj.card.name}: ${ability.text}`,
       xValue: x,
       sacrificedManaValue,
+      costExiledId: ability.cost.exile ? abilitySacs[0] : undefined,
     });
     s.passCount = 0;
     s.priority = playerId;
@@ -2390,6 +2403,7 @@ export class Game {
       ps.permanentsLeftThisTurn = 0;
       ps.nonlandEnteredThisTurn = 0;
       ps.spellsCastThisTurn = 0;
+      ps.mvCastThisTurn = 0;
       ps.noncreatureSpellsThisTurn = 0;
       ps.colorsCastThisTurn = [];
       for (const id of ps.zones.battlefield) s.objects[id].attackedThisTurn = undefined;
@@ -2444,6 +2458,7 @@ export class Game {
           xValue: item.xValue,
           sacrificedPower: item.sacrificedPower,
           sacrificedManaValue: item.sacrificedManaValue,
+          costExiledId: item.costExiledId,
           emit: this.emit,
         },
         item.effect,
@@ -2519,6 +2534,7 @@ export class Game {
             targets: item.targets,
             xValue: item.xValue,
             sacrificedManaValue: item.sacrificedManaValue,
+            costExiledId: item.costExiledId,
             emit: this.emit,
           };
           const count = obj.card.entersWithCountersIf && !condHolds(ctx, obj.card.entersWithCountersIf) ? 0 : resolveAmount(ctx, obj.card.entersWithCounters.count);
@@ -2560,6 +2576,7 @@ export class Game {
           xValue: item.xValue,
           sacrificedPower: item.sacrificedPower,
           sacrificedManaValue: item.sacrificedManaValue,
+          costExiledId: item.costExiledId,
           emit: this.emit,
         },
         item.effect,
@@ -2611,6 +2628,7 @@ export class Game {
         targets: item.targets,
         xValue: item.xValue,
         sacrificedManaValue: item.sacrificedManaValue,
+        costExiledId: item.costExiledId,
         subjectId: item.subjectId,
         subjectPlayer: item.subjectPlayer,
         triggerAmount: item.triggerAmount,
@@ -3213,6 +3231,14 @@ export class Game {
         this.pushTrigger(obj, ability, spellObj?.id, undefined, { subjectPlayer: caster, abilityIndex: idx });
       });
     }
+    // Chancellor of the Annex revealed from the opening hand: the opponent's first spell of the game.
+    if (spellObj) {
+      for (const ch of Object.values(s.objects)) {
+        if (ch.owner === caster || !ch.chancellorRevealed || ch.chancellorUsed || !ch.card.chancellor) continue;
+        ch.chancellorUsed = true;
+        this.pushTrigger(ch, { text: `primeira mágica de ${s.players[caster].name}: anulada a menos que pague ${ch.card.chancellor.cost}`, effect: [{ op: 'counterUnlessPay', what: 'triggering', cost: ch.card.chancellor.cost }] }, spellObj.id, undefined, { subjectPlayer: caster });
+      }
+    }
     // "When you cast ~" on the spell itself.
     if (spellObj) this.fireSelfTrigger(spellObj.id, 'youCastThis');
   }
@@ -3304,6 +3330,7 @@ export class Game {
   ): void {
     const s = this.state;
     if (losesAllAbilities(s, obj)) return; // Dress Down
+    if (obj.faceDown && obj.zone === 'battlefield') return; // virada para baixo: sem habilidades
     // Intervening "if" ("…, if you're the monarch, …"): checked as it would trigger.
     if (ability.condition) {
       const cond = ability.condition;

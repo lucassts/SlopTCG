@@ -32,7 +32,7 @@ import {
   type Emit,
   transformObject,
 } from './ops.js';
-import { sameName } from './state.js';
+import { basePowerOf, sameName } from './state.js';
 import {
   moveObject,
   battlefield,
@@ -68,6 +68,8 @@ export interface EffectContext {
   /** Subtypes of the creature sacrificed by a `sacrifice` choice of this script (Minsc & Boo −2). */
   sacrificedSubtypes?: string[];
   sacrificedManaValue?: number;
+  /** Curie: the permanent exiled as the ability's cost. */
+  costExiledId?: number;
   /** Mana chosen by the player for 'addManaChoice' / 'addManaOptions' abilities. */
   chosenMana?: 'W' | 'U' | 'B' | 'R' | 'G' | 'C';
   /** Triggered abilities: the object that caused the trigger. */
@@ -291,6 +293,11 @@ export function resolveAmount(ctx: EffectContext, amount: DynAmount): number {
   if ('toughnessOf' in amount) { const obj = subj(amount.toughnessOf); return obj ? Math.max(0, effectiveToughness(ctx.state, obj)) : 0; }
   if ('cmcOf' in amount) { const obj = subj(amount.cmcOf); return obj ? manaValueOf(obj.card.manaCost) : 0; }
   if ('sacrificedManaValuePlus' in amount) return amount.sacrificedManaValuePlus + (ctx.sacrificedManaValue ?? 0);
+  if ('basePowerOf' in amount) { const obj = subj(amount.basePowerOf); return obj ? Math.max(0, basePowerOf(ctx.state, obj)) : 0; }
+  if ('mvOtherSpellsCastThisTurn' in amount) {
+    const src = ctx.state.objects[ctx.sourceId];
+    return Math.max(0, (ctx.state.players[ctx.controller].mvCastThisTurn ?? 0) - (src ? manaValueOf(src.card.manaCost) + (ctx.xValue ?? 0) : 0));
+  }
   if ('sumManaValue' in amount) {
     return PLAYER_IDS.flatMap((p) => ctx.state.players[p].zones.battlefield).map((id) => ctx.state.objects[id])
       .filter((o) => matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId, state: ctx.state }, amount.sumManaValue, o))
@@ -330,9 +337,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' | 'yorionBlink' | 'cloakExile' | 'tibaltTrickery' | 'keepXDiscardRest' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' | 'yorionBlink' | 'cloakExile' | 'tibaltTrickery' | 'keepXDiscardRest' | 'manifestDread' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy', 'yorionBlink', 'cloakExile', 'tibaltTrickery', 'keepXDiscardRest']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy', 'yorionBlink', 'cloakExile', 'tibaltTrickery', 'keepXDiscardRest', 'manifestDread']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -786,6 +793,12 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const options = [...hand, ...creature];
       if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
       return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: exile uma carta não-terreno da mão de ${state.players[victim].name} ou a criatura escolhida (até ${ctx.sourceName} sair)`, mode: 'cards', skipLabel: 'Não exilar' };
+    }
+    case 'manifestDread': {
+      const top = state.players[controller].zones.library.slice(0, 2);
+      if (top.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      if (top.length === 1) return { player: controller, options: top, min: 1, max: 1, prompt: '', mode: 'cards', autoAnswer: 'yes' };
+      return { player: controller, options: top, min: 1, max: 1, prompt: `${ctx.sourceName}: manifestar pavor — escolha a carta que entra virada para baixo como 2/2 (a outra vai para o cemitério)`, mode: 'cards' };
     }
     case 'tibaltTrickery': {
       // Anula, mói 1–3 ao acaso e exila até um não-terreno com outro nome: o controlador da mágica anulada decide se conjura de graça.
@@ -1553,6 +1566,18 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         if (fromHand) (src.exiledUntilLeavesToHand ??= []).push(o.id); else (src.exiledUntilLeaves ??= []).push(o.id);
       }
       emit({ type: 'fizzled', description: `${ctx.sourceName}: ${o.card.name} exilada até ${ctx.sourceName} sair do campo` });
+      return;
+    }
+    case 'manifestDread': {
+      const top = state.players[ctx.controller].zones.library.slice(0, 2);
+      const pick = picks[0] !== undefined && top.includes(picks[0]) ? picks[0] : top[0];
+      if (pick === undefined) return;
+      const o = state.objects[pick];
+      o.faceDown = true; o.manifested = true;
+      moveWithEvent(state, o, 'battlefield', 'resolved', emit);
+      if (o.zone !== 'battlefield') { o.faceDown = false; o.manifested = undefined; }
+      for (const id of top) if (id !== pick) moveWithEvent(state, state.objects[id], 'graveyard', 'milled', emit);
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: manifestar pavor — uma carta entra virada para baixo (2/2), a outra vai para o cemitério` });
       return;
     }
     case 'tibaltTrickery': {
@@ -2501,10 +2526,11 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       return;
     case 'becomeCopy': {
       const src = state.objects[ctx.sourceId];
-      const t = resolveSubject(ctx, step.what)[0];
-      const target = t !== undefined ? objectAlive(state, t) : undefined;
+      const t = step.fromCostExile ? (ctx.costExiledId !== undefined ? { kind: 'object' as const, id: ctx.costExiledId } : undefined) : resolveSubject(ctx, step.what)[0];
+      const target = t !== undefined && t.kind === 'object' ? (step.fromCostExile ? state.objects[t.id] : objectAlive(state, t)) : undefined;
       if (!src || src.zone !== 'battlefield' || !target) return;
-      const keep = (src.card.abilities ?? []).filter((ab) => JSON.stringify(ab).includes('"becomeCopy"'));
+      const printed = src.printedCard ?? src.card;
+      const keep = step.keep === 'triggered' ? (printed.abilities ?? []).filter((ab) => ab.kind === 'triggered') : (src.card.abilities ?? []).filter((ab) => JSON.stringify(ab).includes('"becomeCopy"'));
       if (!src.printedCard) src.printedCard = src.card;
       src.card = { ...target.card, abilities: [...(target.card.abilities ?? []), ...keep] };
       emit({ type: 'fizzled', description: `${src.printedCard.name} vira uma cópia de ${target.card.name}` });
@@ -3226,6 +3252,7 @@ export function castCardFree(state: GameState, obj: GameObject, controller: Play
   obj.wasCast = true;
   obj.castFromHand = false;
   obj.manaSpent = 0; obj.colorsSpent = 0; // de graça: nenhuma mana gasta (Lavinia / Void Mirror)
+  state.players[controller].mvCastThisTurn = (state.players[controller].mvCastThisTurn ?? 0) + manaValueOf(card.manaCost);
   obj.kicked = bargained || undefined;
   const chosen = targets ?? [];
   const effect = bargained && card.kicker ? [...(card.spellEffect ?? []), ...card.kicker.effect] : card.spellEffect ?? [];
