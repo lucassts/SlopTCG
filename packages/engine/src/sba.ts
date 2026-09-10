@@ -105,9 +105,49 @@ function syncGlobalCardMods(state: GameState): void {
   }
 }
 
+/** Kaito: during its controller's turn, with loyalty, it's a 3/4 Ninja creature with hexproof (definition rewritten, printed one kept). */
+function syncConditionalCreatures(state: GameState): void {
+  for (const p of PLAYER_IDS) for (const id of state.players[p].zones.battlefield) {
+    const o = state.objects[id];
+    const cc = (o?.kaitoPrinted ?? o?.card)?.conditionalCreature;
+    if (!o || !cc) continue;
+    const on = state.activePlayer === o.controller && (o.counters['loyalty'] ?? 0) >= 1;
+    if (on && !o.kaitoPrinted) {
+      o.kaitoPrinted = o.card;
+      o.card = { ...o.card, types: [...o.card.types, 'Creature'], subtypes: [...new Set([...o.card.subtypes, ...cc.subtypes])], power: cc.power, toughness: cc.toughness, keywords: [...new Set([...(o.card.keywords ?? []), ...cc.keywords])] };
+    } else if (!on && o.kaitoPrinted) {
+      o.card = o.kaitoPrinted;
+      o.kaitoPrinted = undefined;
+    }
+  }
+}
+
+/** Agatha's Soul Cauldron: creatures you control with +1/+1 counters have the activated abilities of creature cards exiled with it. */
+function syncCauldron(state: GameState): void {
+  for (const p of PLAYER_IDS) {
+    const cauldrons = state.players[p].zones.battlefield.map((id) => state.objects[id]).filter((o) => o?.card.cauldron);
+    const exiled = cauldrons.flatMap((c) => Object.values(state.objects).filter((o) => o.zone === 'exile' && o.exiledBy === c.id && o.card.types.includes('Creature')));
+    const granted = exiled.flatMap((o) => (o.card.abilities ?? []).filter((a) => a.kind === 'activated').map((a) => ({ ...a, text: `${a.text} (${o.card.name}, via Cauldron)` })));
+    const key = granted.length > 0 ? exiled.map((o) => o.id).sort().join(',') : '';
+    for (const id of state.players[p].zones.battlefield) {
+      const o = state.objects[id];
+      if (!o) continue;
+      const want = key && isCreature(o) && (o.counters['+1/+1'] ?? 0) > 0 ? key : '';
+      if (want === (o.cauldronKey ?? '')) continue;
+      const base = o.cauldronPrinted ?? o.card;
+      if (!want) { o.card = base; o.cauldronPrinted = undefined; o.cauldronKey = undefined; continue; }
+      o.cauldronPrinted = base;
+      o.cauldronKey = want;
+      o.card = { ...base, abilities: [...(base.abilities ?? []), ...granted] };
+    }
+  }
+}
+
 export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
   syncBloodMoon(state, emit);
   syncGlobalCardMods(state);
+  syncConditionalCreatures(state);
+  syncCauldron(state);
   syncRiftstone(state);
   // Ascend: ten or more permanents → city's blessing for the rest of the game.
   for (const p of PLAYER_IDS) {

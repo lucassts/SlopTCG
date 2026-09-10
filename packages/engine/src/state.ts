@@ -48,6 +48,8 @@ export interface GameObject {
   controlAura?: number;
   /** Objects exiled "until ~ leaves the battlefield" (returned when it does). */
   exiledUntilLeaves?: number[];
+  /** Cloak and Dagger: cartas exiladas da mão "até ~ sair" — voltam para a mão. */
+  exiledUntilLeavesToHand?: number[];
   /** "As ~ enters, choose a color / creature type". */
   chosenColor?: import('./types.js').Color;
   chosenType?: string;
@@ -123,6 +125,23 @@ export interface GameObject {
   kickersPaid?: number[];
   /** Printed definition before a global effect (Lattice, Painter's Servant) rewrote `card`. */
   globalPrinted?: CardDefinition;
+  /** Nomads en-Kor: pending damage redirections (first in, first out). */
+  damageRedirects?: { amount: number; to: number }[];
+  /** Allosaurus Shepherd: base P/T override until end of turn. */
+  baseOverrideEot?: { power: number; toughness: number };
+  /** Snapcaster Mage: may be cast with flashback (cost = mana cost) until this turn ends. */
+  grantedFlashbackUntilTurn?: number;
+  /** Exhaust: ability indices already activated this game. */
+  exhaustedAbilities?: number[];
+  /** Kaito: printed definition while the "creature during your turn" rewrite is on. */
+  kaitoPrinted?: CardDefinition;
+  /** Mistrise Village: this spell can't be countered. */
+  uncounterable?: boolean;
+  /** Zone this object entered the battlefield from (Phyrexian Dragon Engine). */
+  enteredFrom?: ZoneName;
+  /** Agatha's Soul Cauldron: printed definition while granted abilities are on. */
+  cauldronPrinted?: CardDefinition;
+  cauldronKey?: string;
   /** Miracle: just drawn as the first card this turn — castable for its miracle cost right now. */
   miracleAvailable?: boolean;
   /** Cipher: creature this exiled spell is encoded on. */
@@ -300,6 +319,14 @@ export interface PlayerState {
   /** Companion chosen from the sideboard at game start (object id), and whether it was already taken. */
   companion?: number;
   companionTaken?: boolean;
+  /** Planeswalker emblems. */
+  emblems?: ('tezzeret' | 'kaitoNinjas')[];
+  /** Mistrise Village: the next spell this player casts can't be countered. */
+  nextSpellUncounterable?: boolean;
+  /** Teferi +1: sorceries have flash while turn < this. */
+  sorceriesAsFlashUntilTurn?: number;
+  /** Arena of Glory: the next creature spell cast this turn gains haste. */
+  hasteManaTurn?: number;
   /** Firebending: mana that survives step changes until the end of combat. */
   stickyPool?: ManaPool;
   /** Cards drawn this turn (miracle: the first one). */
@@ -761,6 +788,8 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'sourceUntapped': return !source.tapped;
     case 'targetIsPermanentCard': return false; // needs the effect context (condHolds)
     case 'resolvedNthThisTurn': return (source.resolvedThisTurn?.[cond.key] ?? 0) === cond.n;
+    case 'targetControlledByYou': return false; // needs the effect context (condHolds)
+    case 'targetIsCreatureCard': return false; // needs the effect context (condHolds)
     case 'compare': return false; // needs the effect context (condHolds)
     case 'cityBlessing': return !!state.players[me].cityBlessing;
     case 'opponentCastColorThisTurn': return (state.players[opp].colorsCastThisTurn ?? []).some((c) => cond.colors.includes(c));
@@ -824,6 +853,7 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
   const total = { power: 0, toughness: 0, keywords: [] as import('./types.js').Keyword[] };
   if (obj.zone !== 'battlefield') return total;
   for (const source of battlefield(state)) {
+    if (losesAllAbilities(state, source)) continue;
     for (const ability of source.card.abilities ?? []) {
       if (ability.kind !== 'static') continue;
       if (!abilityActive(source, ability)) continue;
@@ -840,6 +870,8 @@ function staticsFor(state: GameState, obj: GameObject): { power: number; toughne
       if (ability.keywords) total.keywords.push(...ability.keywords);
     }
   }
+  // Emblema do Kaito: Ninjas seus +1/+1.
+  if (state.players[obj.controller].emblems?.includes('kaitoNinjas') && obj.card.subtypes.includes('Ninja')) { total.power += 1; total.toughness += 1; }
   return total;
 }
 
@@ -925,7 +957,7 @@ export function effectivePower(state: GameState, obj: GameObject): number {
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
   const animated = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.power === undefined;
-  const base = obj.faceDown ? 2 : animated ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : obj.card.power ?? 0); // virada para baixo: 2/2
+  const base = obj.faceDown ? 2 : obj.baseOverrideEot ? obj.baseOverrideEot.power : animated ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.power : band?.power ?? (obj.card.cdaPower !== undefined ? cdaValue(state, obj, obj.card.cdaPower) : obj.card.power ?? 0); // virada para baixo: 2/2
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.power, 0);
   return base + obj.untilEot.power + untilNext + counters + fromAttachments + staticsFor(state, obj).power + pairedBonus(state, obj).power;
 }
@@ -935,12 +967,19 @@ export function effectiveToughness(state: GameState, obj: GameObject): number {
   const counters = (obj.counters['+1/+1'] ?? 0) - (obj.counters['-1/-1'] ?? 0);
   const band = currentBand(obj);
   const animatedT = obj.untilNextTurn?.some((u) => u.becomesCreature) && obj.card.toughness === undefined;
-  const base = obj.faceDown ? 2 : animatedT ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? (obj.card.cdaToughness !== undefined ? cdaValue(state, obj, obj.card.cdaToughness) : obj.card.toughness ?? 0);
+  const base = obj.faceDown ? 2 : obj.baseOverrideEot ? obj.baseOverrideEot.toughness : animatedT ? manaValueOf(obj.card.manaCost) : obj.prototyped && obj.card.prototype ? obj.card.prototype.toughness : band?.toughness ?? (obj.card.cdaToughness !== undefined ? cdaValue(state, obj, obj.card.cdaToughness) : obj.card.toughness ?? 0);
   const untilNext = (obj.untilNextTurn ?? []).reduce((s, u) => s + u.toughness, 0);
   return base + obj.untilEot.toughness + untilNext + counters + fromAttachments + staticsFor(state, obj).toughness + pairedBonus(state, obj).toughness;
 }
 
+/** Dress Down: creatures lose all abilities while it's on the battlefield. */
+export function losesAllAbilities(state: GameState, obj: GameObject): boolean {
+  if (!isCreature(obj) || obj.zone !== 'battlefield') return false;
+  return battlefield(state).some((o) => o.card.creaturesLoseAbilities);
+}
+
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
+  if (losesAllAbilities(state, obj)) return false;
   // Virada para baixo: sem habilidades impressas (disguise dá ward {2}, tratado no custo).
   if (!obj.faceDown && obj.card.keywords?.includes(kw)) return true;
   if ((obj.counters[kw] ?? 0) > 0) return true; // keyword counters ("a flying counter")

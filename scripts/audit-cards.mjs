@@ -70,7 +70,7 @@ function validateStructure(def) {
     if ((def.power === undefined && def.cdaPower === undefined) || (def.toughness === undefined && def.cdaToughness === undefined)) problems.push('criatura sem poder/resistência numéricos');
   }
   if (isSpell) {
-    if (!def.spellEffect?.length && !def.spellModes?.length) problems.push('mágica sem efeito');
+    if (!def.spellEffect?.length && !def.spellModes?.length && !def.cascade) problems.push('mágica sem efeito'); // Throes of Chaos / Into the Time Vortex: só cascade
     const n = def.spellTargets?.length ?? 0;
     for (const r of targetRefs(def.spellEffect ?? [])) if (r >= n) problems.push(`efeito referencia target:${r} sem spec`);
   }

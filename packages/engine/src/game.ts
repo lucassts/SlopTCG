@@ -20,7 +20,8 @@ import {
 import type { GameEvent } from './events.js';
 import { canPay, consumePlanPools, costCmc, costLabel, parseCost, planPayment } from './mana.js';
 import { applyEnterTapRules, castCardFree, dredgeOptions, phaseInAll, tapForMana } from './effects.js';
-import { sameName } from './state.js';
+import { losesAllAbilities, sameName } from './state.js';
+import { manaProduction } from './mana.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
 import { checkStateBasedActions } from './sba.js';
 import { DUNGEONS } from './dungeons.js';
@@ -690,6 +691,8 @@ export class Game {
     const obj = s.objects[objectId];
     if (!obj || (obj.owner !== playerId && !(obj.zone === 'exile' && obj.exiledAs === 'agent' && obj.playableBy === playerId)))
       { this.fail(playerId, 'carta inválida'); return false; }
+    const grantedFlashback = obj.zone === 'graveyard' && obj.grantedFlashbackUntilTurn === s.turn && !obj.card.flashback ? { cost: obj.card.manaCost ?? '{0}' } : undefined;
+    if (grantedFlashback) obj.card = { ...obj.card, flashback: grantedFlashback }; // Snapcaster: flashback até o fim do turno, custo = custo de mana
     const card = obj.card;
     const method = extra.method;
     const cm: import('./cards/types.js').CastMethod | undefined =
@@ -799,7 +802,11 @@ export class Game {
     const viaAluren = alurenOn && obj.zone === 'hand' && card.types.includes('Creature') && manaValueOf(card.manaCost) <= 3 && !method;
     const viaOmniscience = obj.zone === 'hand' && !method && s.players[playerId].zones.battlefield.some((id) => s.objects[id].card.freeSpellsFromHand);
     const viaFreeExile = viaImpulse && obj.freeCastUntilTurn === s.turn;
-    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak' || method === 'miracle' || viaAluren;
+    const flashSorcery = card.types.includes('Sorcery') && (s.players[playerId].sorceriesAsFlashUntilTurn ?? -1) > s.turn;
+    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak' || method === 'miracle' || viaAluren || flashSorcery;
+    // Teferi, Time Raveler: cada oponente só conjura em velocidade de feitiço.
+    const teferi = s.players[opponentOf(playerId)].zones.battlefield.some((id) => s.objects[id]?.card.opponentsSorcerySpeedOnly);
+    if (teferi && !this.sorceryTiming(playerId)) { this.fail(playerId, `${card.name}: Teferi só deixa você conjurar na sua fase principal com a pilha vazia`); return false; }
     if (!isInstant && !this.sorceryTiming(playerId))
       { this.fail(playerId, 'só pode ser conjurada na sua fase principal com a pilha vazia'); return false; }
 
@@ -1153,6 +1160,8 @@ export class Game {
     obj.zone = 'stack';
     obj.kicked = kickerTimes > 0;
     obj.kickersPaid = kickersPaid;
+    if (s.players[playerId].nextSpellUncounterable) { obj.uncounterable = true; s.players[playerId].nextSpellUncounterable = false; }
+    if (s.players[playerId].hasteManaTurn === s.turn && card.types.includes('Creature')) { obj.untilEot.keywords.push('haste'); s.players[playerId].hasteManaTurn = undefined; }
     obj.impending = !!alt?.impending;
     obj.kickerTimes = kickerTimes;
     obj.castMethod = cm?.kind;
@@ -1465,6 +1474,9 @@ export class Game {
     if ((ability.zone ?? 'battlefield') !== obj.zone)
       { this.fail(playerId, `${obj.card.name}: essa habilidade só funciona ${ability.zone === 'graveyard' ? 'do cemitério' : ability.zone === 'hand' ? 'da mão' : 'no campo de batalha'}`); return false; }
 
+    if (losesAllAbilities(s, obj)) { this.fail(playerId, `${obj.card.name}: criaturas perderam todas as habilidades (Dress Down)`); return false; }
+    // Exhaust: uma vez por partida.
+    if (ability.oncePerGame && obj.exhaustedAbilities?.includes(abilityIndex)) { this.fail(playerId, `${obj.card.name}: exaurir — essa habilidade já foi ativada nesta partida`); return false; }
     // Stony Silence / Pithing Needle.
     // Clarion Conqueror: activated abilities of artifacts, creatures and planeswalkers can't be activated (mana abilities included).
     if (PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => { const t = s.objects[id]?.card.lockAbilitiesOfTypes; return !!t && obj.card.types.some((x) => t.includes(x)) && (obj.zone === 'battlefield'); })))
@@ -1604,12 +1616,29 @@ export class Game {
       cost.generic += abilityTax;
       if (cost.xCount > 0) { if (x === undefined || x < 0) { this.fail(playerId, 'escolha o valor de X'); return false; } cost.generic += x * cost.xCount; }
       if (ability.costLessPer) cost.generic = Math.max(0, cost.generic - s.players[playerId].zones.battlefield.filter((id) => matchFilter({ controller: playerId, sourceId: obj.id, state: s }, ability.costLessPer!, s.objects[id])).length);
-      const plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana });
+      const cauldron = isCreature(obj) && obj.controller === playerId && s.players[playerId].zones.battlefield.some((id) => s.objects[id]?.card.cauldron);
+      const anyColorAb = this.manaAnyColor() || cauldron;
+      let plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor: anyColorAb });
+      const waterbendTaps: number[] = [];
+      if (!plan && ability.cost.waterbend) {
+        // Waterbend: cada artefato ou criatura sua desvirada paga {1} (menos a própria fonte se ela vira no custo).
+        const helpers = s.players[playerId].zones.battlefield.map((id) => s.objects[id]).filter((o) => o && !o.tapped && !(ability.cost.tap && o.id === obj.id) && (o.card.types.includes('Artifact') || isCreature(o)) && !manaProduction(o));
+        for (const h of helpers) {
+          if (cost.generic <= 0) break;
+          cost.generic -= 1; waterbendTaps.push(h.id);
+          plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor: anyColorAb });
+          if (plan) break;
+        }
+        if (!plan) { for (const h of helpers) { if (cost.generic <= 0 || waterbendTaps.includes(h.id)) continue; cost.generic -= 1; waterbendTaps.push(h.id); plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor: anyColorAb }); if (plan) break; } }
+      }
       if (!plan && this.options.manualMana) return this.deferPayment(playerId, obj.card.name, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
+      for (const id of waterbendTaps) setTapped(s, s.objects[id], true, this.emit);
       this.payWithPlan(playerId, plan);
     }
     if (ability.cost.tap) setTapped(s, obj, true, this.emit);
+    if (ability.cost.exertSelf) { obj.exertedUntilTurn = s.turn + 2; this.emit({ type: 'fizzled', description: `${obj.card.name} foi exaurida (não desvira no seu próximo desvirar)` }); }
+    if (ability.oncePerGame) obj.exhaustedAbilities = [...(obj.exhaustedAbilities ?? []), abilityIndex];
     obj.activationsThisTurn = { ...(obj.activationsThisTurn ?? {}), [abilityIndex]: (obj.activationsThisTurn?.[abilityIndex] ?? 0) + 1 };
     if (ability.cost.payLife)
       changeLife(s, playerId, -ability.cost.payLife, `custo de ${obj.card.name}`, this.emit);
@@ -2019,6 +2048,8 @@ export class Game {
         const from = obj.zone;
         moveWithEvent(s, obj, action.to, 'manual', this.emit, action.position ?? 'top');
         say(`moveu ${obj.card.name} de ${from} para ${action.to}`);
+        // Movimento manual para/do campo também sincroniza os efeitos globais (Lattice, Painter, Blood Moon…) antes da próxima ação.
+        if (action.to === 'battlefield' || from === 'battlefield') checkStateBasedActions(s, this.emit);
         return true;
       }
       case 'manualTap': {
@@ -2199,6 +2230,8 @@ export class Game {
           if (hasKeyword(s, obj, 'doesntUntap') || attachmentForbids(s, obj, 'doesntUntap')) continue;
           // Choke: "Islands don't untap during their controllers' untap steps."
           if (obj.card.types.includes('Land') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => { const t = s.objects[id]?.card.noUntapLandType; return !!t && obj.card.subtypes.includes(t); }))) continue;
+          // Back to Basics: terrenos não básicos não desviram.
+          if (obj.card.types.includes('Land') && !obj.card.supertypes?.includes('Basic') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id]?.card.noUntapNonbasicLands))) continue;
           if (obj.exertedUntilTurn !== undefined && obj.exertedUntilTurn >= s.turn) { if (obj.exertedUntilTurn === s.turn) obj.exertedUntilTurn = undefined; continue; }
           if (obj.tapped) setTapped(s, obj, false, this.emit);
         }
@@ -2227,6 +2260,9 @@ export class Game {
         return;
       }
       case 'combatBegin': {
+        if (s.players[s.activePlayer].emblems?.includes('tezzeret') && s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id]?.card.types.includes('Artifact'))) {
+          s.triggerQueue.push({ sourceId: -1, controller: s.activePlayer, cardName: 'Emblema de Tezzeret', text: 'três marcadores +1/+1 em um artefato seu (vira Robô 0/0 se não for criatura)', specs: [{ what: 'artifact', controlledBy: 'you' }], effect: [{ op: 'animatePermanent', what: 'target:0', power: 0, toughness: 0, subtypes: ['Robot'], addTypes: ['Creature'], onlyIfNotCreature: true }, { op: 'putCounters', what: 'target:0', counter: '+1/+1', count: 3 }] });
+        }
         this.fireStepTriggers('beginCombat');
         s.priority = s.activePlayer;
         return;
@@ -2323,6 +2359,8 @@ export class Game {
       obj.preventCombatThisTurn = undefined;
       obj.protectionUntilEot = undefined;
       obj.resolvedThisTurn = undefined;
+      obj.baseOverrideEot = undefined;
+      obj.damageRedirects = undefined;
       obj.damagedByThisTurn = undefined;
       obj.exileIfDiesThisTurn = undefined;
       obj.mustBlockId = undefined;
@@ -2711,7 +2749,7 @@ export class Game {
           }
         }
       }
-      if (ev.type === 'zoneChanged' && ev.to === 'battlefield') this.fireZoneTriggers(ev.objectId, 'etb');
+      if (ev.type === 'zoneChanged' && ev.to === 'battlefield') { const eo = this.state.objects[ev.objectId]; if (eo) eo.enteredFrom = ev.from; this.fireZoneTriggers(ev.objectId, 'etb'); }
       if (ev.type === 'tokenCreated') this.fireZoneTriggers(ev.objectId, 'etb');
       if (ev.type === 'landPlayed') this.fireZoneTriggers(ev.objectId, 'etb'); // landfall
       if (ev.type === 'zoneChanged' && ev.from === 'battlefield' && ev.reason === 'sacrificed') {
@@ -2830,6 +2868,15 @@ export class Game {
       if (ev.type === 'cardDrawn') {
         const nth = ev.nth ?? this.state.players[ev.player].drawsThisTurn;
         const firstInDrawStep = this.state.step === 'draw' && this.state.activePlayer === ev.player && nth === 1;
+        {
+          const foe = opponentOf(ev.player);
+          for (const id of [...this.state.players[foe].zones.battlefield]) {
+            const o = this.state.objects[id];
+            (o?.card.abilities ?? []).forEach((ab, idx) => {
+              if (ab.kind === 'triggered' && ab.trigger.on === 'opponentDrawsCard' && abilityActive(o, ab)) this.pushTrigger(o, ab, undefined, undefined, { subjectPlayer: ev.player, abilityIndex: idx });
+            });
+          }
+        }
         if (!firstInDrawStep) {
           const foe = opponentOf(ev.player);
           for (const id of [...this.state.players[foe].zones.battlefield]) {
@@ -3012,6 +3059,13 @@ export class Game {
       }
       obj.exiledUntilLeaves = undefined;
     }
+    if (obj.exiledUntilLeavesToHand?.length) {
+      for (const id of obj.exiledUntilLeavesToHand) {
+        const ex = s.objects[id];
+        if (ex && ex.zone === 'exile') moveWithEvent(s, ex, 'hand', 'returned', this.emit);
+      }
+      obj.exiledUntilLeavesToHand = undefined;
+    }
     if (to !== 'graveyard' || obj.isToken) return;
     const card = obj.card;
     // Persist / undying / modular use the counters it had when it died.
@@ -3096,6 +3150,7 @@ export class Game {
       if (ability.trigger.on !== on) return;
       if ('what' in ability.trigger) return; // gatilho global (filtro), não próprio
       if (!abilityActive(obj, ability)) return;
+      if (ability.trigger.on === 'etb' && 'fromGraveyard' in ability.trigger && ability.trigger.fromGraveyard && obj.enteredFrom !== 'graveyard') return;
       if (ability.requiresKicked && !obj.kicked) return;
       if (ability.kickerIndex !== undefined && !(obj.kickersPaid ?? (obj.kicked ? [0] : [])).includes(ability.kickerIndex)) return;
       this.pushTrigger(obj, ability, extra.subjectId, undefined, { subjectPlayer: extra.subjectPlayer, triggerAmount: extra.triggerAmount, abilityIndex: idx });
@@ -3118,6 +3173,7 @@ export class Game {
   /** Prowess-style: "whenever you cast a (noncreature) spell", nth spell, spells of a kind, heroic, "when you cast ~", "whenever a player casts". */
   private fireCastTriggers(caster: PlayerId, card: CardDefinition, spellObj?: GameObject, targets: TargetChoice[] = []): void {
     const s = this.state;
+    if (card.demonstrate && spellObj) this.pushTrigger(spellObj, { text: 'demonstrar', effect: [{ op: 'mayDo', prompt: `demonstrar ${card.name}? (você copia, e o oponente também recebe uma cópia)`, effect: [{ op: 'copySpell', what: 'self' }, { op: 'copySpell', what: 'self', controller: 'opponent' }] }] });
     const nth = s.players[caster].spellsCastThisTurn ?? 1;
     for (const id of [...s.players[caster].zones.battlefield, ...s.players[caster].zones.graveyard]) {
       const obj = s.objects[id];
@@ -3240,6 +3296,7 @@ export class Game {
     extra: { subjectPlayer?: PlayerId; triggerAmount?: number; abilityIndex?: number } = {},
   ): void {
     const s = this.state;
+    if (losesAllAbilities(s, obj)) return; // Dress Down
     // Intervening "if" ("…, if you're the monarch, …"): checked as it would trigger.
     if (ability.condition) {
       const cond = ability.condition;

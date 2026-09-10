@@ -33,6 +33,10 @@ export type Cond =
   | { kind: 'targetIsPermanentCard' }
   /** Scythecat Cub: this ability (by key) has resolved N times this turn, counting this one. */
   | { kind: 'resolvedNthThisTurn'; key: string; n: number }
+  /** Boomerang Basics: the first target is controlled by you (checked before the effect). */
+  | { kind: 'targetControlledByYou' }
+  /** Cling to Dust: the first target's card is a creature card. */
+  | { kind: 'targetIsCreatureCard' }
   /** Minsc & Boo −2: the creature sacrificed by this script had the subtype. */
   | { kind: 'sacrificedWasSubtype'; subtype: string }
   /** Exhibition Tidecaller: the triggering spell was cast with at least N mana. */
@@ -384,7 +388,7 @@ export type EffectStep =
   /** Dredge: the source (in the graveyard) replaces the controller's next draw. */
   | { op: 'armDredge'; count: number }
   /** "Exile the top N cards of your library. You may play them this turn." */
-  | { op: 'impulse'; count: number; /** Seek the Beast: playable until your next end step (this turn if it's yours, else your next turn). */ untilNextEndStep?: boolean }
+  | { op: 'impulse'; count: number; /** Seek the Beast: playable until your next end step (this turn if it's yours, else your next turn). */ untilNextEndStep?: boolean; /** Caves of Chaos Adventurer: free if the condition holds. */ freeIf?: Cond }
   /** Goad: must attack (a player other than you) until your next turn. */
   | { op: 'goad'; what: SubjectRef }
   // ---- Leva 4: gramática composicional
@@ -663,9 +667,35 @@ export type EffectStep =
   /** (choice) Planar Genesis: pick a card among the revealed ones for your hand; the rest go to the bottom. */
   | { op: 'planarHand' }
   /** (choice) Discover N: exile from the top until a nonland card with mana value N or less; cast it free or put it into your hand. */
-  | { op: 'discover'; amount: number }
+  | { op: 'discover'; amount: number; /** Creative Technique: if not cast, the card stays exiled (instead of going to the hand). */ stayExiled?: boolean }
   /** (choice) Yorion: exile any number of other nonland permanents you own and control; they return at the next end step. */
   | { op: 'yorionBlink' }
+  /** (choice) Cloak and Dagger: exile a nonland card from the target opponent's hand, or the chosen creature, until this leaves. */
+  | { op: 'cloakExile' }
+  /** Invasion Submersible / Tezzeret emblem: the permanent becomes (also) a creature for good, with optional new base P/T and subtypes. */
+  | { op: 'animatePermanent'; what: SubjectRef; power?: number; toughness?: number; subtypes?: string[]; addTypes?: CardType[]; onlyIfNotCreature?: boolean }
+  /** Planeswalker emblems (player-level, permanent). */
+  | { op: 'emblem'; kind: 'tezzeret' | 'kaitoNinjas' }
+  /** Grist +1: token, mill; while an Insect is milled, loyalty counter and repeat. */
+  | { op: 'gristMill' }
+  | { op: 'loseGame'; who: PlayerSel }
+  /** Nomads en-Kor: the next N damage to the source is dealt to the target instead. */
+  | { op: 'redirectNextDamage'; amount: number; to: SubjectRef }
+  /** Allosaurus Shepherd: each matching creature has base P/T N/N until end of turn. */
+  | { op: 'setBaseUntilEot'; filter: FilterSpec; power: number; toughness: number; addSubtype?: string }
+  /** Mistrise Village: the next spell you cast this turn can't be countered. */
+  | { op: 'nextSpellUncounterable' }
+  /** (choice) Tibalt's Trickery: counter, random mill, exile until a different nonland, controller may cast it free. */
+  | { op: 'tibaltTrickery'; what: SubjectRef }
+  /** (choice) Breakthrough: keep X cards from hand, discard the rest. */
+  | { op: 'keepXDiscardRest' }
+  /** Snapcaster Mage: the card gains flashback (cost = mana cost) until end of turn. */
+  | { op: 'grantFlashbackUntilEot'; what: SubjectRef }
+  /** (choice) Witherbloom Command: return a matching card from your graveyard to your hand. */
+  /** Teferi +1: until your next turn, sorceries have flash. */
+  | { op: 'sorceriesFlashUntilNextTurn' }
+  /** Reflexive "When you do…" with its own target (Agatha's Soul Cauldron). */
+  | { op: 'reflexiveTargeted'; spec: TargetSpec; effect: EffectScript; text: string }
   /** Talon Gates of Madara: the permanent phases out (returns at its controller's next untap step). */
   | { op: 'phaseOut'; what: SubjectRef }
   /** Talon Gates: "{4}: Put this card from your hand onto the battlefield." */
@@ -698,10 +728,10 @@ export type EffectStep =
   /** Take control of a permanent (optionally until end of turn, Act of Treason-style). */
   | { op: 'gainControl'; what: SubjectRef; untilEndOfTurn?: boolean; /** Wishclaw Talisman: "An opponent gains control of ~". */ to?: 'opponent' }
   /** Copy a spell on the stack (the copy keeps the same targets). */
-  | { op: 'copySpell'; what: SubjectRef }
+  | { op: 'copySpell'; what: SubjectRef; /** Demonstrate: the copy is the opponent's. */ controller?: 'opponent' }
   /** Fog: no combat damage is dealt for the rest of this turn. */
   | { op: 'preventCombatDamage' }
-  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Urza's Workshop: repeat the symbols N times. */ times?: DynAmount; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean; /** Jegantha: this mana can't pay generic costs. */ noGeneric?: boolean }
+  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Urza's Workshop: repeat the symbols N times. */ times?: DynAmount; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean; /** Jegantha: this mana can't pay generic costs. */ noGeneric?: boolean; /** Arena of Glory: a creature spell paid with it gains haste (approximation: the next creature spell this turn). */ hasteIfCreature?: boolean }
   /** "Add one mana of any color" (or "of these colors") — the activation
    *  carries the chosen color; `colors` restricts the legal choices. */
   | { op: 'addManaChoice'; who: PlayerSel; count?: DynAmount; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean; /** Carpet of Flowers: remember the use for \"if you haven't added mana with this ability this turn\". */ markUsed?: boolean }
@@ -744,6 +774,8 @@ export type TriggerSpec =
   | { on: 'cardsToYourGraveyard'; filter?: FilterSpec }
   /** Orcish Bowmasters: an opponent draws a card except the first in their draw step. */
   | { on: 'opponentDrawsExtra' }
+  /** Sheoldred: whenever an opponent draws a card (subjectPlayer = who drew). */
+  | { on: 'opponentDrawsCard' }
   /** Back face: "When this creature transforms into ~" (fires on the face it became). */
   | { on: 'transformsInto'; self: true }
   /** State trigger: "When you control no Islands, sacrifice ~." */
@@ -752,7 +784,7 @@ export type TriggerSpec =
   | { on: 'noCounters'; counter: string }
   /** Emrakul: "When ~ is put into a graveyard from anywhere". */
   | { on: 'toGraveyardFromAnywhere'; self: true; /** Narcomoeba: only from the library. */ fromZone?: 'library' }
-  | { on: 'etb'; self: true }
+  | { on: 'etb'; self: true; /** Phyrexian Dragon Engine: only when it entered from the graveyard. */ fromGraveyard?: boolean }
   /** Any object matching the filter enters the battlefield. */
   | { on: 'etb'; what: FilterSpec }
   | { on: 'dies'; self: true }
@@ -895,6 +927,10 @@ export interface ActivatedAbility extends LevelGate {
     removeCounters?: { counter: string; count: number };
     /** Quirion Ranger: "Return a Forest you control to its owner's hand" as a cost (chosen like a sacrifice). */
     returnToHand?: FilterSpec;
+    /** Arena of Glory: "Exert ~" as a cost. */
+    exertSelf?: boolean;
+    /** Waterbend: artifacts and creatures you control may be tapped to pay {1} each. */
+    waterbend?: boolean;
     /** Lion's Eye Diamond: discard your whole hand. */
     discardHand?: boolean;
     /** Simian Spirit Guide: exile this card from your hand. */
@@ -929,6 +965,8 @@ export interface ActivatedAbility extends LevelGate {
   immediate?: boolean;
   /** "Activate only once each turn" / "no more than twice each turn". */
   maxPerTurn?: number;
+  /** Exhaust: activate only once per game. */
+  oncePerGame?: boolean;
   /** Boseiju: \"This ability costs {1} less to activate for each <filter> you control\". */
   costLessPer?: FilterSpec;
 }
@@ -1045,6 +1083,24 @@ export interface CardDefinition {
     /** Label for the client ("bargain", "gift a card"). */
     label?: string;
   };
+  /** Allosaurus Shepherd: your spells of these colors can't be countered. */
+  uncounterableColors?: Color[];
+  /** Demonstrate: when cast, you may copy it; if you do, an opponent copies it too. */
+  demonstrate?: boolean;
+  /** Grist: a 1/1 Insect creature everywhere but the battlefield (counts as a creature card in hand/library/graveyard). */
+  creatureOffBattlefield?: { power: number; toughness: number; subtype: string };
+  /** Kaito: during your turn, with loyalty, a creature with these stats. */
+  conditionalCreature?: { duringYourTurn: true; needsLoyalty: true; power: number; toughness: number; subtypes: string[]; keywords: Keyword[] };
+  /** Agatha's Soul Cauldron. */
+  cauldron?: boolean;
+  /** Back to Basics. */
+  noUntapNonbasicLands?: boolean;
+  /** Teferi, Time Raveler: opponents cast only at sorcery speed. */
+  opponentsSorcerySpeedOnly?: boolean;
+  /** Dress Down. */
+  creaturesLoseAbilities?: boolean;
+  /** Arena of Glory: mana that gives haste to a creature spell it pays for (approximation: the next creature spell this turn). */
+  hasteMana?: boolean;
   /** Wastescape Battlemage: "Kicker {A} and/or {B}" — a second, independent kicker cost. */
   kicker2?: { cost: string };
   /** Mycosynth Lattice. */
@@ -1498,7 +1554,7 @@ export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | und
   if (!filter) return true;
   if (filter.what && filter.what !== 'permanent') {
     const typeName = filter.what.charAt(0).toUpperCase() + filter.what.slice(1);
-    if (!card.types.includes(typeName as CardType)) return false;
+    if (!card.types.includes(typeName as CardType) && !(typeName === 'Creature' && card.creatureOffBattlefield)) return false;
   }
   if (filter.subtype && !(card.subtypes.includes(filter.subtype) || (!!card.everyNonbasicLandType && card.types.includes('Land') && !['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'].includes(filter.subtype)))) return false;
   const BASIC_LAND_TYPES = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];

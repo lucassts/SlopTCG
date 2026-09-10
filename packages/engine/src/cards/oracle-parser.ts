@@ -628,6 +628,48 @@ function parseEffectText(
   }
   // Discover N (Trumpeting Carnosaur).
   if ((m = text.match(/^discover (\d+)\.?$/i))) return { steps: [{ op: 'discover', amount: parseInt(m[1], 10) }] };
+  // Creative Technique.
+  if (/^Shuffle your library, then reveal cards from the top of it until you reveal a nonland card\. Exile that card and put the rest on the bottom of your library in a random order\. You may cast the exiled card without paying its mana cost\.$/i.test(text)) {
+    return { steps: [{ op: 'shuffle', who: 'controller' }, { op: 'discover', amount: 99, stayExiled: true }] };
+  }
+  // Kaito 0: "Surveil 2. Then draw a card for each opponent who lost life this turn."
+  if ((m = text.match(/^(.+?)\. Then draw a card for each opponent who lost life this turn\.$/i))) {
+    const first = parseEffectText(m[1] + '.');
+    if (!first) return null;
+    return { ...first, steps: [...first.steps, { op: 'if', cond: { kind: 'opponentLostLifeThisTurn' }, then: [{ op: 'draw', who: 'controller', count: 1 }] }] };
+  }
+  // Boomerang Basics.
+  if ((m = text.match(/^(Return target nonland permanent to its owner's hand)\. If you controlled that permanent, draw a card\.$/i))) {
+    const first = parseEffectText(m[1] + '.');
+    if (!first) return null;
+    return { ...first, steps: [{ op: 'if', cond: { kind: 'targetControlledByYou' }, then: [...first.steps, { op: 'draw', who: 'controller', count: 1 }], else: first.steps }] };
+  }
+  // Prismari Charm: "~ deals N damage to each of one or two targets."
+  if ((m = text.match(/^~ deals (\d+) damage to each of one or two targets\.$/i))) {
+    const n = parseInt(m[1], 10);
+    return { steps: [{ op: 'damage', to: 'target:0', amount: n }, { op: 'damage', to: 'target:1', amount: n }], specs: [{ what: 'any' }, { what: 'any', optional: true }] };
+  }
+  // Witherbloom Command: "Target player mills N cards, then you return a land card from your graveyard to your hand."
+  if ((m = text.match(/^Target player mills (\w+) cards?, then you return (?:a|an) ([\w\s-]+?) card from your graveyard to your hand\.$/i))) {
+    const n = num(m[1]); const info = parseNounG(m[2]);
+    if (n === null || !info || info.player) return null;
+    return { steps: [{ op: 'mill', who: 'target:0', count: n }, { op: 'returnFromGraveyardChoice', filter: info.filter, to: 'hand' }], spec: { what: 'player' } };
+  }
+  // Brotherhood's End: "~ deals N damage to each creature and each planeswalker."
+  if ((m = text.match(/^~ deals (\d+) damage to each creature and each planeswalker\.$/i))) {
+    const n = parseInt(m[1], 10);
+    return { steps: [{ op: 'damageEach', filter: { what: 'creature', controlledBy: 'any' }, amount: n }, { op: 'damageEach', filter: { what: 'permanent', typeAnyOf: ['Planeswalker'], controlledBy: 'any' }, amount: n }] };
+  }
+  // Cling to Dust.
+  if ((m = text.match(/^Exile target card from a graveyard\. If it was a creature card, you gain (\d+) life\. Otherwise, you draw a card\.$/i))) {
+    const n = parseInt(m[1], 10);
+    return { steps: [{ op: 'if', cond: { kind: 'targetIsCreatureCard' }, then: [{ op: 'exile', what: 'target:0' }, { op: 'gainLife', who: 'controller', amount: n }], else: [{ op: 'exile', what: 'target:0' }, { op: 'draw', who: 'controller', count: 1 }] }], spec: { what: 'card', zone: 'graveyard' } };
+  }
+  // Breakthrough.
+  if ((m = text.match(/^Draw (\w+) cards, then choose X cards in your hand and discard the rest\.$/i))) {
+    const n = num(m[1]); if (n === null) return null;
+    return { steps: [{ op: 'draw', who: 'controller', count: n }, { op: 'keepXDiscardRest' }] };
+  }
   // Talon Gates of Madara.
   if (/^up to one target creature phases out\.?$/i.test(text)) return { steps: [{ op: 'phaseOut', what: 'target:0' }], spec: { what: 'creature', optional: true } };
   if (/^target creature phases out\.?$/i.test(text)) return { steps: [{ op: 'phaseOut', what: 'target:0' }], spec: { what: 'creature' } };
@@ -1205,7 +1247,7 @@ interface ParseState {
   flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
   flags11: Partial<Pick<CardDefinition, 'landsMultiManaColorless' | 'extraManaOnCreatureTap'>>;
   flags12: Partial<Pick<CardDefinition, 'yourSpellsUncounterable' | 'grantWardLifeOthers' | 'cageNoEnterFromGraveyardLibrary' | 'cageNoCastFromGraveyardLibrary' | 'nonbasicLandsAreMountains'>>;
-  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle' | 'allPermanentsArtifacts' | 'allColorless' | 'manaAnyColor' | 'allCardsChosenColor' | 'controlOpponentSearches' | 'companion'>>;
+  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle' | 'allPermanentsArtifacts' | 'allColorless' | 'manaAnyColor' | 'allCardsChosenColor' | 'controlOpponentSearches' | 'companion' | 'uncounterableColors' | 'demonstrate' | 'creatureOffBattlefield' | 'conditionalCreature' | 'cauldron' | 'noUntapNonbasicLands' | 'opponentsSorcerySpeedOnly' | 'creaturesLoseAbilities'>>;
   flashbackPayLife?: number;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
@@ -1365,6 +1407,8 @@ function parseTriggerHeader(head: string): { trigger: TriggerSpec; extraSelf?: T
   if (/^Whenever a player or permanent becomes the target of an ability you control$/i.test(head)) return { trigger: { on: 'yourAbilityTargets' } };
   if (/^Whenever ~ becomes the target of a spell or ability an opponent controls$/i.test(head)) return { trigger: { on: 'becomesTargeted', self: true, byOpponent: true } };
   if (/^Whenever you draw a card$/i.test(head)) return { trigger: { on: 'youDrawCard' } };
+  if (/^Whenever an opponent draws a card$/i.test(head)) return { trigger: { on: 'opponentDrawsCard' } };
+  if (/^When ~ enters from your graveyard$/i.test(head)) return { trigger: { on: 'etb', self: true, fromGraveyard: true } };
   if (/^Whenever ~ attacks?$/i.test(head)) return { trigger: { on: 'attacks', self: true } };
   if ((m = head.match(/^When ~ has no ([\w+/-]+) counters on it$/i))) return { trigger: { on: 'noCounters', counter: m[1] } };
   if (/^When ~ is put into a graveyard from anywhere$/i.test(head)) return { trigger: { on: 'toGraveyardFromAnywhere', self: true } };
@@ -1536,7 +1580,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     last.maxPerTurn = 1;
     return true;
   }
-  const line = rawLine.replace(/^(?!Landfall|Choose|Companion)[A-Z][a-z]+(?: [A-Za-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".')
+  const line = rawLine.replace(/^(?!Landfall|Choose|Companion|Exhaust)[A-Z][a-z]+(?: [A-Za-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".')
     // "a spell that's white, blue, black, or red": sem vírgulas, para não confundir a divisão cabeçalho/corpo do gatilho (Questing Druid).
     .replace(/that's ((?:white|blue|black|red|green)(?:, (?:white|blue|black|red|green))*),? or (white|blue|black|red|green)/i, (all) => all.replace(/, /g, ' or ').replace(/ or or /g, ' or '));
   // Trinisphere (antes das regras genéricas de "As long as").
@@ -1589,7 +1633,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if (line.startsWith('• ')) return false;
 
   // Linhas de formato (Commander/draft/ante) sem efeito num jogo de dois: reconhecidas e ignoradas.
-  if (/^(~ can be your commander\.|Choose a Background|Doctor's companion|Partner(?:—.+)?|Friends forever|Draft ~ face up\.|Draft this card face up\.|A deck can have any number of cards named ~\.|Remove this card from your deck before playing if you're not playing for ante\.|Start your engines!|Increment|Storied|Assist|Play with the top card of your library revealed\.)$/i.test(line)) return true;
+  if (/^(~ can be your commander\.|Choose a Background|Doctor's companion|Partner(?:—.+)?|Friends forever|Draft ~ face up\.|Draft this card face up\.|A deck can have any number of cards named ~\.|Remove this card from your deck before playing if you're not playing for ante\.|Splice onto Arcane (?:\{[^}]+\})+|Start your engines!|Increment|Storied|Assist|Play with the top card of your library revealed\.)$/i.test(line)) return true;
 
   // ---- Leva 3: Sagas, Classes, Level up, Station, energia, keywords de campo
   if ((m = line.match(new RegExp(`^(${ROMAN_RE}(?:, ${ROMAN_RE})*) — (.+)$`)))) {
@@ -1740,6 +1784,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
   if (/^As long as you have one or fewer cards in hand, if you would draw one or more cards, you draw that many cards plus one instead\.$/i.test(line)) { st.flags10.drawPlusOneWhenHandSmall = true; return true; }
+  if (/^(?:Threshold — )?As long as there are seven or more cards in your graveyard, ~ gets \+1\/\+1 and can't block\.$/i.test(line)) { st.abilities.push({ kind: 'static', selfOnly: true, filter: { what: 'creature' }, power: 1, toughness: 1, keywords: ['cantBlock'], condition: { kind: 'graveyardAtLeast', count: 7 }, text: line }); return true; }
   // "<estática> as long as <condição>." / "As long as <condição>, <estática>." (gramática de condições).
   if ((m = line.match(/^(?:As long as (.+?), (.+)|(.+) as long as (.+))\.$/i)) && parseCondG(m[1] ?? m[4])) {
     const inner = (m[2] ?? m[3]).trim();
@@ -2003,6 +2048,69 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     st.abilities.push({ kind: 'activated', zone: 'hand', cost: { mana: m[1] }, effect: [{ op: 'selfToBattlefield' }], text: `${m[1]}: põe esta carta da mão no campo de batalha` });
     return true;
   }
+  // ---- Leva 21 (30 mais pesadas do Legacy)
+  if (/^When ~ enter, choose target opponent and up to one target creature they control\. They reveal their hand\. You may exile a nonland card from their hand or the chosen creature until ~ leave the battlefield\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, targets: [{ what: 'player', controlledBy: 'opponent' }, { what: 'creature', controlledBy: 'opponent', optional: true }], effect: [{ op: 'revealHand', who: 'target:0' }, { op: 'cloakExile' }], text: 'o oponente alvo revela a mão; exile uma carta não-terreno dela ou a criatura escolhida até ~ sair' });
+    return true;
+  }
+  if ((m = line.match(/^Exhaust — Waterbend ((?:\{[^}]+\})+): ~ becomes an artifact creature\. Put (\w+) \+1\/\+1 counters on it\.$/i))) {
+    const n = num(m[2]); if (n === null) return false;
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1], waterbend: true }, oncePerGame: true, effect: [{ op: 'animatePermanent', what: 'self', addTypes: ['Creature'] }, { op: 'putCounters', what: 'self', counter: '+1/+1', count: n }], text: `Exaurir — Curvar água ${m[1]}: vira criatura artefato com ${n} marcadores +1/+1 (uma vez por partida; artefatos e criaturas viradas pagam {1} cada)` });
+    return true;
+  }
+  if ((m = line.match(/^During your turn, as long as ~ has one or more loyalty counters on him, he's a (\d+)\/(\d+) (\w+) creature and has (\w+)\.$/i))) {
+    const kws = keywordList(m[4]); if (!kws) return false;
+    st.flags13.conditionalCreature = { duringYourTurn: true, needsLoyalty: true, power: parseInt(m[1], 10), toughness: parseInt(m[2], 10), subtypes: [m[3]], keywords: kws };
+    return true;
+  }
+  if (/^Whenever ~ attacks, exile the top card of your library\. If you've completed a dungeon, you may play that card this turn without paying its mana cost\. Otherwise, you may play that card this turn\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'attacks', self: true }, effect: [{ op: 'impulse', count: 1, freeIf: { kind: 'completedDungeon' } }], text: 'exile o topo; jogue neste turno (de graça se completou uma masmorra)' });
+    return true;
+  }
+  if ((m = line.match(/^As long as ~ isn't on the battlefield, it's a (\d+)\/(\d+) (\w+) creature in addition to its other types\.$/i))) { st.flags13.creatureOffBattlefield = { power: parseInt(m[1], 10), toughness: parseInt(m[2], 10), subtype: m[3] }; return true; }
+  if (isSpell && (m = line.match(/^At the beginning of your next upkeep, pay ((?:\{[^}]+\})+)\. If you don't, you lose the game\.$/i))) { st.spellEffect.push({ op: 'delayedEffect', at: 'nextUpkeep', effect: [{ op: 'payOrElse', cost: m[1], else: [{ op: 'loseGame', who: 'controller' }] }] }); return true; }
+  if (/^Demonstrate$/i.test(line)) { st.flags13.demonstrate = true; return true; }
+  if ((m = line.match(/^\{0\}: The next (\d+) damage that would be dealt to ~ this turn is dealt to target creature you control instead\.$/i))) {
+    st.abilities.push({ kind: 'activated', cost: { mana: '{0}' }, targets: [{ what: 'creature', controlledBy: 'you' }], effect: [{ op: 'redirectNextDamage', amount: parseInt(m[1], 10), to: 'target:0' }], text: `{0}: o próximo ${m[1]} de dano a ~ vai para a criatura alvo` });
+    return true;
+  }
+  if ((m = line.match(/^(White|Blue|Black|Red|Green) spells you control can't be countered\.$/i))) { st.flags13.uncounterableColors = [...(st.flags13.uncounterableColors ?? []), COLOR_WORDS[m[1].toLowerCase()]]; return true; }
+  if ((m = line.match(/^((?:\{[^}]+\})+): Until end of turn, each (\w+) creature you control has base power and toughness (\d+)\/(\d+) and becomes a (\w+) in addition to its other creature types\.$/i))) {
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1] }, effect: [{ op: 'setBaseUntilEot', filter: { what: 'creature', subtype: m[2], controlledBy: 'you' }, power: parseInt(m[3], 10), toughness: parseInt(m[4], 10), addSubtype: m[5] }], text: `${m[1]}: cada ${m[2]} sua fica ${m[3]}/${m[4]} base e vira ${m[5]} até o fim do turno` });
+    return true;
+  }
+  if (isSpell && /^Return target legendary creature card from your graveyard to the battlefield\. That creature gains haste\. Exile it at the beginning of the next end step\.$/i.test(line)) {
+    if (st.spellTargets.length > 0) return false;
+    st.spellTargets.push({ what: 'creature', zone: 'graveyard', ownedBy: 'you', legendary: true });
+    st.spellEffect.push({ op: 'returnToBattlefield', what: 'target:0' }, { op: 'pump', what: 'target:0', power: 0, toughness: 0, keywords: ['haste'] }, { op: 'delayedEffect', at: 'endStep', effect: [{ op: 'exile', what: 'target:0' }] });
+    return true;
+  }
+  if (/^\{R\}, \{T\}, Exert ~: Add \{R\}\{R\}\. If that mana is spent on a creature spell, it gains haste until end of turn\.$/i.test(line)) {
+    st.abilities.push({ kind: 'activated', cost: { mana: '{R}', tap: true, exertSelf: true }, effect: [{ op: 'addMana', who: 'controller', mana: ['R', 'R'], hasteIfCreature: true }], text: '{R}, {T}, exaurir: Adicionar {R}{R} (criatura conjurada com essa mana ganha ímpeto)', isManaAbility: true });
+    return true;
+  }
+  if (/^You may spend mana as though it were mana of any color to activate abilities of creatures you control\.$/i.test(line)) { st.flags13.cauldron = true; return true; }
+  if (/^Creatures you control with \+1\/\+1 counters on them have all activated abilities of all creature cards exiled with ~\.$/i.test(line)) { st.flags13.cauldron = true; return true; }
+  if (/^\{T\}: Exile target card from a graveyard\. When a creature card is exiled this way, put a \+1\/\+1 counter on target creature you control\.$/i.test(line)) {
+    st.abilities.push({ kind: 'activated', cost: { tap: true }, targets: [{ what: 'card', zone: 'graveyard' }], effect: [{ op: 'if', cond: { kind: 'targetIsCreatureCard' }, then: [{ op: 'exile', what: 'target:0' }, { op: 'reflexiveTargeted', spec: { what: 'creature', controlledBy: 'you' }, effect: [{ op: 'putCounters', what: 'target:0', counter: '+1/+1', count: 1 }], text: 'marcador +1/+1 em uma criatura sua' }], else: [{ op: 'exile', what: 'target:0' }] }], text: '{T}: exile uma carta de um cemitério (criatura: marcador +1/+1 numa criatura sua)' });
+    return true;
+  }
+  if ((m = line.match(/^Colorless spells you cast with mana value (\d+) or greater cost ((?:\{[^}]+\})+) less to cast\.$/i))) { (st.costModifiers ??= []).push({ amount: -manaValueOfCost(m[2]), whose: 'you', filter: { colorless: true, cmcAtLeast: parseInt(m[1], 10) } }); return true; }
+  if (/^\{U\}, \{T\}: The next spell you cast this turn can't be countered\.$/i.test(line)) { st.abilities.push({ kind: 'activated', cost: { mana: '{U}', tap: true }, effect: [{ op: 'nextSpellUncounterable' }], text: '{U}, {T}: a próxima mágica que você conjurar neste turno não pode ser anulada' }); return true; }
+  if (isSpell && /^Counter target spell\. Choose 1, 2, or 3 at random\. Its controller mills that many cards, then exiles cards from the top of their library until they exile a nonland card with a different name than that spell\. They may cast that card without paying its mana cost\. Then they put the exiled cards on the bottom of their library in a random order\.$/i.test(line)) {
+    if (st.spellTargets.length > 0) return false;
+    st.spellTargets.push({ what: 'spell' });
+    st.spellEffect.push({ op: 'tibaltTrickery', what: 'target:0' });
+    return true;
+  }
+  if (/^Nonbasic lands don't untap during their controllers' untap steps\.$/i.test(line)) { st.flags13.noUntapNonbasicLands = true; return true; }
+  if (/^Each opponent can cast spells only any time they could cast a sorcery\.$/i.test(line)) { st.flags13.opponentsSorcerySpeedOnly = true; return true; }
+  if (/^Creatures lose all abilities\.$/i.test(line)) { st.flags13.creaturesLoseAbilities = true; return true; }
+  if (/^When ~ enters, target instant or sorcery card in your graveyard gains flashback until end of turn\. The flashback cost is equal to its mana cost\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, targets: [{ what: 'card', zone: 'graveyard', ownedBy: 'you', typeAnyOf: ['Instant', 'Sorcery'] }], effect: [{ op: 'grantFlashbackUntilEot', what: 'target:0' }], text: 'carta de instantâneo ou feitiço no seu cemitério ganha flashback (custo = custo de mana) até o fim do turno' });
+    return true;
+  }
+  if ((m = line.match(/^Whenever an opponent draws a card, they lose (\d+) life\.$/i))) { st.abilities.push({ kind: 'triggered', trigger: { on: 'opponentDrawsCard' }, effect: [{ op: 'loseLife', who: 'triggerPlayer', amount: parseInt(m[1], 10) }], text: `o oponente perde ${m[1]} de vida ao comprar` }); return true; }
   // Mycosynth Lattice / Painter's Servant / Opposition Agent / companions.
   if (/^All permanents are artifacts in addition to their other types\.$/i.test(line)) { st.flags13.allPermanentsArtifacts = true; return true; }
   if (/^All cards that aren't on the battlefield, spells, and permanents are colorless\.$/i.test(line)) { st.flags13.allColorless = true; return true; }
@@ -2372,6 +2480,15 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if (/^You have no maximum hand size\.$/i.test(line)) { st.noMaxHandSize = true; return true; }
 
   // ---- planeswalker loyalty abilities ("+1: …", "−3: …", "0: …")
+  if ((m = line.match(/^([+−-]?\d+): You get an emblem with "(.+)"\.?$/))) {
+    const cost = parseInt(m[1].replace('−', '-'), 10);
+    const kind = /^At the beginning of combat on your turn, put three \+1\/\+1 counters on target artifact you control\. If it's not a creature, it becomes a 0\/0 Robot artifact creature\.$/i.test(m[2]) ? 'tezzeret' : /^Ninjas you control get \+1\/\+1\.$/i.test(m[2]) ? 'kaitoNinjas' : undefined;
+    if (!kind) return false;
+    st.abilities.push({ kind: 'loyalty', cost, effect: [{ op: 'emblem', kind }], text: line });
+    return true;
+  }
+  if ((m = line.match(/^\+1: Create a 1\/1 black and green Insect creature token, then mill a card\. If an Insect card was milled this way, put a loyalty counter on ~ and repeat this process\.$/i))) { st.abilities.push({ kind: 'loyalty', cost: 1, effect: [{ op: 'gristMill' }], text: line }); return true; }
+  if (/^\+1: Until your next turn, you may cast sorcery spells as though they had flash\.$/i.test(line)) { st.abilities.push({ kind: 'loyalty', cost: 1, effect: [{ op: 'sorceriesFlashUntilNextTurn' }], text: line }); return true; }
   if ((m = line.match(/^([+−-]?\d+): (.+)$/))) {
     const cost = parseInt(m[1].replace('−', '-'), 10);
     const parsed = parseEffectText(m[2]);
@@ -2947,7 +3064,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
         st.abilities.push({ kind: 'activated', cost: { tap: true }, effect: [{ op: 'addMana', who: 'controller', mana: [sym] }], text: `Adicionar {${sym}}`, isManaAbility: true });
     }
   }
-  if (isSpell && st.spellEffect.length === 0 && st.spellModes.length === 0) return null;
+  if (isSpell && st.spellEffect.length === 0 && st.spellModes.length === 0 && !st.flags2.cascade) return null; // Throes of Chaos: só cascade + retrace
   if (isSpell && st.spellModes.length > 0 && st.spellEffect.length > 0) return null; // modal + efeito solto: fora do escopo
   // Kicker sem efeito condicional reconhecido (ou vice-versa): fora do escopo.
   const hasKickerCost = st.kickerCost !== undefined;

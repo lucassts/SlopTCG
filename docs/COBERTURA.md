@@ -19,19 +19,19 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-10, v0.35.0 — leva pesada: kicker duplo, Lattice/Painter, Opposition Agent, companions; Legacy a 97,8%)
+## Estado (2026-09-10, v0.36.0 — as 30 mais pesadas do Legacy + Karn × Lattice; Legacy a 98,9%)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | **v0.35 (pesada)** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | **v0.36 (top 30)** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | 13.795 | 13.795 | **13.801** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | 14.522 | 14.522 | **14.516** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | 4.764 | 4.764 | **4.764** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | 13.795 | 13.795 | 13.801 | **13.857** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | 14.522 | 14.522 | 14.516 | **14.495** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | 4.764 | 4.764 | 4.764 | **4.729** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 
 **Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
 scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
 mede quanto do que se joga já é full (META% × cópias). Legacy: **43,7% →
-67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0, **94,9%** na v0.23.0, **95,1%** na v0.24.0, **95,4%** na v0.25.0, **97,3%** na v0.27.0, **97,5%** na v0.28.0 e **97,8%** na v0.35.0. Relatórios em `data/meta/<formato>-gap.md`.
+67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0, **94,9%** na v0.23.0, **95,1%** na v0.24.0, **95,4%** na v0.25.0, **97,3%** na v0.27.0, **97,5%** na v0.28.0, **97,8%** na v0.35.0 e **98,9%** na v0.36.0. Relatórios em `data/meta/<formato>-gap.md`.
 
 A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
 "outra face não modelada" restam 143 (versos cujo texto ainda não compila).
@@ -813,6 +813,53 @@ início, botão pagou {3} em mana manual e trouxe Yorion; os dois prompts
 de kicker do Battlemage. Auditor: 13.801 full / 14.516 parciais / 4.764
 manuais, 0 estruturais, 39 de simulação. Legacy 97,5% → 97,8% (383 de
 509 full, 126 com lacuna). 492 testes (m42).
+
+**v0.36.0 — as 30 mais pesadas do Legacy + Karn × Lattice.** Lucas pediu
+para confirmar a interação Karn, the Great Creator + Mycosynth Lattice
+(todas as permanentes do oponente viram artefatos e perdem as habilidades
+ativadas, terrenos inclusive) e para fechar as 30 cartas de maior peso
+restantes de uma vez. **Karn × Lattice**: a ativação manual já era
+bloqueada; faltavam dois caminhos — o pagamento automático
+(`planPayment` agora filtra fontes com `manaAbilityLocked`: trava de
+artefato do Karn/Stony Silence, trava por tipo, Dress Down) e o
+movimento manual para o campo, que não rodava a sincronização de tipos
+da Lattice (`manualMove` para/do campo agora chama
+`checkStateBasedActions`). Verificado no navegador: Forest do oponente
+responde "habilidades ativadas de artefatos não podem ser ativadas".
+**As 30**: Cloak and Dagger (`cloakExile` — exila carta da mão ou a
+criatura escolhida até sair; carta da mão volta para a mão,
+`exiledUntilLeavesToHand`), Invasion Submersible (custo `waterbend` vira
+artefatos/criaturas; `Exhaust` = `oncePerGame`), Tezzeret, Cruel Captain
+(emblema em `player.emblems`, gatilho no início do combate com fonte −1),
+Kaito, Bane of Nightmares (`conditionalCreature` sincronizado no SBA;
+emblema anthem de Ninjas), Grist (`creatureOffBattlefield`; `gristMill`
+repete enquanto moer Inseto), Pact of Negation (`payOrElse` na
+manutenção → `loseGame`), Creative Technique (`demonstrate` + discover
+sem limite), Throes of Chaos (só cascade — auditor aceita mágica sem
+efeito com cascade), Nomads en-Kor (`redirectNextDamage`, loop em
+`dealDamageToObject`), Allosaurus Shepherd (`uncounterableColors` +
+`setBaseUntilEot` Elfos 5/5 Dinossauro), Goryo's Vengeance (Splice
+ignorado), Putrid Imp (regra de threshold antes da gramática "As long
+as"), Arena of Glory (`exertSelf` + `addMana.hasteIfCreature`), Phyrexian
+Dragon Engine (`etb.fromGraveyard` via `enteredFrom`), Agatha's Soul
+Cauldron (`reflexiveTargeted`; `syncCauldron` concede habilidades das
+criaturas exiladas a quem tem marcador +1/+1; mana de qualquer cor para
+habilidades de criaturas), Boomerang Basics (`targetControlledByYou`),
+Prismari Charm (dano a um ou dois alvos), It That Heralds the End
+(redução para incolor 7+), Mistrise Village (`nextSpellUncounterable`),
+Tibalt's Trickery (`tibaltTrickery`: mói 1–3 ao acaso, exila até
+não-terreno de nome diferente, controlador conjura de graça, resto no
+fundo), Back to Basics (`noUntapNonbasicLands` no desvirar), Teferi, Time
+Raveler (`opponentsSorcerySpeedOnly`; +1 `sorceriesFlashUntilNextTurn`),
+Dress Down (`creaturesLoseAbilities` — `losesAllAbilities` em keywords,
+estáticas, gatilhos, ativadas e mana), Witherbloom Command (moer +
+`returnFromGraveyardChoice`), Brotherhood's End (dano em criaturas e
+planeswalkers), Cling to Dust (`targetIsCreatureCard`), Breakthrough
+(`keepXDiscardRest`), Snapcaster Mage (`grantFlashbackUntilEot` — o
+flashback concedido é aplicado antes de ler `card` em `doCastSpell`),
+Sheoldred, the Apocalypse (`opponentDrawsCard`). Auditor: 13.857 full /
+14.495 parciais / 4.729 manuais, 0 estruturais, 39 de simulação. Legacy
+97,8% → 98,9% (414 de 509 full, 95 com lacuna). 521 testes (m43: 29).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

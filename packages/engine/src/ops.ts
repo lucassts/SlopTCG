@@ -101,6 +101,19 @@ export function dealDamageToObject(
   opts?: { deathtouch?: boolean; sourceColors?: import('./types.js').Color[]; infect?: boolean; wither?: boolean; sourceId?: number; combat?: boolean },
 ): void {
   if (amount <= 0) return;
+  // Nomads en-Kor: "the next N damage that would be dealt to ~ this turn is dealt to target creature instead".
+  while (amount > 0 && target.damageRedirects && target.damageRedirects.length > 0) {
+    const rd = target.damageRedirects[0];
+    const to = state.objects[rd.to];
+    if (!to || to.zone !== 'battlefield' || to.id === target.id) { target.damageRedirects.shift(); continue; }
+    const moved = Math.min(rd.amount, amount);
+    rd.amount -= moved;
+    if (rd.amount <= 0) target.damageRedirects.shift();
+    amount -= moved;
+    emit({ type: 'fizzled', description: `${moved} de dano a ${target.card.name} vai para ${to.card.name}` });
+    dealDamageToObject(state, to, moved, sourceName, emit, opts);
+  }
+  if (amount <= 0) return;
   // Protection from [color]: all damage from sources of that color is prevented.
   const prot = [...(target.card.protectionFrom ?? []), ...(target.protectionUntilEot ?? [])];
   if (prot.length > 0 && opts?.sourceColors?.some((c) => prot.includes(c))) {

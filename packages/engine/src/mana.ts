@@ -5,7 +5,7 @@
  * come later. Payment uses floating mana first, then auto-taps untapped
  * lands with an intrinsic mana ability, colored requirements first.
  */
-import type { GameObject, GameState, PlayerState } from './state.js';
+import { losesAllAbilities, type GameObject, type GameState, type PlayerState } from './state.js';
 import type { Color, ManaPool, ManaSymbol, PlayerId } from './types.js';
 import { poolTotal } from './types.js';
 
@@ -121,7 +121,7 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
   // Manual mana: only floating mana pays; the player taps sources themselves.
   const sources = (opts.poolOnly ? [] : player.zones.battlefield)
     .map((id) => state.objects[id])
-    .filter((o) => !o.tapped)
+    .filter((o) => !o.tapped && !manaAbilityLocked(state, o))
     .map((o) => ({ obj: o, produces: manaProduction(o) }))
     .filter((s): s is { obj: GameObject; produces: ManaProduction } => s.produces !== null);
   const used = new Set<number>();
@@ -228,4 +228,13 @@ export function emptyPool(player: PlayerState): boolean {
 export function consumePlanPools(player: { manaPool: ManaPool; manaPoolRestricted?: ManaPool }, plan: PaymentPlan): void {
   for (const sym of plan.fromPool) player.manaPool[sym] = Math.max(0, player.manaPool[sym] - 1);
   for (const sym of plan.fromRestricted ?? []) if (player.manaPoolRestricted) player.manaPoolRestricted[sym] = Math.max(0, player.manaPoolRestricted[sym] - 1);
+}
+
+/** Karn / Stony Silence (artifacts — with Mycosynth Lattice, everything) and Clarion Conqueror: mana abilities that can't be activated right now. */
+export function manaAbilityLocked(state: GameState, obj: GameObject): boolean {
+  const onField = (['p1', 'p2'] as PlayerId[]).flatMap((p) => state.players[p].zones.battlefield.map((id) => ({ p, o: state.objects[id] })));
+  if (obj.card.types.includes('Artifact') && onField.some(({ p, o }) => { const l = o?.card.artifactAbilitiesLocked; return l === true || (l === 'opponents' && p !== obj.controller); })) return true;
+  if (onField.some(({ o }) => { const t = o?.card.lockAbilitiesOfTypes; return !!t && obj.card.types.some((x) => t.includes(x)); })) return true;
+  if (losesAllAbilities(state, obj)) return true;
+  return false;
 }

@@ -32,6 +32,7 @@ import {
   type Emit,
   transformObject,
 } from './ops.js';
+import { sameName } from './state.js';
 import {
   moveObject,
   battlefield,
@@ -194,6 +195,8 @@ export function condHolds(ctx: EffectContext, cond: import('./cards/types.js').C
   }
   if (cond.kind === 'sacrificedWasSubtype') return !!ctx.sacrificedSubtypes?.includes(cond.subtype);
   if (cond.kind === 'resolvedNthThisTurn') return (ctx.state.objects[ctx.sourceId]?.resolvedThisTurn?.[cond.key] ?? 0) === cond.n;
+  if (cond.kind === 'targetControlledByYou') { const t = ctx.targets[0]; return t?.kind === 'object' && ctx.state.objects[t.id]?.controller === ctx.controller; }
+  if (cond.kind === 'targetIsCreatureCard') { const t = ctx.targets[0]; return t?.kind === 'object' && !!ctx.state.objects[t.id]?.card.types.includes('Creature'); }
   if (cond.kind === 'targetIsPermanentCard') {
     const t = ctx.targets[0];
     const o = t?.kind === 'object' ? ctx.state.objects[t.id] : undefined;
@@ -319,9 +322,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' | 'yorionBlink' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' | 'yorionBlink' | 'cloakExile' | 'tibaltTrickery' | 'keepXDiscardRest' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy', 'yorionBlink']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy', 'yorionBlink', 'cloakExile', 'tibaltTrickery', 'keepXDiscardRest']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -766,6 +769,48 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const payer = t?.kind === 'player' ? t.player : t?.kind === 'object' ? state.objects[t.id]?.controller : undefined;
       if (payer === undefined || !planPayment(state, payer, parseCost(step.cost))) return { player: payer ?? controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'no' };
       return { player: payer, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: pagar ${step.cost} para copiar a mágica e escolher um novo alvo?`, mode: 'confirm' };
+    }
+    case 'cloakExile': {
+      const t0 = ctx.targets[0]; const t1 = ctx.targets[1];
+      const victim = t0?.kind === 'player' ? t0.player : opponentOf(controller);
+      const hand = state.players[victim].zones.hand.filter((id) => !state.objects[id].card.types.includes('Land'));
+      const creature = t1?.kind === 'object' && objectAlive(state, t1)?.zone === 'battlefield' ? [t1.id] : [];
+      const options = [...hand, ...creature];
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: exile uma carta não-terreno da mão de ${state.players[victim].name} ou a criatura escolhida (até ${ctx.sourceName} sair)`, mode: 'cards', skipLabel: 'Não exilar' };
+    }
+    case 'tibaltTrickery': {
+      // Anula, mói 1–3 ao acaso e exila até um não-terreno com outro nome: o controlador da mágica anulada decide se conjura de graça.
+      const t = ctx.targets[0];
+      const item = t?.kind === 'object' ? state.stack.find((i) => (i.kind === 'spell' || i.kind === 'copy') && i.sourceId === t.id) : undefined;
+      if (!t || t.kind !== 'object' || !item) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'no' };
+      const victim = item.controller;
+      const spellName = item.cardName;
+      const obj = state.objects[t.id];
+      state.stack = state.stack.filter((i) => i !== item);
+      if (obj && obj.zone === 'stack') { obj.zone = item.flashback ? 'exile' : 'graveyard'; state.players[obj.owner].zones[item.flashback ? 'exile' : 'graveyard'].push(obj.id); }
+      ctx.emit({ type: 'spellCountered', objectId: t.id, cardName: spellName });
+      const r = shuffle([1, 2, 3], state.rngState); state.rngState = r.state;
+      const n = r.items[0];
+      const lib = state.players[victim].zones.library;
+      for (let i = 0; i < n && lib.length > 0; i++) moveWithEvent(state, state.objects[lib[0]], 'graveyard', 'milled', ctx.emit);
+      const ids: number[] = []; let hit: number | undefined;
+      while (lib.length > 0) {
+        const top = state.objects[lib[0]];
+        moveWithEvent(state, top, 'exile', 'exiled', ctx.emit);
+        ids.push(top.id);
+        if (!top.card.types.includes('Land') && !sameName(top.card.name, spellName)) { hit = top.id; break; }
+      }
+      state.lastDiscover = { ids, hit };
+      ctx.emit({ type: 'fizzled', description: `${ctx.sourceName}: ${spellName} anulada; ${state.players[victim].name} moeu ${n} e ${hit !== undefined ? `exilou até ${state.objects[hit].card.name}` : 'não achou não-terreno'}` });
+      if (hit === undefined) return { player: victim, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'no' };
+      return { player: victim, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: conjurar ${state.objects[hit].card.name} sem pagar o custo de mana? (não: fica exilada; o resto vai para o fundo)`, mode: 'confirm' };
+    }
+    case 'keepXDiscardRest': {
+      const hand = [...state.players[controller].zones.hand];
+      const n = Math.min(ctx.xValue ?? 0, hand.length);
+      if (hand.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options: hand, min: n, max: n, prompt: `${ctx.sourceName}: escolha ${n} carta(s) para ficar na mão — o resto é descartado`, mode: 'cards' };
     }
     case 'yorionBlink': {
       const options = state.players[controller].zones.battlefield.filter((id) => { const o = state.objects[id]; return o && o.id !== ctx.sourceId && o.owner === controller && !o.card.types.includes('Land'); });
@@ -1461,7 +1506,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       if (!d) return;
       const hit = d.hit !== undefined ? state.objects[d.hit] : undefined;
       if (hit && hit.zone === 'exile') {
-        if (!(text === 'yes' && castCardFree(state, hit, ctx.controller, emit, ctx.sourceName))) moveWithEvent(state, hit, 'hand', 'returned', emit);
+        if (!(text === 'yes' && castCardFree(state, hit, ctx.controller, emit, ctx.sourceName)) && !step.stayExiled) moveWithEvent(state, hit, 'hand', 'returned', emit);
       }
       const rest = d.ids.filter((id) => id !== d.hit && state.objects[id]?.zone === 'exile');
       const r = shuffle(rest, state.rngState);
@@ -1487,6 +1532,40 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         effect: [{ op: 'damage', to: 'target:0', amount: step.damage }, { op: 'chainCopy', cost: step.cost, damage: step.damage }],
       });
       emit({ type: 'copiesCreated', cardName: ctx.sourceName, count: 1, reason: 'copy' });
+      return;
+    }
+    case 'cloakExile': {
+      const id = picks[0];
+      const o = id !== undefined ? state.objects[id] : undefined;
+      const src = state.objects[ctx.sourceId];
+      if (!o || (o.zone !== 'hand' && o.zone !== 'battlefield')) return;
+      const fromHand = o.zone === 'hand';
+      moveWithEvent(state, o, 'exile', 'exiled', emit);
+      if (src && src.zone === 'battlefield' && !o.isToken) {
+        if (fromHand) (src.exiledUntilLeavesToHand ??= []).push(o.id); else (src.exiledUntilLeaves ??= []).push(o.id);
+      }
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: ${o.card.name} exilada até ${ctx.sourceName} sair do campo` });
+      return;
+    }
+    case 'tibaltTrickery': {
+      const d = state.lastDiscover;
+      state.lastDiscover = undefined;
+      if (!d) return;
+      const hit = d.hit !== undefined ? state.objects[d.hit] : undefined;
+      if (hit && hit.zone === 'exile' && text === 'yes') castCardFree(state, hit, hit.owner, emit, ctx.sourceName);
+      const rest = d.ids.filter((id) => id !== d.hit && state.objects[id]?.zone === 'exile');
+      const r = shuffle(rest, state.rngState); state.rngState = r.state;
+      for (const id of r.items) moveWithEvent(state, state.objects[id], 'library', 'returned', emit, 'bottom');
+      return;
+    }
+    case 'keepXDiscardRest': {
+      const keep = new Set(picks);
+      for (const id of [...state.players[ctx.controller].zones.hand]) {
+        if (keep.has(id)) continue;
+        const o = state.objects[id];
+        moveWithEvent(state, o, 'graveyard', 'discarded', emit);
+        emit({ type: 'discarded', player: ctx.controller, objectId: id, cardName: o.card.name });
+      }
       return;
     }
     case 'yorionBlink': {
@@ -2049,6 +2128,77 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       }
       return;
     }
+    case 'animatePermanent':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const o = objectAlive(state, t);
+        if (!o || o.zone !== 'battlefield') continue;
+        if (step.onlyIfNotCreature && isCreature(o)) continue;
+        const types = [...new Set([...o.card.types, ...(step.addTypes ?? ['Creature'])])];
+        const subtypes = [...new Set([...o.card.subtypes, ...(step.subtypes ?? [])])];
+        o.card = { ...o.card, types, subtypes, power: step.power ?? o.card.power ?? 0, toughness: step.toughness ?? o.card.toughness ?? 0 };
+        emit({ type: 'fizzled', description: `${o.card.name} vira criatura ${step.subtypes?.length ? step.subtypes.join(' ') + ' ' : ''}${o.card.power}/${o.card.toughness}` });
+      }
+      return;
+    case 'emblem': {
+      const ps = state.players[ctx.controller];
+      (ps.emblems ??= []).push(step.kind);
+      emit({ type: 'fizzled', description: `${ps.name} recebe um emblema (${step.kind === 'tezzeret' ? 'Tezzeret: três marcadores +1/+1 em um artefato no início do seu combate' : 'Kaito: Ninjas seus +1/+1'})` });
+      return;
+    }
+    case 'gristMill': {
+      const ps = state.players[ctx.controller];
+      const src = state.objects[ctx.sourceId];
+      for (let guard = 0; guard < 60; guard++) {
+        runEffectScript(ctx, [{ op: 'token', who: 'controller', count: 1, name: 'Insect', power: 1, toughness: 1, colors: ['B', 'G'], subtypes: ['Insect'] }]);
+        const top = ps.zones.library[0];
+        if (top === undefined) return;
+        const o = state.objects[top];
+        moveWithEvent(state, o, 'graveyard', 'milled', emit);
+        if (!o.card.subtypes.includes('Insect')) return;
+        if (src && src.zone === 'battlefield') { src.counters['loyalty'] = (src.counters['loyalty'] ?? 0) + 1; emit({ type: 'countersChanged', objectId: src.id, cardName: src.card.name, counter: 'loyalty', delta: 1, total: src.counters['loyalty'] }); }
+        emit({ type: 'fizzled', description: `${ctx.sourceName}: moeu um Inseto (${o.card.name}) — repete` });
+      }
+      return;
+    }
+    case 'loseGame':
+      for (const p of resolvePlayers(step.who, ctx.controller)) lose(state, p, `perdeu o jogo (${ctx.sourceName})`, emit);
+      return;
+    case 'redirectNextDamage': {
+      const src = state.objects[ctx.sourceId];
+      const [t] = resolveSubject(ctx, step.to);
+      const to = t ? objectAlive(state, t) : null;
+      if (!src || src.zone !== 'battlefield' || !to || to.zone !== 'battlefield') return;
+      (src.damageRedirects ??= []).push({ amount: step.amount, to: to.id });
+      emit({ type: 'fizzled', description: `${src.card.name}: o próximo ${step.amount} de dano vai para ${to.card.name}` });
+      return;
+    }
+    case 'setBaseUntilEot':
+      for (const o of state.players[ctx.controller].zones.battlefield.map((id) => state.objects[id])) {
+        if (!o || !matchFilter({ controller: ctx.controller, sourceId: ctx.sourceId, state }, step.filter, o)) continue;
+        o.baseOverrideEot = { power: step.power, toughness: step.toughness };
+        if (step.addSubtype && !o.card.subtypes.includes(step.addSubtype)) o.card = { ...o.card, subtypes: [...o.card.subtypes, step.addSubtype] };
+      }
+      emit({ type: 'fizzled', description: `${ctx.sourceName}: criaturas afetadas têm base ${step.power}/${step.toughness} até o fim do turno` });
+      return;
+    case 'nextSpellUncounterable':
+      state.players[ctx.controller].nextSpellUncounterable = true;
+      emit({ type: 'fizzled', description: `${state.players[ctx.controller].name}: a próxima mágica conjurada neste turno não pode ser anulada` });
+      return;
+    case 'sorceriesFlashUntilNextTurn':
+      state.players[ctx.controller].sorceriesAsFlashUntilTurn = state.turn + 2;
+      emit({ type: 'fizzled', description: `${state.players[ctx.controller].name} pode conjurar feitiços como se tivessem lampejo até o seu próximo turno` });
+      return;
+    case 'grantFlashbackUntilEot':
+      for (const t of resolveSubject(ctx, step.what)) {
+        const o = t.kind === 'object' ? state.objects[t.id] : undefined;
+        if (!o || o.zone !== 'graveyard') continue;
+        o.grantedFlashbackUntilTurn = state.turn;
+        emit({ type: 'fizzled', description: `${o.card.name} ganha flashback ${o.card.manaCost ?? '{0}'} até o fim do turno` });
+      }
+      return;
+    case 'reflexiveTargeted':
+      state.triggerQueue.push({ sourceId: ctx.sourceId, controller: ctx.controller, cardName: ctx.sourceName, text: step.text, specs: [step.spec], effect: step.effect });
+      return;
     case 'phaseOut':
       for (const t of resolveSubject(ctx, step.what)) {
         const o = objectAlive(state, t);
@@ -2592,7 +2742,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
           emit({ type: 'fizzled', description: `${item.cardName} não pode ser anulada neste turno` });
           continue;
         }
-        if (obj?.card.uncounterable || spellsUncounterable(state, obj)) {
+        if (obj?.card.uncounterable || obj?.uncounterable || spellsUncounterable(state, obj) || (obj && state.players[obj.controller].zones.battlefield.some((id) => state.objects[id]?.card.uncounterableColors?.some((c) => obj.card.colors.includes(c))))) {
           emit({ type: 'fizzled', description: `${item.cardName} não pode ser anulada` });
           continue;
         }
@@ -2775,6 +2925,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         moveWithEvent(state, o, 'exile', 'exiled', emit);
         o.exiledAs = 'playable';
         o.playableUntilTurn = step.untilNextEndStep && state.activePlayer !== ctx.controller ? state.turn + 1 : state.turn;
+        if (step.freeIf && condHolds(ctx, step.freeIf)) { o.freeCastUntilTurn = state.turn; emit({ type: 'fizzled', description: `${o.card.name}: pode ser jogada de graça neste turno` }); }
       }
       return;
     }
@@ -2876,7 +3027,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
           id: state.nextStackId++,
           kind: 'copy',
           sourceId: original.sourceId,
-          controller: ctx.controller,
+          controller: step.controller === 'opponent' ? opponentOf(ctx.controller) : ctx.controller,
           cardName: original.cardName,
           effect: original.effect,
           targets: [...original.targets],
@@ -2934,6 +3085,7 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
           ps.manaPoolRestricted = ps.manaPoolRestricted ?? { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
           for (const sym of mana) ps.manaPoolRestricted[sym] += 1;
         } else for (const sym of mana) state.players[p].manaPool[sym] += 1;
+        if (step.hasteIfCreature) state.players[p].hasteManaTurn = state.turn;
         if (step.untilEndOfCombat) {
           // Firebending: this mana survives step changes until the end of combat.
           const ps = state.players[p];
