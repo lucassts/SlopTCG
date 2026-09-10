@@ -24,6 +24,8 @@ export interface CardView {
   isToken: boolean;
   /** This tap-for-mana can still be undone by its controller. */
   undoableTap: boolean;
+  /** Opposition Agent: exiled from the opponent's library, and the viewer may play it. */
+  playableByYou?: boolean;
   /** Viewer's graveyard: this card may be cast from there right now (Gaea's Will, Emry, Hogaak…). */
   castableFromGraveyard?: boolean;
   /** Viewer's graveyard: this land may be played from there right now (Gaea's Will, Crucible of Worlds). */
@@ -97,6 +99,10 @@ export interface PlayerView {
   /** A dredge card is armed to replace the next draw. */
   dredgeArmed?: string;
   manaPool: ManaPool;
+  /** Jegantha: floating mana that can't pay generic costs. */
+  manaPoolRestricted?: ManaPool;
+  /** Companion chosen at game start (name; taken = already in hand). */
+  companion?: { name: string; taken: boolean };
   librarySize: number;
   handSize: number;
   landsPlayedThisTurn: number;
@@ -197,7 +203,8 @@ function cardView(state: GameState, obj: GameObject, viewer?: PlayerId): CardVie
     exiledAs: obj.exiledAs,
     wasBlocked: obj.wasBlocked || undefined,
     miracleAvailable: obj.miracleAvailable || undefined,
-    playableNow: obj.exiledAs === 'playable' && obj.playableUntilTurn === state.turn ? true : undefined,
+    playableNow: (obj.exiledAs === 'playable' && obj.playableUntilTurn === state.turn) || (obj.exiledAs === 'agent' && obj.playableBy !== undefined && obj.playableBy === viewer) ? true : undefined,
+    playableByYou: obj.exiledAs === 'agent' && obj.playableBy !== undefined && obj.playableBy === viewer ? true : undefined,
     summoningSick: obj.summoningSick,
     isToken: obj.isToken,
   };
@@ -217,6 +224,8 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       completedDungeons: p.completedDungeons,
       dredgeArmed: p.dredgeNext !== undefined ? state.objects[p.dredgeNext]?.card.name : undefined,
       manaPool: p.manaPool,
+      manaPoolRestricted: p.manaPoolRestricted,
+      companion: p.companion !== undefined && state.objects[p.companion] ? { name: state.objects[p.companion].card.name, taken: !!p.companionTaken } : undefined,
       librarySize: p.zones.library.length,
       handSize: p.zones.hand.length,
       landsPlayedThisTurn: p.landsPlayedThisTurn,

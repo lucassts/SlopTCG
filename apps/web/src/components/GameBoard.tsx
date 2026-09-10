@@ -90,6 +90,8 @@ interface Targeting {
   mode?: number;
   kicked?: boolean;
   kickerTimes?: number;
+  /** Wastescape Battlemage: which kickers were paid (0 = kicker, 1 = kicker2). */
+  kickers?: number[];
   /** Leva 2: alternative casting method (evoke/dash/escape/foretold/…), face-down (morph), buyback. */
   method?: CastMethodKind;
   escapeExile?: number[];
@@ -454,6 +456,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           faceDown: t.faceDown,
           buyback: t.buyback,
           kickerTimes: t.kickerTimes,
+          kickers: t.kickers,
           entwine: t.entwine,
           modes: t.modes,
           replicateTimes: t.replicateTimes,
@@ -657,11 +660,18 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     }
     let kicked: boolean | undefined;
     let kickerTimes: number | undefined;
+    let kickers: number[] | undefined;
     if (def.kicker && def.multikicker) {
       const n = await askNumber(def.name, t('Quantas vezes pagar {cost}? (0 = nenhuma)', { cost: def.kicker.cost }), '0');
       if (n === null) return;
       kickerTimes = n;
       kicked = kickerTimes > 0;
+    } else if (def.kicker && def.kicker2) {
+      // Wastescape Battlemage: "Kicker {A} and/or {B}" — pergunta cada um.
+      const a = await askConfirm(def.name, t('Pagar o kicker {cost}?', { cost: def.kicker.cost }), t('Pagar'), t('Não pagar'));
+      const b = await askConfirm(def.name, t('Pagar o kicker {cost}?', { cost: def.kicker2.cost }), t('Pagar'), t('Não pagar'));
+      kickers = [...(a ? [0] : []), ...(b ? [1] : [])];
+      kicked = kickers.length > 0;
     } else if (def.kicker) {
       kicked = def.kicker.sacrifice
         ? await askConfirm(def.name, t('Barganhar? Você sacrifica um artefato, encantamento ou ficha ao conjurar (escolhido a seguir).'), t('Barganhar'), t('Sem barganha'))
@@ -715,11 +725,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               : def.spellTargets ?? [];
     const specs = [...handSpecs, ...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : extra.modes ? `${def.name} — ${extra.modes.map((i) => def.spellModes?.[i]?.label).join(' + ')}` : def.name;
       const label = handPickCount > 0 ? t('{base} (escolha {what} a descartar primeiro)', { base, what: extra.method === 'retrace' ? t('o terreno') : t('a(s) carta(s)') }) : sacCount > 0 ? t('{base} (escolha o sacrifício primeiro)', { base }) : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
     }
   };
 
@@ -1056,7 +1066,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             🌀 {opp.exile.length}
           </span>
         </div>
-        <ManaChips pool={opp.manaPool} />
+        <ManaChips pool={opp.manaPool} restricted={opp.manaPoolRestricted} />
       </div>
 
       <div className="opp-field battlefield">
@@ -1223,8 +1233,17 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               📦 {me.sideboardSize}
             </span>
           )}
+          {me.companion && !me.companion.taken && (
+            <button
+              className="zone-pill companion-btn"
+              title={t('Companion: pague {3} na sua fase principal para pôr a carta na mão')}
+              onClick={(e) => { e.stopPropagation(); onAction({ type: 'takeCompanion' }); }}
+            >
+              🤝 {me.companion.name} {'{3}'}
+            </button>
+          )}
         </div>
-        <ManaChips pool={me.manaPool} />
+        <ManaChips pool={me.manaPool} restricted={me.manaPoolRestricted} />
         <div className="hand-row">
           {(me.hand ?? []).map((c) => (
             <CardTile
@@ -1916,7 +1935,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                         </button>
                       ) : null,
                     )}
-                  {zonePick.zone === 'exile' && zonePick.player === you && c.playableNow && myPriority && (
+                  {zonePick.zone === 'exile' && (zonePick.player === you || c.playableByYou) && c.playableNow && myPriority && (
                     c.card.types.includes('Land') ? (
                       <button onClick={() => { setZonePick(null); onAction({ type: 'playLand', objectId: c.objectId }); }}>{t('⛰ Jogar terreno (do exílio, este turno)')}</button>
                     ) : (
@@ -2052,14 +2071,18 @@ function StopRow({ step, stops, onChange }: { step: Step; stops: StopsConfig; on
 
 const MANA_COLORS: Record<string, string> = { W: '#e8e2d0', U: '#5b9bd5', B: '#9b8fb0', R: '#d5745b', G: '#6bbf7e', C: '#b0b0b0' };
 
-function ManaChips({ pool }: { pool: Record<string, number> }) {
+function ManaChips({ pool, restricted }: { pool: Record<string, number>; restricted?: Record<string, number> }) {
   const COLORS = MANA_COLORS;
   const chips = Object.entries(pool).filter(([, n]) => n > 0);
-  if (chips.length === 0) return null;
+  const rchips = Object.entries(restricted ?? {}).filter(([, n]) => n > 0);
+  if (chips.length === 0 && rchips.length === 0) return null;
   return (
     <div className="mana-pool" title={t('Mana flutuante')}>
       {chips.map(([sym, n]) => (
         <span key={sym} className="mana-chip" style={{ background: COLORS[sym] }}>{n}</span>
+      ))}
+      {rchips.map(([sym, n]) => (
+        <span key={`r${sym}`} className="mana-chip restricted" style={{ background: COLORS[sym] }} title={t('Mana restrita (não paga custo genérico)')}>{n}🔒</span>
       ))}
     </div>
   );

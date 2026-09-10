@@ -29,6 +29,8 @@ export type PlayerAction =
       sacrifices?: number[];
       /** Pay the optional kicker cost. */
       kicked?: boolean;
+      /** Wastescape Battlemage: indices of the kickers paid (0 = kicker, 1 = kicker2). */
+      kickers?: number[];
       /** Pay the card's alternative cost (Force of Will) instead of mana. */
       useAltCost?: boolean;
       /** Hand cards exiled to pay the alternative cost. */
@@ -107,6 +109,8 @@ export type PlayerAction =
   /** Answer to a pending effectChoice (discard/sacrifice/scry/search/nameCard…). */
   | { type: 'effectChoice'; picks: number[]; text?: string }
   | { type: 'concede' }
+  /** Companion: pay {3} as a sorcery to put the chosen companion from the sideboard into your hand. */
+  | { type: 'takeCompanion' }
   /** Manual mana: give up on the spell/ability waiting for payment (floating mana stays). */
   | { type: 'cancelPayment' }
   | { type: 'chat'; text: string }

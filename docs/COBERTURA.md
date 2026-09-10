@@ -19,19 +19,19 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-10, v0.34.0 — importação de listas, deck apto (60/15), vigiar/vidência com ordem, modais em lista e arrastáveis, README; Legacy a 97,5%)
+## Estado (2026-09-10, v0.35.0 — leva pesada: kicker duplo, Lattice/Painter, Opposition Agent, companions; Legacy a 97,8%)
 
-| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | **v0.30** |
+| 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | **v0.35 (pesada)** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | 13.795 | **13.795** |
-| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | 14.522 | **14.522** |
-| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | 4.764 | **4.764** |
-| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| Totalmente automatizadas | 1.804 | 5.011 | 5.554 | 6.275 | 6.696 | 7.062 | 7.136 | 10.296 | 11.800 | 12.170 | 12.787 | 13.022 | 13.110 | 13.175 | 13.250 | 13.288 | 13.344 | 13.534 | 13.600 | 13.690 | 13.790 | 13.795 | 13.795 | **13.801** |
+| Parciais (jogáveis, alguma linha manual) | 21.602 | 20.566 | 20.873 | 20.182 | 19.788 | 19.464 | 19.400 | 16.960 | 15.772 | 15.620 | 15.275 | 15.101 | 15.034 | 14.971 | 14.909 | 14.883 | 14.849 | 14.719 | 14.670 | 14.605 | 14.525 | 14.522 | 14.522 | **14.516** |
+| Manuais | 8.739 | 6.637 | 6.596 | 6.566 | 6.539 | 6.497 | 6.487 | 5.769 | 5.453 | 5.290 | 5.018 | 4.957 | 4.936 | 4.934 | 4.921 | 4.909 | 4.887 | 4.827 | 4.811 | 4.786 | 4.766 | 4.764 | 4.764 | **4.764** |
+| Dupla-face manuais | 864 | 864 | 55 | 55 | 55 | 55 | 55 | 55 | 55 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
 
 **Métrica nova (Leva 6): cobertura ponderada pelo metagame** — `node
 scripts/meta-gap.mjs --format <formato>` baixa o metagame do MTGGoldfish e
 mede quanto do que se joga já é full (META% × cópias). Legacy: **43,7% →
-67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0, **94,9%** na v0.23.0, **95,1%** na v0.24.0, **95,4%** na v0.25.0, **97,3%** na v0.27.0 e **97,5%** na v0.28.0. Relatórios em `data/meta/<formato>-gap.md`.
+67,1%** na v0.15.0, **78,8%** na v0.15.1, **86,0%** na v0.16.0, **88,6%** na v0.17.0, **90,5%** na v0.18.0, **92,0%** na v0.19.0, **92,4%** na v0.21.0, **92,8%** na v0.22.0, **94,9%** na v0.23.0, **95,1%** na v0.24.0, **95,4%** na v0.25.0, **97,3%** na v0.27.0, **97,5%** na v0.28.0 e **97,8%** na v0.35.0. Relatórios em `data/meta/<formato>-gap.md`.
 
 A Leva 5b modelou a segunda face de verdade: das 697 cartas que tinham
 "outra face não modelada" restam 143 (versos cujo texto ainda não compila).
@@ -776,6 +776,43 @@ scry e surveil. Verificado no navegador: recusa do arquivo do Lucas (52
 cartas), lista importada, toast à direita, modal em lista e arrastado.
 485 testes (m41: vigiar 3 + ordem, vidência 2 + ordem; m17 e m40
 ajustados à etapa nova).
+
+**v0.35.0 — leva pesada** (os quatro conceitos grandes que o Lucas pediu
+primeiro, mais a carta mais pesada do meta). **Kicker duplo** (Wastescape
+Battlemage): `Kicker {G} and/or {1}{U}` → `kicker` + `kicker2`; ação
+`castSpell.kickers: number[]`; `obj.kickersPaid`; gatilhos "When you cast
+this spell, if it was kicked with its {X} kicker" viram `youCastThis` com
+`requiresKicked` + `kickerIndex`, filtrados em `fireCastTriggers`; o
+cliente pergunta cada kicker. **Mycosynth Lattice / Painter's Servant**:
+`syncGlobalCardMods` no SBA reescreve `types` (Artifact em toda
+permanente) e `colors` (incolor / cor escolhida) de **todo objeto em toda
+zona**, guardando a definição impressa em `obj.globalPrinted` e marcando
+`card.globalMod` (chave do efeito ativo) para reaplicar/reverter; "spend
+mana as though it were mana of any color" = `planPayment({anyColor})`
+converte as partes coloridas em genérico ({C} continua incolor).
+**Opposition Agent**: `searchAgentFor` — na escolha `search`, quem decide
+é o controlador do Agent; o que ele achar vai para o exílio com
+`exiledAs: 'agent'` e `playableBy`; `doCastSpell`/`doPlayLand` aceitam
+carta do oponente nessa condição, com `anyColor`, e a permanente entra
+sob o controle de quem conjurou (`obj.controller = item.controller` na
+resolução — antes sempre coincidia com o dono). **Companions**: parser
+reconhece as duas regras (Yorion: deck com 80+; Jegantha: nenhum símbolo
+repetido no custo) — a linha "Companion — …" estava sendo engolida pelo
+removedor de palavra de habilidade e pela lista de linhas ignoradas;
+`Game.start()` marca `player.companion` se a carta do sideboard cumpre a
+regra contra a biblioteca inicial; ação `takeCompanion` ({3}, fase
+principal própria, pilha vazia, mana manual via `deferPayment`); botão
+"🤝 Nome {3}" na barra do jogador. Yorion: escolha `yorionBlink` (exila
+qualquer número de outras não-terreno suas; `state.delayed` devolve no
+fim do turno). Jegantha: `addMana.noGeneric` alimenta
+`player.manaPoolRestricted`; `planPayment` consome o pool restrito só em
+partes coloridas (`fromRestricted`), `consumePlanPools` centraliza os
+cinco pontos de pagamento; o pool restrito zera junto com o normal; chip
+com 🔒 no cliente. Verificado no navegador: companion detectado no
+início, botão pagou {3} em mana manual e trouxe Yorion; os dois prompts
+de kicker do Battlemage. Auditor: 13.801 full / 14.516 parciais / 4.764
+manuais, 0 estruturais, 39 de simulação. Legacy 97,5% → 97,8% (383 de
+509 full, 126 com lacuna). 492 testes (m42).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

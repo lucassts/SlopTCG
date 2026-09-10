@@ -6,7 +6,7 @@
  * lands with an intrinsic mana ability, colored requirements first.
  */
 import type { GameObject, GameState, PlayerState } from './state.js';
-import type { Color, ManaSymbol, PlayerId } from './types.js';
+import type { Color, ManaPool, ManaSymbol, PlayerId } from './types.js';
 import { poolTotal } from './types.js';
 
 export interface ParsedCost {
@@ -94,6 +94,8 @@ export interface PaymentPlan {
   taps: { objectId: number; symbol: ManaSymbol; produce: ManaSymbol[] }[];
   /** Every symbol consumed from the pool (floating + just produced). */
   fromPool: ManaSymbol[];
+  /** Symbols consumed from the restricted pool (Jegantha: never for generic). */
+  fromRestricted?: ManaSymbol[];
   /** Life paid for phyrexian symbols without a matching source. */
   lifePaid: number;
 }
@@ -103,12 +105,18 @@ export interface PaymentPlan {
  * Greedy: colored requirements claim matching sources first, then generic
  * consumes whatever is left. Correct for single-color producers (MVP).
  */
-export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCost, opts: { poolOnly?: boolean } = {}): PaymentPlan | null {
+export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCost, opts: { poolOnly?: boolean; /** Mycosynth Lattice / Opposition Agent: colored requirements can be paid with any mana. */ anyColor?: boolean } = {}): PaymentPlan | null {
   const player = state.players[playerId];
   const pool: Record<ManaSymbol, number> = { ...player.manaPool };
+  const restricted: Record<ManaSymbol, number> = { ...(player.manaPoolRestricted ?? { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }) };
   const taps: PaymentPlan['taps'] = [];
   const fromPool: ManaSymbol[] = [];
+  const fromRestricted: ManaSymbol[] = [];
   let lifePaid = 0;
+  if (opts.anyColor) {
+    // Qualquer mana serve para as partes coloridas; {C} continua exigindo incolor.
+    cost = { ...cost, generic: cost.generic + cost.colored.length + cost.hybrid.length + cost.phyrexian.length, colored: [], hybrid: [], phyrexian: [] };
+  }
 
   // Manual mana: only floating mana pays; the player taps sources themselves.
   const sources = (opts.poolOnly ? [] : player.zones.battlefield)
@@ -157,6 +165,8 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
 
   for (const req of requirements) {
     if (Array.isArray(req)) {
+      const fromRestrictedSym = req.find((c) => restricted[c] > 0);
+      if (fromRestrictedSym) { restricted[fromRestrictedSym] -= 1; fromRestricted.push(fromRestrictedSym); continue; }
       const fromPoolSym = req.find((c) => pool[c] > 0);
       if (fromPoolSym) {
         pool[fromPoolSym] -= 1;
@@ -168,6 +178,7 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
     }
     if (typeof req === 'object') {
       const c = req.phyrexian;
+      if (restricted[c] > 0) { restricted[c] -= 1; fromRestricted.push(c); continue; }
       if (pool[c] > 0) {
         pool[c] -= 1;
         fromPool.push(c);
@@ -181,6 +192,7 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
       return null;
     }
     if (req !== 'generic') {
+      if (req !== 'C' && restricted[req] > 0) { restricted[req] -= 1; fromRestricted.push(req); continue; }
       if (pool[req] > 0) {
         pool[req] -= 1;
         fromPool.push(req);
@@ -199,7 +211,7 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
     if (claimSource((syms) => syms[0] ?? null)) continue;
     return null;
   }
-  return { taps, fromPool, lifePaid };
+  return { taps, fromPool, fromRestricted: fromRestricted.length > 0 ? fromRestricted : undefined, lifePaid };
 }
 
 export function canPay(state: GameState, playerId: PlayerId, cost: ParsedCost): boolean {
@@ -210,4 +222,10 @@ export function emptyPool(player: PlayerState): boolean {
   if (poolTotal(player.manaPool) === 0) return false;
   player.manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
   return true;
+}
+
+/** Subtract what a plan consumed from the floating pools (normal + Jegantha's restricted). */
+export function consumePlanPools(player: { manaPool: ManaPool; manaPoolRestricted?: ManaPool }, plan: PaymentPlan): void {
+  for (const sym of plan.fromPool) player.manaPool[sym] = Math.max(0, player.manaPool[sym] - 1);
+  for (const sym of plan.fromRestricted ?? []) if (player.manaPoolRestricted) player.manaPoolRestricted[sym] = Math.max(0, player.manaPoolRestricted[sym] - 1);
 }

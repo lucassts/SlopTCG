@@ -304,4 +304,6 @@ export const EN_GAMEBOARD: Record<string, string> = {
   'Vigiar': 'Surveil',
   'Selecionadas vão para o fundo; as demais continuam no topo — se sobrar mais de uma, você escolhe a ordem em seguida.': 'Selected cards go to the bottom; the rest stay on top — if more than one remains, you choose their order next.',
   'Selecionadas vão para o cemitério; as demais continuam no topo — se sobrar mais de uma, você escolhe a ordem em seguida.': 'Selected cards go to the graveyard; the rest stay on top — if more than one remains, you choose their order next.',
+  'Mana restrita (não paga custo genérico)': 'Restricted mana (cannot pay generic costs)',
+  'Companion: pague {3} na sua fase principal para pôr a carta na mão': 'Companion: pay {3} during your main phase to put the card into your hand',
 };

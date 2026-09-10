@@ -1131,6 +1131,7 @@ interface ParseState {
   /** Edge of Autumn: "Cycling—Sacrifice a land." */
   cyclingSacrifice?: FilterSpec;
   cascadeMulti?: number;
+  kicker2Cost?: string;
   flashbackCost?: string;
   flashbackSacrifice?: FilterSpec;
   flashbackSacrificeCount?: number;
@@ -1204,7 +1205,7 @@ interface ParseState {
   flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
   flags11: Partial<Pick<CardDefinition, 'landsMultiManaColorless' | 'extraManaOnCreatureTap'>>;
   flags12: Partial<Pick<CardDefinition, 'yourSpellsUncounterable' | 'grantWardLifeOthers' | 'cageNoEnterFromGraveyardLibrary' | 'cageNoCastFromGraveyardLibrary' | 'nonbasicLandsAreMountains'>>;
-  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle'>>;
+  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle' | 'allPermanentsArtifacts' | 'allColorless' | 'manaAnyColor' | 'allCardsChosenColor' | 'controlOpponentSearches' | 'companion'>>;
   flashbackPayLife?: number;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
@@ -1535,7 +1536,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     last.maxPerTurn = 1;
     return true;
   }
-  const line = rawLine.replace(/^(?!Landfall|Choose)[A-Z][a-z]+(?: [A-Za-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".')
+  const line = rawLine.replace(/^(?!Landfall|Choose|Companion)[A-Z][a-z]+(?: [A-Za-z]+)* — (?=\{|~|[A-Z])/, '').replace(/\."$/, '.".')
     // "a spell that's white, blue, black, or red": sem vírgulas, para não confundir a divisão cabeçalho/corpo do gatilho (Questing Druid).
     .replace(/that's ((?:white|blue|black|red|green)(?:, (?:white|blue|black|red|green))*),? or (white|blue|black|red|green)/i, (all) => all.replace(/, /g, ' or ').replace(/ or or /g, ' or '));
   // Trinisphere (antes das regras genéricas de "As long as").
@@ -1588,7 +1589,7 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if (line.startsWith('• ')) return false;
 
   // Linhas de formato (Commander/draft/ante) sem efeito num jogo de dois: reconhecidas e ignoradas.
-  if (/^(~ can be your commander\.|Choose a Background|Doctor's companion|Partner(?:—.+)?|Friends forever|Draft ~ face up\.|Draft this card face up\.|A deck can have any number of cards named ~\.|Remove this card from your deck before playing if you're not playing for ante\.|Companion — .+|Start your engines!|Increment|Storied|Assist|Play with the top card of your library revealed\.)$/i.test(line)) return true;
+  if (/^(~ can be your commander\.|Choose a Background|Doctor's companion|Partner(?:—.+)?|Friends forever|Draft ~ face up\.|Draft this card face up\.|A deck can have any number of cards named ~\.|Remove this card from your deck before playing if you're not playing for ante\.|Start your engines!|Increment|Storied|Assist|Play with the top card of your library revealed\.)$/i.test(line)) return true;
 
   // ---- Leva 3: Sagas, Classes, Level up, Station, energia, keywords de campo
   if ((m = line.match(new RegExp(`^(${ROMAN_RE}(?:, ${ROMAN_RE})*) — (.+)$`)))) {
@@ -2000,6 +2001,21 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   // Talon Gates of Madara: "{4}: Put this card from your hand onto the battlefield."
   if ((m = line.match(/^((?:\{[^}]+\})+): Put (?:this card|~) from your hand onto the battlefield\.$/i))) {
     st.abilities.push({ kind: 'activated', zone: 'hand', cost: { mana: m[1] }, effect: [{ op: 'selfToBattlefield' }], text: `${m[1]}: põe esta carta da mão no campo de batalha` });
+    return true;
+  }
+  // Mycosynth Lattice / Painter's Servant / Opposition Agent / companions.
+  if (/^All permanents are artifacts in addition to their other types\.$/i.test(line)) { st.flags13.allPermanentsArtifacts = true; return true; }
+  if (/^All cards that aren't on the battlefield, spells, and permanents are colorless\.$/i.test(line)) { st.flags13.allColorless = true; return true; }
+  if (/^Players may spend mana as though it were mana of any color\.$/i.test(line)) { st.flags13.manaAnyColor = true; return true; }
+  if (/^All cards that aren't on the battlefield, spells, and permanents are the chosen color in addition to their other colors\.$/i.test(line)) { st.flags13.allCardsChosenColor = true; return true; }
+  if (/^You control your opponents while they're searching their libraries\.$/i.test(line)) { st.flags13.controlOpponentSearches = true; return true; }
+  if (/^While an opponent is searching their library, they exile each card they find\. You may play those cards for as long as they remain exiled, and you may spend mana as though it were mana of any color to cast them\.$/i.test(line)) { st.flags13.controlOpponentSearches = true; return true; }
+  if (/^Companion — Your starting deck contains at least twenty cards more than the minimum deck size\.$/i.test(line)) { st.flags13.companion = { rule: 'deckPlus20' }; return true; }
+  if (/^Companion — No card in your starting deck has more than one of the same mana symbol in its mana cost\.$/i.test(line)) { st.flags13.companion = { rule: 'noRepeatedManaSymbols' }; return true; }
+  if (/^When ~ enters, exile any number of other nonland permanents you own and control\. Return those cards to the battlefield at the beginning of the next end step\.$/i.test(line)) { st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, effect: [{ op: 'yorionBlink' }], text: 'exile any number of other nonland permanents you own and control; they return at the next end step' }); return true; }
+  if ((m = line.match(/^\{T\}: Add ((?:\{[WUBRG]\})+)\. This mana can't be spent to pay generic mana costs\.$/i))) {
+    const mana = [...m[1].matchAll(/\{([WUBRG])\}/g)].map((x) => x[1] as ManaSymbol);
+    st.abilities.push({ kind: 'activated', cost: { tap: true }, effect: [{ op: 'addMana', who: 'controller', mana, noGeneric: true }], text: `Adicionar ${m[1]} (não paga custo genérico)`, isManaAbility: true });
     return true;
   }
   // Hogaak: várias keywords numa linha ("Convoke, delve").
@@ -2596,6 +2612,16 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
   if ((m = line.match(/^Kicker ((?:\{[^}]+\})+)$/i))) { st.kickerCost = m[1]; return true; }
+  // Wastescape Battlemage: "Kicker {G} and/or {1}{U}" (o and/or já virou "or").
+  if ((m = line.match(/^Kicker ((?:\{[^}]+\})+) or ((?:\{[^}]+\})+)$/i))) { st.kickerCost = m[1]; st.kicker2Cost = m[2]; return true; }
+  if ((m = line.match(/^When you cast (?:~|this spell), if it was kicked with its ((?:\{[^}]+\})+) kicker, (.+)$/i))) {
+    const idx = m[1] === st.kickerCost ? 0 : m[1] === st.kicker2Cost ? 1 : -1;
+    if (idx < 0) return false;
+    const parsed = parseEffectText(m[2]);
+    if (!parsed) return false;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'youCastThis' }, requiresKicked: true, kickerIndex: idx, targets: specsOf(parsed), effect: parsed.steps, text: m[2].replace(/\.$/, '') });
+    return true;
+  }
   if ((m = line.match(/^Flashback ((?:\{[^}]+\})+)$/i))) { st.flashbackCost = m[1]; return true; }
   if ((m = line.match(/^Flashback—((?:\{[^}]+\})+), Pay (\d+) life\.$/i))) { st.flashbackCost = m[1]; st.flashbackPayLife = parseInt(m[2], 10); return true; }
   if ((m = line.match(/^(?:Strive — )?~ costs ((?:\{[^}]+\})+) more to cast for each target beyond the first\.$/i))) { st.flags13.strive = m[1]; return true; }
@@ -2996,6 +3022,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     ...st.flags12,
     ...st.flags13,
     cascade: st.cascadeMulti || st.flags2.cascade ? true : undefined,
+    kicker2: st.kicker2Cost ? { cost: st.kicker2Cost } : undefined,
     cascadeCount: st.cascadeMulti,
     costModifiers: st.costModifiers,
     spellModeChoice: st.spellModeChoice,

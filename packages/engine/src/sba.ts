@@ -4,7 +4,7 @@
  */
 import type { Emit } from './ops.js';
 import { destroyObject, lose, moveWithEvent } from './ops.js';
-import { battlefield, effectiveToughness, hasKeyword, isCreature, type GameState } from './state.js';
+import { battlefield, effectiveToughness, hasKeyword, isCreature, type GameObject, type GameState } from './state.js';
 import { PLAYER_IDS, type CardType, type PlayerId } from './types.js';
 
 /** Move a permanent between controllers' battlefield lists. */
@@ -84,8 +84,30 @@ function syncRiftstone(state: GameState): void {
   }
 }
 
+/** Mycosynth Lattice / Painter's Servant: global rewrites of types and colors on every object (printed definition kept on the object). */
+function syncGlobalCardMods(state: GameState): void {
+  const onField = PLAYER_IDS.flatMap((p) => state.players[p].zones.battlefield.map((id) => state.objects[id])).filter((o): o is GameObject => !!o);
+  const lattice = onField.some((o) => o.card.allPermanentsArtifacts);
+  const painterColors = [...new Set(onField.filter((o) => o.card.allCardsChosenColor && o.chosenColor).map((o) => o.chosenColor!))];
+  for (const o of Object.values(state.objects)) {
+    const addArtifact = lattice && o.zone === 'battlefield' && !o.phasedOut;
+    const colorless = lattice;
+    const key = (addArtifact ? 'A' : '') + (colorless ? 'C' : '') + (painterColors.length > 0 ? 'P' + painterColors.join('') : '');
+    if (!key) {
+      if (o.card.globalMod && o.globalPrinted) { o.card = o.globalPrinted; o.globalPrinted = undefined; }
+      continue;
+    }
+    if (o.card.globalMod === key) continue;
+    const base = o.card.globalMod && o.globalPrinted ? o.globalPrinted : o.card;
+    const colors = [...new Set([...(colorless ? [] : base.colors), ...painterColors])];
+    o.globalPrinted = base;
+    o.card = { ...base, types: addArtifact && !base.types.includes('Artifact') ? [...base.types, 'Artifact'] : base.types, colors, globalMod: key };
+  }
+}
+
 export function checkStateBasedActions(state: GameState, emit: Emit): boolean {
   syncBloodMoon(state, emit);
+  syncGlobalCardMods(state);
   syncRiftstone(state);
   // Ascend: ten or more permanents → city's blessing for the rest of the game.
   for (const p of PLAYER_IDS) {

@@ -53,7 +53,7 @@ import {
 import { opponentOf, PLAYER_IDS, type PlayerId, type TargetChoice, type Color } from './types.js';
 import { shuffle } from './rng.js';
 import { DUNGEONS } from './dungeons.js';
-import { canPay, parseCost, planPayment } from './mana.js';
+import { canPay, consumePlanPools, parseCost, planPayment } from './mana.js';
 
 export interface EffectContext {
   state: GameState;
@@ -319,9 +319,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' | 'yorionBlink' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy', 'yorionBlink']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -353,7 +353,7 @@ function payNow(state: GameState, player: PlayerId, cost: string, emit: Emit): b
   const plan = planPayment(state, player, parseCost(cost));
   if (!plan) return false;
   for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], player, tap.produce, emit);
-  for (const sym of plan.fromPool) state.players[player].manaPool[sym] = Math.max(0, state.players[player].manaPool[sym] - 1);
+  consumePlanPools(state.players[player], plan);
   if (plan.lifePaid > 0) changeLife(state, player, -plan.lifePaid, 'mana phyrexiana', emit);
   return true;
 }
@@ -447,6 +447,9 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         .filter((o) => cardMatchesFilter(o.card, filter) && (!filter?.sameNameAsRevealed || o.card.name === state.lastRevealedName))
         .map((o) => o.id);
       if (step.who && options.length === 0) return { player: who, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      // Opposition Agent: o oponente controla a busca e o que for achado vai para o exílio, jogável por ele.
+      const agent = searchAgentFor(state, who);
+      if (agent !== undefined) return { player: agent, options, min: 0, max: Math.min(step.count, options.length), prompt: `Opposition Agent: você controla a busca de ${state.players[who].name} — escolha até ${step.count} carta(s); elas são exiladas e você pode jogá-las`, mode: 'cards' };
       return {
         player: who,
         options,
@@ -763,6 +766,11 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const payer = t?.kind === 'player' ? t.player : t?.kind === 'object' ? state.objects[t.id]?.controller : undefined;
       if (payer === undefined || !planPayment(state, payer, parseCost(step.cost))) return { player: payer ?? controller, options: [], min: 0, max: 0, prompt: '', mode: 'confirm', autoAnswer: 'no' };
       return { player: payer, options: [], min: 0, max: 0, prompt: `${ctx.sourceName}: pagar ${step.cost} para copiar a mágica e escolher um novo alvo?`, mode: 'confirm' };
+    }
+    case 'yorionBlink': {
+      const options = state.players[controller].zones.battlefield.filter((id) => { const o = state.objects[id]; return o && o.id !== ctx.sourceId && o.owner === controller && !o.card.types.includes('Land'); });
+      if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options, min: 0, max: options.length, prompt: `${ctx.sourceName}: exile qualquer número de outras permanentes não-terreno suas (voltam no início da próxima etapa final)`, mode: 'cards' };
     }
     case 'pileSplit': {
       const who = resolveWho(ctx, step.who)[0];
@@ -1351,8 +1359,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         const plan = planPayment(state, item.controller, parseCost(step.cost));
         if (plan) {
           for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], item.controller, tap.produce, emit);
-          for (const sym of plan.fromPool)
-            state.players[item.controller].manaPool[sym] = Math.max(0, state.players[item.controller].manaPool[sym] - 1);
+          consumePlanPools(state.players[item.controller], plan);
           if (plan.lifePaid > 0) changeLife(state, item.controller, -plan.lifePaid, 'mana phyrexiana', emit);
           emit({ type: 'fizzled', description: `${state.players[item.controller].name} pagou ${step.cost}: ${item.cardName} não foi anulada` });
           return;
@@ -1419,7 +1426,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         const plan = planPayment(state, ctx.controller, parseCost('{1}'));
         if (plan) {
           for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], ctx.controller, tap.produce, emit);
-          for (const sym of plan.fromPool) state.players[ctx.controller].manaPool[sym] = Math.max(0, state.players[ctx.controller].manaPool[sym] - 1);
+          consumePlanPools(state.players[ctx.controller], plan);
           paid = true;
         }
       }
@@ -1470,7 +1477,7 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       const plan = planPayment(state, payer, parseCost(step.cost));
       if (!plan) return;
       for (const tap of plan.taps) tapForMana(state, state.objects[tap.objectId], payer, tap.produce, emit);
-      for (const sym of plan.fromPool) state.players[payer].manaPool[sym] = Math.max(0, state.players[payer].manaPool[sym] - 1);
+      consumePlanPools(state.players[payer], plan);
       state.triggerQueue.push({
         sourceId: ctx.sourceId,
         controller: payer,
@@ -1480,6 +1487,12 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         effect: [{ op: 'damage', to: 'target:0', amount: step.damage }, { op: 'chainCopy', cost: step.cost, damage: step.damage }],
       });
       emit({ type: 'copiesCreated', cardName: ctx.sourceName, count: 1, reason: 'copy' });
+      return;
+    }
+    case 'yorionBlink': {
+      const ids = picks.filter((id) => { const o = state.objects[id]; return o && o.zone === 'battlefield' && o.owner === ctx.controller && o.controller === ctx.controller && o.id !== ctx.sourceId && !o.card.types.includes('Land'); });
+      for (const id of ids) moveWithEvent(state, state.objects[id], 'exile', 'exiled', emit);
+      if (ids.length > 0) state.delayed.push({ at: 'endStep', objectId: ctx.sourceId, action: 'effect', effect: ids.map((_, i) => ({ op: 'returnToBattlefield', what: `target:${i}` as const, owner: true })), controller: ctx.controller, targets: ids.map((id) => ({ kind: 'object' as const, id })) });
       return;
     }
     case 'pileSplit': {
@@ -1527,10 +1540,18 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       const found: string[] = [];
       const toTop: number[] = [];
       const who = searchPlayer(ctx, step.who);
+      const agent = searchAgentFor(state, who);
       for (const id of picks) {
         const obj = state.objects[id];
         if (!obj || obj.zone !== 'library') continue;
         found.push(obj.card.name);
+        if (agent !== undefined) {
+          moveWithEvent(state, obj, 'exile', 'exiled', emit);
+          obj.exiledAs = 'agent';
+          obj.playableBy = agent;
+          emit({ type: 'fizzled', description: `Opposition Agent: ${obj.card.name} foi exilada e ${state.players[agent].name} pode jogá-la` });
+          continue;
+        }
         if (step.to === 'libraryTop') {
           // Removed now, put back on top after the shuffle (Mystical Tutor).
           const lib = state.players[who].zones.library;
@@ -2908,7 +2929,11 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       const times = step.times ? resolveAmount(ctx, step.times) : 1;
       const mana = dampingMana(state, ctx.sourceId, Array.from({ length: Math.max(0, times) }, () => step.mana).flat());
       for (const p of resolvePlayers(step.who, ctx.controller)) {
-        for (const sym of mana) state.players[p].manaPool[sym] += 1;
+        if (step.noGeneric) {
+          const ps = state.players[p];
+          ps.manaPoolRestricted = ps.manaPoolRestricted ?? { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+          for (const sym of mana) ps.manaPoolRestricted[sym] += 1;
+        } else for (const sym of mana) state.players[p].manaPool[sym] += 1;
         if (step.untilEndOfCombat) {
           // Firebending: this mana survives step changes until the end of combat.
           const ps = state.players[p];
@@ -3128,6 +3153,12 @@ function applyPump(
 
 /** Validate a chosen target against its spec at cast/activation time. */
 /** Search op: the player who searches (Boseiju: controller of the first target). */
+/** Opposition Agent: the opponent of `searcher` who controls the Agent (they run the search), if any. */
+export function searchAgentFor(state: GameState, searcher: PlayerId): PlayerId | undefined {
+  const opp = opponentOf(searcher);
+  return state.players[opp].zones.battlefield.some((id) => state.objects[id]?.card.controlOpponentSearches) ? opp : undefined;
+}
+
 function searchPlayer(ctx: EffectContext, who?: 'controllerOfTarget'): PlayerId {
   if (who !== 'controllerOfTarget') return ctx.controller;
   const t = ctx.targets[0];

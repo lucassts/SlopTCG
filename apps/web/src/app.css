@@ -628,3 +628,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .card-row .card-row-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .card-row .card-row-badge { background: var(--accent); color: #111; border-radius: 10px; padding: 0 7px; font-size: 12px; font-weight: 700; }
 .modal-head-row { display: flex; justify-content: center; margin: 2px 0 6px; }
+
+/* Companion e mana restrita (Jegantha) */
+.companion-btn { cursor: pointer; border: 1px solid var(--accent); color: var(--text); }
+.mana-chip.restricted { outline: 1px dashed rgba(255, 255, 255, 0.6); }

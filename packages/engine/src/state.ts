@@ -116,7 +116,13 @@ export interface GameObject {
   buybackPaid?: boolean;
   kickerTimes?: number;
   /** Why it sits in exile face down / waiting (foretell, plot, suspend, rebound, warp, madness, cipher, haunting, hideaway, playable). */
-  exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness' | 'cipher' | 'haunting' | 'hideaway' | 'playable' | 'adventure';
+  exiledAs?: 'foretold' | 'plotted' | 'suspended' | 'rebound' | 'warped' | 'madness' | 'cipher' | 'haunting' | 'hideaway' | 'playable' | 'adventure' | 'agent';
+  /** Opposition Agent: this exiled card may be played by this player (not its owner) with mana of any color. */
+  playableBy?: PlayerId;
+  /** Wastescape Battlemage: which kickers were paid (0 = kicker, 1 = kicker2). */
+  kickersPaid?: number[];
+  /** Printed definition before a global effect (Lattice, Painter's Servant) rewrote `card`. */
+  globalPrinted?: CardDefinition;
   /** Miracle: just drawn as the first card this turn — castable for its miracle cost right now. */
   miracleAvailable?: boolean;
   /** Cipher: creature this exiled spell is encoded on. */
@@ -289,6 +295,11 @@ export interface PlayerState {
   /** Bloodthirst: this player was dealt damage this turn. */
   damagedThisTurn?: boolean;
   manaPool: ManaPool;
+  /** Jegantha: floating mana that can't pay generic costs. */
+  manaPoolRestricted?: ManaPool;
+  /** Companion chosen from the sideboard at game start (object id), and whether it was already taken. */
+  companion?: number;
+  companionTaken?: boolean;
   /** Firebending: mana that survives step changes until the end of combat. */
   stickyPool?: ManaPool;
   /** Cards drawn this turn (miracle: the first one). */

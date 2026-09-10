@@ -664,6 +664,8 @@ export type EffectStep =
   | { op: 'planarHand' }
   /** (choice) Discover N: exile from the top until a nonland card with mana value N or less; cast it free or put it into your hand. */
   | { op: 'discover'; amount: number }
+  /** (choice) Yorion: exile any number of other nonland permanents you own and control; they return at the next end step. */
+  | { op: 'yorionBlink' }
   /** Talon Gates of Madara: the permanent phases out (returns at its controller's next untap step). */
   | { op: 'phaseOut'; what: SubjectRef }
   /** Talon Gates: "{4}: Put this card from your hand onto the battlefield." */
@@ -699,7 +701,7 @@ export type EffectStep =
   | { op: 'copySpell'; what: SubjectRef }
   /** Fog: no combat damage is dealt for the rest of this turn. */
   | { op: 'preventCombatDamage' }
-  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Urza's Workshop: repeat the symbols N times. */ times?: DynAmount; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean }
+  | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Urza's Workshop: repeat the symbols N times. */ times?: DynAmount; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean; /** Jegantha: this mana can't pay generic costs. */ noGeneric?: boolean }
   /** "Add one mana of any color" (or "of these colors") — the activation
    *  carries the chosen color; `colors` restricts the legal choices. */
   | { op: 'addManaChoice'; who: PlayerSel; count?: DynAmount; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean; /** Carpet of Flowers: remember the use for \"if you haven't added mana with this ability this turn\". */ markUsed?: boolean }
@@ -844,6 +846,8 @@ export interface TriggeredAbility extends LevelGate {
   trigger: TriggerSpec;
   /** "When ~ enters, if it was kicked / the gift was promised / tribute wasn't paid, …". */
   requiresKicked?: boolean;
+  /** Wastescape Battlemage: only if that specific kicker (0 = `kicker`, 1 = `kicker2`) was paid. */
+  kickerIndex?: number;
   /** Intervening "if": "…, if you're the monarch, …" — checked when it would trigger. */
   condition?: Cond;
   /** Valiant-style: triggers only the first time each turn. */
@@ -1041,6 +1045,21 @@ export interface CardDefinition {
     /** Label for the client ("bargain", "gift a card"). */
     label?: string;
   };
+  /** Wastescape Battlemage: "Kicker {A} and/or {B}" — a second, independent kicker cost. */
+  kicker2?: { cost: string };
+  /** Mycosynth Lattice. */
+  allPermanentsArtifacts?: boolean;
+  allColorless?: boolean;
+  /** Mycosynth Lattice: players may spend mana as though it were mana of any color. */
+  manaAnyColor?: boolean;
+  /** Painter's Servant: everything is the chosen color in addition to its other colors. */
+  allCardsChosenColor?: boolean;
+  /** Opposition Agent. */
+  controlOpponentSearches?: boolean;
+  /** Companion rule that the starting deck must satisfy. */
+  companion?: { rule: 'deckPlus20' | 'noRepeatedManaSymbols' };
+  /** Set while a global effect (Lattice, Painter's Servant) rewrote this definition; the printed one is kept on the object. */
+  globalMod?: string;
   // ---- Leva 3
   /** Saga: number of chapters; read ahead lets the controller pick the starting chapter. */
   saga?: { chapters: number; readAhead?: boolean };

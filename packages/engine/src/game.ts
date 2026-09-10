@@ -18,7 +18,7 @@ import {
   targetMatchesSpec,
 } from './effects.js';
 import type { GameEvent } from './events.js';
-import { canPay, costCmc, costLabel, parseCost, planPayment } from './mana.js';
+import { canPay, consumePlanPools, costCmc, costLabel, parseCost, planPayment } from './mana.js';
 import { applyEnterTapRules, castCardFree, dredgeOptions, phaseInAll, tapForMana } from './effects.js';
 import { sameName } from './state.js';
 import { changeLife, draw, lose, moveWithEvent, setTapped, transformObject } from './ops.js';
@@ -69,6 +69,7 @@ export interface GameOptions {
 interface CastExtra {
   method?: Extract<import('./actions.js').PlayerAction, { type: 'castSpell' }>['method'];
   altReturnLand?: number;
+  kickers?: number[];
   escapeExile?: number[];
   faceDown?: boolean;
   buyback?: boolean;
@@ -110,6 +111,11 @@ export class Game {
       onThePlay: s.onThePlay,
     });
     for (const p of PLAYER_IDS) {
+      // Companion: uma carta do sideboard cuja regra o deck inicial cumpre fica "fora do jogo", disponível por {3}.
+      const ps = s.players[p];
+      const deck = ps.zones.library.map((id) => s.objects[id].card);
+      const cand = ps.zones.sideboard.map((id) => s.objects[id]).find((o) => o.card.companion && companionRuleHolds(o.card.companion.rule, deck));
+      if (cand) { ps.companion = cand.id; this.emit({ type: 'fizzled', description: `${ps.name} tem ${cand.card.name} como companion (pague {3} na fase principal para pô-la na mão)` }); }
       this.emit({ type: 'shuffled', player: p });
       for (let i = 0; i < STARTING_HAND; i++) draw(s, p, this.emit);
     }
@@ -319,6 +325,8 @@ export class Game {
       case 'chat':
         this.emit({ type: 'chat', player: playerId, text: action.text.slice(0, 500) });
         return true;
+      case 'takeCompanion':
+        return this.doTakeCompanion(playerId);
       case 'concede':
         lose(s, playerId, 'concedeu a partida', this.emit);
         return true;
@@ -338,6 +346,7 @@ export class Game {
         return this.doCastSpell(playerId, action.objectId, action.targets ?? [], action.x, action.mode, action.sacrifices, action.kicked, action.useAltCost, action.altExile, {
           method: action.method,
           altReturnLand: action.altReturnLand,
+          kickers: action.kickers,
           escapeExile: action.escapeExile,
           faceDown: action.faceDown,
           buyback: action.buyback,
@@ -491,10 +500,10 @@ export class Game {
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
     const obj = s.objects[objectId];
-    const playableFromExile = !!obj && obj.zone === 'exile' && obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn;
+    const playableFromExile = !!obj && obj.zone === 'exile' && ((obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn) || (obj.exiledAs === 'agent' && obj.playableBy === playerId));
     const gyLands = s.players[playerId].graveyardCastPermission;
     const fromGraveyard = !!obj && obj.zone === 'graveyard' && (s.players[playerId].zones.battlefield.some((id) => s.objects[id].card.playLandsFromGraveyard) || (!!gyLands?.lands && gyLands.untilTurn === s.turn));
-    if (!obj || (obj.zone !== 'hand' && !playableFromExile && !fromGraveyard) || obj.owner !== playerId)
+    if (!obj || (obj.zone !== 'hand' && !playableFromExile && !fromGraveyard) || (obj.owner !== playerId && !(playableFromExile && obj.playableBy === playerId)))
       { this.fail(playerId, 'carta inválida'); return false; }
     if (!obj.card.types.includes('Land'))
       { this.fail(playerId, 'isso não é um terreno'); return false; }
@@ -679,7 +688,7 @@ export class Game {
     const err = this.requirePriority(playerId);
     if (err) { this.fail(playerId, err); return false; }
     const obj = s.objects[objectId];
-    if (!obj || obj.owner !== playerId)
+    if (!obj || (obj.owner !== playerId && !(obj.zone === 'exile' && obj.exiledAs === 'agent' && obj.playableBy === playerId)))
       { this.fail(playerId, 'carta inválida'); return false; }
     const card = obj.card;
     const method = extra.method;
@@ -740,7 +749,7 @@ export class Game {
       { this.fail(playerId, 'essa mágica não tem entwine'); return false; }
     if (method === 'miracle' && !obj.miracleAvailable)
       { this.fail(playerId, 'milagre: só no momento em que é a primeira carta comprada no turno'); return false; }
-    const viaImpulse = obj.zone === 'exile' && obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn && !method;
+    const viaImpulse = (obj.zone === 'exile' && obj.exiledAs === 'playable' && obj.playableUntilTurn === s.turn && !method) || (obj.zone === 'exile' && obj.exiledAs === 'agent' && obj.playableBy === playerId && !method);
     // Adventure: the creature half is castable from exile after the adventure resolved; aftermath: the back half only from the graveyard.
     const viaAdventure = obj.zone === 'exile' && obj.exiledAs === 'adventure' && !method && !obj.transformed;
     const viaAftermath = !!card.aftermath && obj.transformed === true && obj.zone === 'graveyard';
@@ -765,6 +774,8 @@ export class Game {
     } else if (obj.zone !== 'hand' && !viaFlashback && !viaEscape && !viaGraveyard && !viaImpulse && !viaLibraryTop && !viaAdventure && !viaAftermath && !viaGraveyardPermission && !viaGraveyardCard) {
       { this.fail(playerId, 'carta inválida'); return false; }
     }
+    if (extra.kickers && extra.kickers.length > 0 && !card.kicker) { this.fail(playerId, 'essa mágica não tem kicker'); return false; }
+    if (extra.kickers && extra.kickers.length > 0) kicked = true;
     if (kicked && !card.kicker)
       { this.fail(playerId, 'essa mágica não tem kicker'); return false; }
     if (card.types.includes('Land'))
@@ -964,6 +975,9 @@ export class Game {
     }
 
     let xValue: number | undefined;
+    // Wastescape Battlemage: dois kickers independentes (índices em extra.kickers); `kicked` = pelo menos um pago.
+    const kickersPaid = card.kicker2 ? [...new Set((extra.kickers ?? (kicked ? [0] : [])).filter((i) => i === 0 || i === 1))] : undefined;
+    if (kickersPaid) kicked = kickersPaid.length > 0;
     const kickerTimes = card.multikicker ? Math.max(0, extra.kickerTimes ?? (kicked ? 1 : 0)) : kicked ? 1 : 0;
     if (alt && !alt.manaCost) {
       // X with an alternative cost is untypical; treat as 0 when present.
@@ -985,7 +999,11 @@ export class Game {
         cost.phyrexian.push(...bc.phyrexian);
         cost.xCount += bc.xCount;
       }
-      if (kickerTimes > 0 && card.kicker) {
+      if (kickersPaid && kickersPaid.includes(1) && card.kicker2) {
+        const k2 = parseCost(card.kicker2.cost);
+        cost.generic += k2.generic; cost.colorless += k2.colorless; cost.colored.push(...k2.colored); cost.hybrid.push(...k2.hybrid); cost.phyrexian.push(...k2.phyrexian);
+      }
+      if (kickerTimes > 0 && card.kicker && (!kickersPaid || kickersPaid.includes(0))) {
         const kick = parseCost(card.kicker.cost);
         for (let i = 0; i < kickerTimes; i++) {
           cost.generic += kick.generic;
@@ -1066,7 +1084,8 @@ export class Game {
         cost.generic = cost.generic + cost.colored.length + cost.colorless + cost.hybrid.length + (cost.phyrexian?.length ?? 0);
         cost.colored = []; cost.colorless = 0; cost.hybrid = []; cost.phyrexian = [];
       }
-      let plan = card.noManaToCast ? null : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana });
+      const anyColor = this.manaAnyColor() || (obj.exiledAs === 'agent' && obj.playableBy === playerId);
+      let plan = card.noManaToCast ? null : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor });
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
       // tap creatures / artifacts, exile graveyard cards, one generic each.
       const helpers: { kind: 'convoke' | 'improvise' | 'delve'; ids: number[] }[] = [];
@@ -1081,7 +1100,7 @@ export class Game {
             if (cost.generic <= 0) break;
             cost.generic -= 1;
             (helpers.find((h) => h.kind === c.kind) ?? helpers[helpers.push({ kind: c.kind, ids: [] }) - 1]).ids.push(id);
-            plan = card.noManaToCast ? (cost.generic <= 0 ? { taps: [], fromPool: [], lifePaid: 0 } : null) : planPayment(s, playerId, cost);
+            plan = card.noManaToCast ? (cost.generic <= 0 ? { taps: [], fromPool: [], lifePaid: 0 } : null) : planPayment(s, playerId, cost, { anyColor });
             if (plan) break;
           }
           if (plan) break;
@@ -1133,6 +1152,7 @@ export class Game {
     removeFromCurrentZone(s, obj);
     obj.zone = 'stack';
     obj.kicked = kickerTimes > 0;
+    obj.kickersPaid = kickersPaid;
     obj.impending = !!alt?.impending;
     obj.kickerTimes = kickerTimes;
     obj.castMethod = cm?.kind;
@@ -1161,8 +1181,9 @@ export class Game {
       (extra.buyback ? ' (buyback)' : '') +
       (alt ? ' (custo alternativo)' : '');
     const baseEffect = mode ? mode.effect : cm?.kind === 'overload' && card.overloadEffect ? card.overloadEffect : card.spellEffect ?? [];
-    const gift = kicked && card.kicker?.gift ? card.kicker.gift : [];
-    const effect = kicked && card.kicker ? [...gift, ...baseEffect, ...card.kicker.effect] : baseEffect;
+    const kicker0 = kicked && card.kicker && (!kickersPaid || kickersPaid.includes(0));
+    const gift = kicker0 && card.kicker?.gift ? card.kicker.gift : [];
+    const effect = kicker0 && card.kicker ? [...gift, ...baseEffect, ...card.kicker.effect] : baseEffect;
     s.stack.push({
       id: s.nextStackId++,
       kind: 'spell',
@@ -1377,14 +1398,37 @@ export class Game {
     return delta;
   }
 
+  /** Companion: {3} as a sorcery puts the chosen companion from the sideboard into the hand. */
+  private doTakeCompanion(playerId: PlayerId): boolean {
+    const s = this.state;
+    const err = this.requirePriority(playerId);
+    if (err) { this.fail(playerId, err); return false; }
+    const ps = s.players[playerId];
+    const obj = ps.companion !== undefined ? s.objects[ps.companion] : undefined;
+    if (!obj || ps.companionTaken || obj.zone !== 'sideboard') { this.fail(playerId, 'você não tem companion disponível'); return false; }
+    if (s.activePlayer !== playerId || (s.step !== 'main1' && s.step !== 'main2') || s.stack.length > 0) { this.fail(playerId, 'companion: só na sua fase principal, com a pilha vazia'); return false; }
+    const cost = parseCost('{3}');
+    const plan = planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor: this.manaAnyColor() });
+    if (!plan && this.options.manualMana) return this.deferPayment(playerId, obj.card.name, cost);
+    if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
+    this.payWithPlan(playerId, plan);
+    ps.companionTaken = true;
+    moveWithEvent(s, obj, 'hand', 'returned', this.emit);
+    this.emit({ type: 'fizzled', description: `${ps.name} pagou {3} e pôs ${obj.card.name} (companion) na mão` });
+    return true;
+  }
+
+  /** Mycosynth Lattice: any mana pays colored costs while it's on the battlefield. */
+  private manaAnyColor(): boolean {
+    return PLAYER_IDS.some((p) => this.state.players[p].zones.battlefield.some((id) => this.state.objects[id]?.card.manaAnyColor));
+  }
+
   private payWithPlan(playerId: PlayerId, plan: import('./mana.js').PaymentPlan): void {
     const s = this.state;
     s.reversibleTaps = []; // mana committed: taps are no longer undoable
     // A fonte produz tudo de uma vez (Sol Ring); a sobra fica flutuando. Efeitos colaterais da habilidade (Coliseum) rodam junto.
     for (const tap of plan.taps) tapForMana(s, s.objects[tap.objectId], playerId, tap.produce, this.emit);
-    for (const sym of plan.fromPool) {
-      s.players[playerId].manaPool[sym] = Math.max(0, s.players[playerId].manaPool[sym] - 1);
-    }
+    consumePlanPools(s.players[playerId], plan);
     if (plan.lifePaid > 0) changeLife(s, playerId, -plan.lifePaid, 'mana phyrexiana', this.emit);
   }
 
@@ -2126,6 +2170,7 @@ export class Game {
       const ps = s.players[p];
       // Firebending: mana added "until end of combat" survives the combat steps.
       ps.manaPool = inCombat && ps.stickyPool ? { ...ps.stickyPool } : { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+      ps.manaPoolRestricted = undefined;
       if (!inCombat) ps.stickyPool = undefined;
     }
     this.emit({ type: 'stepChanged', step });
@@ -2371,6 +2416,7 @@ export class Game {
         return;
       }
       if (isPermanentCard(obj.card)) {
+        obj.controller = item.controller; // quem conjurou controla (Opposition Agent: carta do oponente)
         moveWithEvent(s, obj, 'battlefield', 'resolved', this.emit);
         this.applyEnterTapRules(obj);
         // Métodos de conjuração com consequência ao entrar.
@@ -3051,6 +3097,7 @@ export class Game {
       if ('what' in ability.trigger) return; // gatilho global (filtro), não próprio
       if (!abilityActive(obj, ability)) return;
       if (ability.requiresKicked && !obj.kicked) return;
+      if (ability.kickerIndex !== undefined && !(obj.kickersPaid ?? (obj.kicked ? [0] : [])).includes(ability.kickerIndex)) return;
       this.pushTrigger(obj, ability, extra.subjectId, undefined, { subjectPlayer: extra.subjectPlayer, triggerAmount: extra.triggerAmount, abilityIndex: idx });
     });
   }
@@ -3389,4 +3436,13 @@ export class Game {
     s.priority = s.activePlayer;
     return true;
   }
+}
+
+/** Companion deck-building rules, checked against the starting library. */
+function companionRuleHolds(rule: 'deckPlus20' | 'noRepeatedManaSymbols', deck: CardDefinition[]): boolean {
+  if (rule === 'deckPlus20') return deck.length >= 80;
+  return deck.every((c) => {
+    const syms = (c.manaCost ?? '').match(/\{[^}]+\}/g) ?? [];
+    return new Set(syms).size === syms.length;
+  });
 }
