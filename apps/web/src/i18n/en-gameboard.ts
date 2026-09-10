@@ -301,4 +301,7 @@ export const EN_GAMEBOARD: Record<string, string> = {
   'Pode doar aqui': 'You can donate here',
   '{source}: topo de {name} ({n})': '{source}: top of {name}\'s library ({n})',
   '{source}: mão de {name} ({n})': '{source}: {name}\'s hand ({n})',
+  'Vigiar': 'Surveil',
+  'Selecionadas vão para o fundo; as demais continuam no topo — se sobrar mais de uma, você escolhe a ordem em seguida.': 'Selected cards go to the bottom; the rest stay on top — if more than one remains, you choose their order next.',
+  'Selecionadas vão para o cemitério; as demais continuam no topo — se sobrar mais de uma, você escolhe a ordem em seguida.': 'Selected cards go to the graveyard; the rest stay on top — if more than one remains, you choose their order next.',
 };

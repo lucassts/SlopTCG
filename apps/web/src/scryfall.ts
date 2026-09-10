@@ -82,16 +82,23 @@ export function parseDecklist(text: string): {
       line = line.replace(/^sb:\s*/i, '');
     }
     const m = line.match(/^(\d+)x?\s+(.+)$/i);
+    const mTail = line.match(/^(.+?)\s+x(\d+)$/i);
     let count = 1;
     let name = line;
     if (m) {
       count = parseInt(m[1], 10);
       name = m[2].trim();
+    } else if (mTail) {
+      count = parseInt(mTail[2], 10);
+      name = mTail[1].trim();
     }
-    // Moxfield/Arena: "(SET) 123" no fim; Moxfield: marcador de foil "*F*".
+    // Moxfield/Arena/MTGO: "(SET) 123" no fim (código em qualquer caixa: "(m3c) 322", "(MH3) 161"),
+    // marcador de foil "*F*", categoria do Archidekt "[Land]", e "Nome / Verso" de cartas dupla-face.
     name = name
       .replace(/\s+\*[A-Za-z]+\*\s*$/, '')
-      .replace(/\s+\([A-Z0-9]{2,6}\)(\s+[\w★†-]+)?\s*$/, '')
+      .replace(/\s+\[[^\]]+\]\s*$/, '')
+      .replace(/\s+\([A-Za-z0-9]{2,6}\)(\s+[\w★†-]+)?\s*$/, '')
+      .replace(/\s+\([A-Za-z0-9]{2,6}\)(\s+[\w★†-]+)?\s*$/, '')
       .trim();
     if (name) entries.push({ name, count, side, block });
   }

@@ -3,7 +3,9 @@ import type { CardView, GameView, PlayerAction, PlayerId } from '@sloptcg/protoc
 import type { Step, TargetChoice } from '@sloptcg/engine';
 
 type CastMethodKind = NonNullable<CardView['card']['castMethods']>[number]['kind'];
-import { CardFace, CardTile, HoverPreview } from './CardTile';
+import { CardFace, CardTile, HoverPreview, emitHover } from './CardTile';
+import { DeckModeToggle, type DeckViewMode } from './DeckView';
+import { imageUrlById, imageUrlByName } from '../scryfall';
 import { stepName } from '../logText';
 import { t, useLang } from '../i18n';
 
@@ -184,6 +186,29 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const [colorPick, setColorPick] = useState<{ objectId: number; abilityIndex: number; colors: string[]; name: string } | null>(null);
   const [nameText, setNameText] = useState('');
   const [nameSuggestions, setNameSuggestions] = useState<string[]>([]);
+  // Modais de cartas (cemitério, escolhas): visual ou lista — mesma preferência do sideboard.
+  const [cardView, setCardView] = useState<DeckViewMode>(() => { try { return localStorage.getItem('sloptcg-deckmode') === 'list' ? 'list' : 'grid'; } catch { return 'grid'; } });
+  const saveCardView = (m: DeckViewMode) => { setCardView(m); try { localStorage.setItem('sloptcg-deckmode', m); } catch { /* sem storage */ } };
+  // Todo modal se move arrastando pelo título (h2 da caixa / título do painel de configurações).
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      const handle = target?.closest('.mulligan-box > h2, .settings-panel > .panel-title');
+      if (!handle || target?.closest('button, input, select, a')) return;
+      const box = handle.closest('.mulligan-box, .settings-panel') as HTMLElement | null;
+      if (!box) return;
+      const start = { x: e.clientX, y: e.clientY };
+      const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(box.style.transform);
+      const base = { x: m ? parseFloat(m[1]) : 0, y: m ? parseFloat(m[2]) : 0 };
+      const move = (ev: PointerEvent) => { box.style.transform = `translate(${base.x + ev.clientX - start.x}px, ${base.y + ev.clientY - start.y}px)`; };
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      e.preventDefault();
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, []);
   // Painel da mão revelada: janela arrastável (padrão: coluna da direita, sobre o chat/carta ampliada).
   const [revealPos, setRevealPos] = useState<{ x: number; y: number } | null>(null);
   const revealRef = useRef<HTMLDivElement>(null);
@@ -1681,31 +1706,32 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       )}
 
       {/* -------- escolha de efeito (descarte, sacrifício, vidência, busca) -------- */}
-      {myChoice && (myChoice.mode === 'cards' || myChoice.mode === 'scry' || myChoice.mode === 'order') && myChoice.options && (
+      {myChoice && (myChoice.mode === 'cards' || myChoice.mode === 'scry' || myChoice.mode === 'surveil' || myChoice.mode === 'order') && myChoice.options && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>{myChoice.mode === 'scry' ? t('Vidência') : myChoice.mode === 'order' ? t('Ordem') : t('Escolha')}</h2>
+            <h2>{myChoice.mode === 'scry' ? t('Vidência') : myChoice.mode === 'surveil' ? t('Vigiar') : myChoice.mode === 'order' ? t('Ordem') : t('Escolha')}</h2>
             <div className="muted">{myChoice.prompt}</div>
-            <div className="mulligan-hand choice-hand">
-              {myChoice.options.map((c) => (
-                <CardTile
-                  key={c.objectId}
-                  card={c}
-                  size="hand"
-                  selected={choiceSel.has(c.objectId)}
-                  badge={myChoice.mode === 'order' && choiceSel.has(c.objectId) ? String([...choiceSel].indexOf(c.objectId) + 1) : undefined}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const next = new Set(choiceSel);
-                    if (next.has(c.objectId)) next.delete(c.objectId);
-                    else if (next.size < myChoice.max) next.add(c.objectId);
-                    setChoiceSel(next);
-                  }}
-                />
-              ))}
+            <div className="modal-head-row"><DeckModeToggle mode={cardView} onChange={saveCardView} /></div>
+            <div className={cardView === 'list' ? 'card-rows' : 'mulligan-hand choice-hand'}>
+              {myChoice.options.map((c) => {
+                const badge = myChoice.mode === 'order' && choiceSel.has(c.objectId) ? String([...choiceSel].indexOf(c.objectId) + 1) : undefined;
+                const toggle = (e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  const next = new Set(choiceSel);
+                  if (next.has(c.objectId)) next.delete(c.objectId);
+                  else if (next.size < myChoice.max) next.add(c.objectId);
+                  setChoiceSel(next);
+                };
+                return cardView === 'list'
+                  ? <CardRow key={c.objectId} card={c} selected={choiceSel.has(c.objectId)} badge={badge} onClick={toggle} />
+                  : <CardTile key={c.objectId} card={c} size="hand" selected={choiceSel.has(c.objectId)} badge={badge} onClick={toggle} />;
+              })}
             </div>
             {myChoice.mode === 'scry' && (
-              <div className="muted">{t('Selecionadas vão para o fundo; as demais continuam no topo, na mesma ordem.')}</div>
+              <div className="muted">{t('Selecionadas vão para o fundo; as demais continuam no topo — se sobrar mais de uma, você escolhe a ordem em seguida.')}</div>
+            )}
+            {myChoice.mode === 'surveil' && (
+              <div className="muted">{t('Selecionadas vão para o cemitério; as demais continuam no topo — se sobrar mais de uma, você escolhe a ordem em seguida.')}</div>
             )}
             {myChoice.mode === 'order' && (
               <div className="muted">{t('Clique nas cartas na ordem em que ficarão: 1 é o topo da biblioteca.')}</div>
@@ -1817,10 +1843,25 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             <h2>
               {t('{zone} de {name}', { zone: zonePick.zone === 'graveyard' ? t('Cemitério') : zonePick.zone === 'exile' ? t('Exílio') : t('Sideboard (fora do jogo)'), name: view.players[zonePick.player].name })}
             </h2>
-            <div className="mulligan-hand choice-hand">
+            <div className="modal-head-row"><DeckModeToggle mode={cardView} onChange={saveCardView} /></div>
+            <div className={cardView === 'list' ? 'card-rows' : 'mulligan-hand choice-hand'}>
               {view.players[zonePick.player][zonePick.zone].length === 0 && <div className="muted">{t('vazio')}</div>}
               {view.players[zonePick.player][zonePick.zone].map((c) => (
-                <div key={c.objectId} style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+                <div key={c.objectId} style={cardView === 'list' ? { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } : { display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+                  {cardView === 'list' ? (
+                    <CardRow
+                      card={c}
+                      targetable={isTargetableCard(c)}
+                      onClick={(e) => {
+                        if (!targeting) return;
+                        e.stopPropagation();
+                        const nextSpec = targeting.specs[targeting.chosen.length + 1] as { zone?: string } | undefined;
+                        if (nextSpec?.zone !== 'graveyard') setZonePick(null);
+                        addTarget({ kind: 'object', id: c.objectId });
+                      }}
+                      onContextMenu={(e) => openMenu(e, c)}
+                    />
+                  ) : (
                   <CardTile
                     card={c}
                     size="hand"
@@ -1834,6 +1875,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     }}
                     onContextMenu={(e) => openMenu(e, c)}
                   />
+                  )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.castableFromGraveyard && myPriority && (
                     <button onClick={() => { setZonePick(null); beginCast(c, undefined); }}>{t('⚡ Conjurar do cemitério')}</button>
                   )}
@@ -2040,4 +2082,25 @@ function shouldAutoPass(view: GameView, stops: StopsConfig, yielding: boolean): 
   const myTurn = view.activePlayer === view.you;
   const stopList = myTurn ? stops.myTurn : stops.oppTurn;
   return !stopList.includes(view.step);
+}
+
+/** Modo lista dos modais: uma linha por carta (nome, custo, tipo), com o mesmo clique/hover da carta visual. */
+function CardRow({ card, selected, targetable, badge, onClick, onContextMenu }: { card: CardView; selected?: boolean; targetable?: boolean; badge?: string; onClick?: (e: React.MouseEvent) => void; onContextMenu?: (e: React.MouseEvent) => void }) {
+  const d = card.card;
+  const url = d.scryfallId ? imageUrlById(d.scryfallId) : imageUrlByName(d.name);
+  const typeLine = [...d.types, ...(d.subtypes.length > 0 ? ['—', ...d.subtypes] : [])].join(' ');
+  return (
+    <div
+      className={`card-row ${selected ? 'selected' : ''} ${targetable ? 'targetable' : ''}`}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      onMouseEnter={() => emitHover(url)}
+      onMouseLeave={() => emitHover(null)}
+      title={d.name}
+    >
+      {badge && <span className="card-row-badge">{badge}</span>}
+      <span className="card-row-name">{d.name}</span>
+      <span className="card-row-meta">{d.manaCost ?? ''} {typeLine}{card.power !== null && card.toughness !== null ? ` · ${card.power}/${card.toughness}` : ''}</span>
+    </div>
+  );
 }

@@ -9,7 +9,7 @@ import { t } from '../i18n';
 
 const HOVER_EVENT = 'sloptcg-hover';
 
-function emitHover(url: string | null) {
+export function emitHover(url: string | null) {
   window.dispatchEvent(new CustomEvent<string | null>(HOVER_EVENT, { detail: url }));
 }
 

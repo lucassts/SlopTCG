@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-05, v0.33.0 — "olhar" carta escondida vira painel privado (Urza's Bauble, Peek, topo do grimório); Legacy a 97,5%)
+## Estado (2026-09-10, v0.34.0 — importação de listas, deck apto (60/15), vigiar/vidência com ordem, modais em lista e arrastáveis, README; Legacy a 97,5%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | **v0.30** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -741,6 +741,41 @@ arrastável com ✕ para quem olhou ("Urza's Bauble: mão de X (1)" / "…:
 topo de X (n)"); o log do outro lado diz apenas "X olhou a mão de Y".
 Op novo `lookAtHand`. Verificado no navegador em duas abas com Urza's
 Bauble. 483 testes (m41: Bauble e Peek, evento privado e redação).
+
+**v0.34.0 — oito pedidos.** (1) **Formatos de lista**: o `parseDecklist`
+só tirava o sufixo `(SET) 123` com código em maiúsculas; o export do
+Moxfield/Arena vem `(m3c) 322` — agora qualquer caixa, mais `Nome x4`,
+categoria `[Land]` do Archidekt, e o upload aceita `.mwdeck/.cod/.csv`
+além de `.txt/.dec/.dek`. O arquivo do Lucas ("Deck - Bant lands") lê 52
++ 15. (2) **Deck apto**: servidor (`buildPool`) e cliente (Lobby) exigem
+60+ no principal e sideboard com 15 ou vazio (antes: 20+ e side ≤ 15).
+Decisão minha: side vazio continua aceito, para partidas casuais — o
+Lucas pediu "menos de 15 não"; se quiser 15 obrigatório, é uma linha.
+(3) **Cache de imagens**: o service worker já guarda Scryfall em
+CacheFirst por 30 dias (`vite.config.ts`); agora o cliente pré-carrega as
+imagens do **próprio** deck (principal + side, 120 ms entre pedidos)
+quando a partida começa. O deck do oponente não é pré-carregado de
+propósito: a lista dele é informação escondida e apareceria na aba de
+rede. Política: o Scryfall recomenda cache local e pede só para não
+martelar a API; a Fan Content Policy da Wizards não muda com cache
+temporário no navegador. (4) **README**: seção "Como jogar" (só o host
+instala; o oponente entra pelo navegador), "Windows e Linux" e "macOS
+passo a passo" (Node pelo `.pkg`, Terminal, clone/ZIP, `npm install`,
+`npm run build`, `npm start`, firewall, `npm run package` + Gatekeeper).
+(5) **Modo lista nos modais**: `DeckModeToggle` (mesma preferência
+`sloptcg-deckmode` do sideboard) no visor de cemitério/exílio/sideboard
+e no modal de escolha; `CardRow` (nome, custo, tipo, P/T) com o mesmo
+clique, alvo e hover da carta. (6) **Pop-ups pequenos** (`.zone-toasts`)
+na coluna da direita, sobre a carta ampliada. (7) **Todo modal arrastável
+pelo título**: listener delegado de `pointerdown` em `.mulligan-box > h2`
+e no título do painel de configurações, movendo por `transform`.
+(8) **Vidência/vigiar**: modo `surveil` próprio (texto certo: "vão para o
+cemitério") e, quando sobram 2+ cartas no topo, uma segunda escolha
+`reorderTop` (`ctx.reorderNext` + `branchOf`) para a ordem — vale para
+scry e surveil. Verificado no navegador: recusa do arquivo do Lucas (52
+cartas), lista importada, toast à direita, modal em lista e arrastado.
+485 testes (m41: vigiar 3 + ordem, vidência 2 + ordem; m17 e m40
+ajustados à etapa nova).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

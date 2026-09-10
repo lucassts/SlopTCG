@@ -5,6 +5,7 @@ import { Home } from './components/Home';
 import { Lobby } from './components/Lobby';
 import { Sideboard } from './components/Sideboard';
 import { eventText } from './logText';
+import { imageUrlByName } from './scryfall';
 import { t, useLang } from './i18n';
 import { clearSession, loadSession, NetClient, saveSession, type Session } from './net';
 
@@ -17,6 +18,18 @@ interface SideboardInfo {
   opponentReady: boolean;
 }
 
+/** Aquece o cache de imagens (service worker: Scryfall em CacheFirst) com espaçamento, para não martelar a API. */
+function prefetchImages(names: string[]): void {
+  let i = 0;
+  const next = () => {
+    if (i >= names.length) return;
+    const img = new Image();
+    img.onload = img.onerror = () => setTimeout(next, 120);
+    img.src = imageUrlByName(names[i++]);
+  };
+  next();
+}
+
 export function App() {
   useLang();
   const netRef = useRef<NetClient | null>(null);
@@ -27,6 +40,9 @@ export function App() {
   const [view, setView] = useState<GameView | null>(null);
   const [syncSeq, setSyncSeq] = useState(0);
   const [log, setLog] = useState<string[]>([]);
+  /** Nomes do meu deck (principal + sideboard): as imagens são pré-carregadas quando a partida começa e ficam no cache do navegador. */
+  const myDeckNamesRef = useRef<string[]>([]);
+  const prefetchedRef = useRef(false);
   const [reveal, setReveal] = useState<{ kind: 'hand' | 'cards' | 'look'; player: PlayerId; cards: string[]; source?: string; zone?: 'hand' | 'library'; seq: number } | null>(null);
   const [match, setMatch] = useState<MatchStateMsg | null>(null);
   const [sideboard, setSideboard] = useState<SideboardInfo | null>(null);
@@ -58,6 +74,10 @@ export function App() {
         setView(msg.view);
         setSyncSeq((n) => n + 1);
         setScreen('game');
+        if (!prefetchedRef.current && myDeckNamesRef.current.length > 0) {
+          prefetchedRef.current = true;
+          prefetchImages(myDeckNamesRef.current);
+        }
         for (const ev of msg.events) {
           if (ev.type === 'handRevealed' && ev.player !== msg.view.you) setReveal({ kind: 'hand', player: ev.player, cards: ev.cards, seq: Date.now() });
           if (ev.type === 'cardsLooked' && ev.viewer === msg.view.you && ev.cards.length > 0) setReveal({ kind: 'look', player: ev.player, cards: ev.cards, source: ev.source, zone: ev.zone, seq: Date.now() });
@@ -177,7 +197,7 @@ export function App() {
           roomCode={session.roomCode}
           you={session.playerId}
           players={lobbyPlayers}
-          onSetDeck={(deck: DeckSpec) => netRef.current?.send({ type: 'setDeck', deck })}
+          onSetDeck={(deck: DeckSpec) => { myDeckNamesRef.current = deck.kind === 'external' ? [...new Set([...(deck.cards as CountedCard[]), ...(deck.sideboard ?? [])].map((c) => c.name))] : []; prefetchedRef.current = false; netRef.current?.send({ type: 'setDeck', deck }); }}
           onReady={(ready: boolean) => netRef.current?.send({ type: 'lobbyReady', ready })}
           onStart={() => netRef.current?.send({ type: 'startGame' })}
         />

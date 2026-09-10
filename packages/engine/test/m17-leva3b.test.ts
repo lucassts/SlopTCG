@@ -217,6 +217,8 @@ describe('M17 · monarca, iniciativa e masmorras', () => {
     game.apply('p1', { type: 'chooseMode', mode: 1 });
     passUntil(game, (s) => s.pendingDecision?.type === 'effectChoice');
     game.apply('p1', { type: 'effectChoice', picks: [] }); // vidência 2: nada para o fundo
+    passUntil(game, (s) => s.pendingDecision?.type === 'effectChoice'); // as duas do topo: ordem
+    { const od = game.state.pendingDecision as { options: number[] }; game.apply('p1', { type: 'effectChoice', picks: od.options }); }
     settle(game);
     expect(game.state.players.p1.dungeon).toEqual({ name: 'Undercity', room: 2 });
   });

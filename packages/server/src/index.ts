@@ -355,9 +355,11 @@ async function buildPool(spec: DeckSpec): Promise<DeckPool | string> {
   if (main.length === 0) return 'deck vazio';
   const mainTotal = main.reduce((n, c) => n + c.count, 0);
   const sideTotal = side.reduce((n, c) => n + c.count, 0);
-  if (mainTotal < 20) return 'deck precisa de pelo menos 20 cartas';
+  // Apto a jogar: 60+ no deck principal; sideboard com 15 cartas (ou nenhum).
+  if (mainTotal < 60) return `deck precisa de pelo menos 60 cartas (tem ${mainTotal})`;
   if (mainTotal > 300) return 'deck grande demais (máx. 300)';
-  if (sideTotal > 15) return 'sideboard: no máximo 15 cartas';
+  if (sideTotal > 15) return `sideboard: no máximo 15 cartas (tem ${sideTotal})`;
+  if (sideTotal > 0 && sideTotal < 15) return `sideboard precisa ter 15 cartas ou ficar vazio (tem ${sideTotal})`;
 
   const names = [...new Set([...main, ...side].map((e) => e.name))];
   const official = await resolveOfficialCards(names);

@@ -61,7 +61,7 @@ export type PendingDecisionView =
       type: 'effectChoice';
       player: PlayerId;
       prompt: string;
-      mode: 'cards' | 'scry' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
+      mode: 'cards' | 'scry' | 'surveil' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
       min: number;
       max: number;
       skipLabel?: string;

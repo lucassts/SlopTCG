@@ -35,6 +35,8 @@ const adNauseam = mk({ name: 'Ad Nauseam', manaCost: '{3}{B}{B}', typeLine: 'Ins
 const idol = mk({ name: 'Bear Idol', manaCost: '{2}', typeLine: 'Artifact', colors: [], oracleText: '{T}: Add {C}.' });
 const bauble = mk({ name: "Urza's Bauble", manaCost: '{0}', typeLine: 'Artifact', colors: [], oracleText: "{T}, Sacrifice this artifact: Look at a card at random in target player's hand. You draw a card at the beginning of the next turn's upkeep." });
 const peek = mk({ name: 'Peek', manaCost: '{U}', typeLine: 'Instant', colors: ['U'], oracleText: "Look at target player's hand.\nDraw a card." });
+const gaze = mk({ name: 'Otherworldly Gaze', manaCost: '{U}', typeLine: 'Instant', colors: ['U'], oracleText: 'Surveil 3.' });
+const preordain = mk({ name: 'Preordain', manaCost: '{U}', typeLine: 'Sorcery', colors: ['U'], oracleText: 'Scry 2, then draw a card.' });
 
 describe('M41 · relatos', () => {
   it('Barrowgoyf: poder = tipos nos cemitérios, resistência = tipos + 1, mesmo com "1+*" importado como 1', () => {
@@ -139,5 +141,45 @@ describe('M41 · relatos', () => {
     const full = evs2.find((e) => e.type === 'cardsLooked');
     expect(full && full.type === 'cardsLooked' && full.cards.length).toBe(game.state.players.p2.zones.hand.length);
     expect(evs2.some((e) => e.type === 'handRevealed')).toBe(false);
+  });
+
+  it('Vigiar 3: escolhe o que vai para o cemitério e depois a ordem das duas que ficam no topo', () => {
+    const game = makeGame([...FILLER, gaze, grizzlyBears, lightningBolt, idol], FILLER, { topP1: [gaze.id, 'grizzly-bears', 'lightning-bolt', idol.id] });
+    goToMain1(game);
+    put(game, 'p1', 'island');
+    const bears = findIn(game, 'p1', 'hand', 'grizzly-bears'); const bolt = findIn(game, 'p1', 'hand', 'lightning-bolt'); const id = findIn(game, 'p1', 'hand', idol.id);
+    for (const c of [id, bolt, bears]) game.apply('p1', { type: 'manualMove', objectId: c, to: 'library', position: 'top' }); // topo: bears, bolt, idol
+    expect(cast(game, 'p1', findIn(game, 'p1', 'hand', gaze.id)).ok).toBe(true);
+    untilDecision(game);
+    let pd = game.state.pendingDecision;
+    expect(pd?.type === 'effectChoice' && pd.mode).toBe('surveil');
+    game.apply('p1', { type: 'effectChoice', picks: [id] }); // Idol para o cemitério
+    passUntil(game, (s) => s.pendingDecision?.type === 'effectChoice', 10);
+    pd = game.state.pendingDecision;
+    expect(pd?.type === 'effectChoice' && pd.mode).toBe('order');
+    expect(pd?.type === 'effectChoice' && pd.options.length).toBe(2);
+    game.apply('p1', { type: 'effectChoice', picks: [bolt, bears] }); // Bolt fica no topo
+    settle(game);
+    expect(game.state.objects[id].zone).toBe('graveyard');
+    expect(game.state.players.p1.zones.library.slice(0, 2)).toEqual([bolt, bears]);
+  });
+
+  it('Vidência 2: depois de mandar zero para o fundo, escolhe a ordem das duas do topo; com uma só, não pergunta', () => {
+    const game = makeGame([...FILLER, preordain, grizzlyBears, lightningBolt], FILLER, { topP1: [preordain.id, 'grizzly-bears', 'lightning-bolt'] });
+    goToMain1(game);
+    put(game, 'p1', 'island');
+    const bears = findIn(game, 'p1', 'hand', 'grizzly-bears'); const bolt = findIn(game, 'p1', 'hand', 'lightning-bolt');
+    for (const c of [bolt, bears]) game.apply('p1', { type: 'manualMove', objectId: c, to: 'library', position: 'top' }); // topo: bears, bolt
+    expect(cast(game, 'p1', findIn(game, 'p1', 'hand', preordain.id)).ok).toBe(true);
+    untilDecision(game);
+    expect(game.state.pendingDecision?.type === 'effectChoice' && game.state.pendingDecision.mode).toBe('scry');
+    game.apply('p1', { type: 'effectChoice', picks: [] });
+    passUntil(game, (s) => s.pendingDecision?.type === 'effectChoice', 10);
+    const pd = game.state.pendingDecision;
+    expect(pd?.type === 'effectChoice' && pd.mode).toBe('order');
+    game.apply('p1', { type: 'effectChoice', picks: [bolt, bears] });
+    settle(game);
+    expect(game.state.players.p1.zones.hand).toContain(bolt); // comprou o Bolt, que ficou no topo
+    expect(game.state.players.p1.zones.library[0]).toBe(bears);
   });
 });

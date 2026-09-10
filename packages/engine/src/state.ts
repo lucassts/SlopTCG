@@ -409,7 +409,7 @@ export type PendingDecision =
       player: PlayerId;
       prompt: string;
       /** 'cards' → pick objects; 'scry' → picks go to the bottom; text answers: 'nameCard', 'confirm' (yes/no), 'chooseColor' (WUBRG), 'chooseType' (creature type). */
-      mode: 'cards' | 'scry' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
+      mode: 'cards' | 'scry' | 'surveil' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
       options: number[];
       min: number;
       max: number;

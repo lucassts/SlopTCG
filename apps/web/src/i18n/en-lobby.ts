@@ -50,4 +50,7 @@ export const EN_LOBBY: Record<string, string> = {
   'importe um deck acima': 'import a deck above',
   'pronto! aguardando o anfitrião começar…': 'ready! waiting for the host to start…',
   'confirme quando terminar de escolher o deck': 'confirm once you have finished choosing your deck',
+  'deck com {n} cartas — precisa de pelo menos 60': 'deck has {n} cards — it needs at least 60',
+  'sideboard com {n} cartas — o máximo é 15': 'sideboard has {n} cards — the maximum is 15',
+  'sideboard com {n} cartas — precisa ter 15 (ou nenhum)': 'sideboard has {n} cards — it needs 15 (or none)',
 };

@@ -85,6 +85,8 @@ export interface EffectContext {
   divideNext?: { index: number; remaining: number };
   /** tabernacleTax: next creature index. */
   taxNext?: number;
+  /** scry/surveil: cards left on top after the picks — if 2+, the player orders them next. */
+  reorderNext?: number;
   emit: Emit;
 }
 
@@ -331,7 +333,7 @@ interface ChoiceSetup {
   min: number;
   max: number;
   prompt: string;
-  mode: 'cards' | 'scry' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
+  mode: 'cards' | 'scry' | 'surveil' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
   /** 'confirm' with nothing to decide (target gone / can't pay) resolves immediately. */
   autoAnswer?: 'yes' | 'no' | 'skip';
   skipLabel?: string;
@@ -434,7 +436,7 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
         min: 0,
         max: top.length,
         prompt: `Vigiar ${top.length}: selecione as cartas que vão para o CEMITÉRIO (as demais ficam no topo)`,
-        mode: 'scry',
+        mode: 'surveil',
       };
     }
     case 'search': {
@@ -1506,8 +1508,10 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
           library.push(id);
         }
       }
-      emit({ type: 'scried', player: scryer, looked: Math.min(step.count === 'X' ? ctx.xValue ?? 0 : step.count, library.length), bottomed: picks.length });
-      return;
+      const looked = Math.min(step.count === 'X' ? ctx.xValue ?? 0 : step.count, library.length + picks.length);
+      emit({ type: 'scried', player: scryer, looked, bottomed: picks.length });
+      ctx.reorderNext = scryer === ctx.controller ? looked - picks.length : 0;
+      return true;
     }
     case 'surveil': {
       for (const id of picks) {
@@ -1516,7 +1520,8 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         moveWithEvent(state, obj, 'graveyard', 'milled', emit);
       }
       emit({ type: 'scried', player: ctx.controller, looked: step.count, bottomed: 0 });
-      return;
+      ctx.reorderNext = Math.min(step.count, state.players[ctx.controller].zones.library.length + picks.length) - picks.length;
+      return true;
     }
     case 'search': {
       const found: string[] = [];
@@ -1575,6 +1580,8 @@ function branchOf(step: ChoiceStep, outcome: boolean | void, text: string | unde
   if (step.op === 'divideDamage') return outcome === true && ctx?.divideNext ? [{ op: 'divideDamage', amount: step.amount, index: ctx.divideNext.index, remaining: ctx.divideNext.remaining }] : [];
   if (step.op === 'tabernacleTax') return outcome === true && ctx?.taxNext !== undefined ? [{ op: 'tabernacleTax', index: ctx.taxNext }] : [];
   if (step.op === 'planarPick') return outcome === true ? [{ op: 'planarHand' }] : [];
+  // Vidência/vigiar: o que ficou no topo (2+) é reordenado pelo jogador.
+  if ((step.op === 'scry' || step.op === 'surveil') && outcome === true && (ctx?.reorderNext ?? 0) >= 2) return [{ op: 'reorderTop', count: ctx!.reorderNext! }];
   if (step.op === 'mayDo') return text === 'yes' ? step.effect : step.else ?? [];
   if (step.op === 'payOrElse') return outcome === true ? step.then ?? [] : step.else;
   if (step.op === 'if') return outcome === true ? step.then : step.else ?? [];

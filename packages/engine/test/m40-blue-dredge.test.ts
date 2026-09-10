@@ -91,7 +91,9 @@ describe('M40 · Blue Dredge', () => {
     for (const id of game.state.players.p1.zones.battlefield) game.state.objects[id].tapped = false;
     expect(cast(game, 'p1', g, { method: undefined, flashback: true } as never).ok || game.apply('p1', { type: 'castSpell', objectId: g }).ok).toBe(true);
     untilDecision(game);
-    if (game.state.pendingDecision?.type === 'effectChoice') answer(game, 'p1', []);
+    if (game.state.pendingDecision?.type === 'effectChoice') answer(game, 'p1', []); // nada para o cemitério
+    passUntil(game, (s) => s.pendingDecision?.type === 'effectChoice', 10); // as três do topo: ordem
+    if (game.state.pendingDecision?.type === 'effectChoice') answer(game, 'p1', game.state.pendingDecision.options);
     settle(game);
     expect(game.state.objects[g].zone).toBe('exile');
   });

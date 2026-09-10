@@ -74,6 +74,11 @@ export function Lobby({ roomCode, you, players, onSetDeck, onReady, onStart }: L
     try {
       const { main, side } = parseDecklist(text);
       if (main.length === 0) throw new Error(t('nenhuma carta reconhecida — use linhas como "4 Lightning Bolt"'));
+      const mainTotal = main.reduce((n, c) => n + c.count, 0);
+      const sideTotal = side.reduce((n, c) => n + c.count, 0);
+      if (mainTotal < 60) throw new Error(t('deck com {n} cartas — precisa de pelo menos 60', { n: mainTotal }));
+      if (sideTotal > 15) throw new Error(t('sideboard com {n} cartas — o máximo é 15', { n: sideTotal }));
+      if (sideTotal > 0 && sideTotal < 15) throw new Error(t('sideboard com {n} cartas — precisa ter 15 (ou nenhum)', { n: sideTotal }));
       await finishImport(main, side);
     } catch (err) {
       setImportInfo(t('Erro: {msg}', { msg: err instanceof Error ? err.message : String(err) }));
@@ -206,7 +211,7 @@ export function Lobby({ roomCode, you, players, onSetDeck, onReady, onStart }: L
           <input
             ref={fileRef}
             type="file"
-            accept=".txt,.dec,.dek,text/plain"
+            accept=".txt,.dec,.dek,.mwdeck,.cod,.csv,text/plain"
             style={{ display: 'none' }}
             onChange={(e) => {
               const f = e.target.files?.[0];
