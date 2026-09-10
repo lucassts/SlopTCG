@@ -695,6 +695,7 @@ export class Game {
     if (grantedFlashback) obj.card = { ...obj.card, flashback: grantedFlashback }; // Snapcaster: flashback até o fim do turno, custo = custo de mana
     const card = obj.card;
     const method = extra.method;
+    obj.manaSpent = 0; obj.colorsSpent = 0; // recalculado no pagamento (Lavinia / Void Mirror leem isto)
     const cm: import('./cards/types.js').CastMethod | undefined =
       method === 'disturb'
         ? (obj.baseCard?.disturb !== undefined ? { kind: 'disturb', cost: obj.baseCard.disturb, label: `perturbar ${obj.baseCard.disturb}` } : undefined)
@@ -763,6 +764,11 @@ export class Game {
     // Gaddock Teeg: noncreature spells with mana value 4 or greater, or with {X}, can't be cast.
     if (!card.types.includes('Creature') && (manaValueOf(card.manaCost) >= 4 || (card.manaCost ?? '').includes('{X}')) && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id]?.card.gaddockTeeg)))
       { this.fail(playerId, `${card.name}: não pode ser conjurada (Gaddock Teeg)`); return false; }
+    // Lavinia: opponents can't cast noncreature spells with mana value greater than the number of lands they control.
+    if (!card.types.includes('Creature') && s.players[opponentOf(playerId)].zones.battlefield.some((id) => s.objects[id]?.card.laviniaCap)) {
+      const landsN = s.players[playerId].zones.battlefield.filter((id) => s.objects[id]?.card.types.includes('Land')).length;
+      if (manaValueOf(card.manaCost) + (x ?? 0) > landsN) { this.fail(playerId, `${card.name}: valor de mana maior que seus terrenos (Lavinia)`); return false; }
+    }
     // Grafdigger's Cage: players can't cast spells from graveyards or libraries.
     if ((obj.zone === 'graveyard' || obj.zone === 'library') && PLAYER_IDS.some((p) => s.players[p].zones.battlefield.some((id) => s.objects[id]?.card.cageNoCastFromGraveyardLibrary)))
       { this.fail(playerId, `${card.name}: não se conjura mágicas do cemitério ou da biblioteca (Grafdigger's Cage)`); return false; }
@@ -803,7 +809,8 @@ export class Game {
     const viaOmniscience = obj.zone === 'hand' && !method && s.players[playerId].zones.battlefield.some((id) => s.objects[id].card.freeSpellsFromHand);
     const viaFreeExile = viaImpulse && obj.freeCastUntilTurn === s.turn;
     const flashSorcery = card.types.includes('Sorcery') && (s.players[playerId].sorceriesAsFlashUntilTurn ?? -1) > s.turn;
-    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak' || method === 'miracle' || viaAluren || flashSorcery;
+    const flashAll = s.players[playerId].spellsAsFlashTurn === s.turn; // Borne Upon a Wind
+    const isInstant = card.types.includes('Instant') || !!card.keywords?.includes('flash') || method === 'sneak' || method === 'miracle' || viaAluren || flashSorcery || flashAll;
     // Teferi, Time Raveler: cada oponente só conjura em velocidade de feitiço.
     const teferi = s.players[opponentOf(playerId)].zones.battlefield.some((id) => s.objects[id]?.card.opponentsSorcerySpeedOnly);
     if (teferi && !this.sorceryTiming(playerId)) { this.fail(playerId, `${card.name}: Teferi só deixa você conjurar na sua fase principal com a pilha vazia`); return false; }
@@ -1121,7 +1128,7 @@ export class Game {
       for (const t of plan.taps) for (const sym of t.produce) if (sym !== 'C') spentColors.add(sym);
       for (const sym of plan.fromPool) if (sym !== 'C') spentColors.add(sym);
       obj.colorsSpent = spentColors.size;
-      obj.manaSpent = cost.generic + cost.colored.length + cost.colorless + cost.hybrid.length + (cost.phyrexian?.length ?? 0);
+      obj.manaSpent = Math.max(0, cost.generic + cost.colored.length + cost.colorless + cost.hybrid.length + (cost.phyrexian?.length ?? 0) - Math.floor(plan.lifePaid / 2)); // símbolos phyrexianos pagos com vida não contam
       for (const h of helpers) {
         for (const id of h.ids) {
           const o = s.objects[id];
@@ -3300,7 +3307,8 @@ export class Game {
     // Intervening "if" ("…, if you're the monarch, …"): checked as it would trigger.
     if (ability.condition) {
       const cond = ability.condition;
-      const ok = cond.kind === 'subjectIs' || (cond.kind === 'and' && cond.conds.some((c) => c.kind === 'subjectIs'))
+      const viaCtx = (c: import('./cards/types.js').Cond) => c.kind === 'subjectIs' || c.kind === 'triggeringNoManaSpent' || c.kind === 'triggeringNoColoredManaSpent';
+      const ok = viaCtx(cond) || (cond.kind === 'and' && cond.conds.some(viaCtx))
         ? condHolds({ state: s, controller: obj.controller, sourceId: obj.id, sourceName: obj.card.name, targets: [], subjectId, subjectPlayer: extra.subjectPlayer, triggerAmount: extra.triggerAmount, emit: this.emit }, cond)
         : staticConditionHolds(s, obj, cond);
       if (!ok) return;

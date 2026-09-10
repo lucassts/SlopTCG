@@ -206,6 +206,14 @@ export function condHolds(ctx: EffectContext, cond: import('./cards/types.js').C
     const o = ctx.subjectId !== undefined ? ctx.state.objects[ctx.subjectId] : undefined;
     return (o?.manaSpent ?? 0) >= cond.amount;
   }
+  if (cond.kind === 'triggeringNoManaSpent') {
+    const o = ctx.subjectId !== undefined ? ctx.state.objects[ctx.subjectId] : undefined;
+    return (o?.manaSpent ?? 0) === 0;
+  }
+  if (cond.kind === 'triggeringNoColoredManaSpent') {
+    const o = ctx.subjectId !== undefined ? ctx.state.objects[ctx.subjectId] : undefined;
+    return (o?.colorsSpent ?? 0) === 0;
+  }
   if (cond.kind === 'not') return !condHolds(ctx, cond.cond);
   if (cond.kind === 'and') return cond.conds.every((c) => condHolds(ctx, c));
   if (cond.kind === 'or') return cond.conds.some((c) => condHolds(ctx, c));
@@ -2184,6 +2192,10 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
       state.players[ctx.controller].nextSpellUncounterable = true;
       emit({ type: 'fizzled', description: `${state.players[ctx.controller].name}: a próxima mágica conjurada neste turno não pode ser anulada` });
       return;
+    case 'spellsFlashThisTurn':
+      state.players[ctx.controller].spellsAsFlashTurn = state.turn;
+      emit({ type: 'fizzled', description: `${state.players[ctx.controller].name} pode conjurar mágicas como se tivessem lampejo neste turno` });
+      return;
     case 'sorceriesFlashUntilNextTurn':
       state.players[ctx.controller].sorceriesAsFlashUntilTurn = state.turn + 2;
       emit({ type: 'fizzled', description: `${state.players[ctx.controller].name} pode conjurar feitiços como se tivessem lampejo até o seu próximo turno` });
@@ -3213,6 +3225,7 @@ export function castCardFree(state: GameState, obj: GameObject, controller: Play
   obj.controller = controller;
   obj.wasCast = true;
   obj.castFromHand = false;
+  obj.manaSpent = 0; obj.colorsSpent = 0; // de graça: nenhuma mana gasta (Lavinia / Void Mirror)
   obj.kicked = bargained || undefined;
   const chosen = targets ?? [];
   const effect = bargained && card.kicker ? [...(card.spellEffect ?? []), ...card.kicker.effect] : card.spellEffect ?? [];

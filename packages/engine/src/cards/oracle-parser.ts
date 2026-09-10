@@ -218,6 +218,10 @@ function parseSimpleEffect(clause: string): EffectStep[] | null {
     return [{ op: 'addMana', who: 'controller', mana: [...m[1].matchAll(/\{([WUBRGC])\}/g)].map((x) => x[1] as Color | 'C') }];
   }
   if (/^add one mana of any color$/i.test(clause)) return [{ op: 'addManaChoice', who: 'controller' }];
+  // Manamorphose: "Add two mana in any combination of colors." — uma escolha de cor por mana.
+  if ((m = clause.match(/^add (two|three|four|five) mana in any combination of colors$/i))) return Array.from({ length: num(m[1]) ?? 2 }, () => ({ op: 'addManaChoice', who: 'controller' } as EffectStep));
+  // Borne Upon a Wind.
+  if (/^you may cast spells this turn as though they had flash$/i.test(clause)) return [{ op: 'spellsFlashThisTurn' }];
   if (/^add one mana of the chosen color$/i.test(clause)) return [{ op: 'addChosenColorMana' }];
   if ((m = clause.match(/^add ((?:\{[WUBRG]\},? )*(?:or )?\{[WUBRG]\})$/i)) && m[1].includes('or')) {
     return [{ op: 'addManaChoice', who: 'controller', colors: [...m[1].matchAll(/\{([WUBRG])\}/g)].map((x) => x[1] as Color) }];
@@ -542,6 +546,12 @@ function parseEffectText(
   let spec: TargetSpec | undefined;
   let specs: TargetSpec[] | undefined;
   let selfExile = false;
+  // Borne Upon a Wind: "You may cast spells this turn as though they had flash."
+  if ((m = text.match(/^You may cast spells this turn as though they had flash\.\s*(.*)$/i))) {
+    steps.push({ op: 'spellsFlashThisTurn' });
+    text = m[1];
+    if (!text.trim()) return { steps };
+  }
   // Thoughtseize/Duress: frases acopladas, tratadas inteiras; o que sobra
   // ("You lose 2 life.") segue o caminho normal.
   if ((m = text.match(/^Target (player|opponent) reveals their hand\. You choose an? (nonland|noncreature, nonland|creature|instant or sorcery|noncreature)? ?card from it( with mana value (\d+) or less)?(\. That player discards that card| and exile that card)\.?\s*(.*)$/i))) {
@@ -1247,7 +1257,7 @@ interface ParseState {
   flags10: Partial<Pick<CardDefinition, 'drawPlusOneWhenHandSmall' | 'ascend' | 'freeSpellsFromHand' | 'aluren' | 'allLandsAreType' | 'protectionFromColored' | 'winOnDrawFromEmpty'>>;
   flags11: Partial<Pick<CardDefinition, 'landsMultiManaColorless' | 'extraManaOnCreatureTap'>>;
   flags12: Partial<Pick<CardDefinition, 'yourSpellsUncounterable' | 'grantWardLifeOthers' | 'cageNoEnterFromGraveyardLibrary' | 'cageNoCastFromGraveyardLibrary' | 'nonbasicLandsAreMountains'>>;
-  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle' | 'allPermanentsArtifacts' | 'allColorless' | 'manaAnyColor' | 'allCardsChosenColor' | 'controlOpponentSearches' | 'companion' | 'uncounterableColors' | 'demonstrate' | 'creatureOffBattlefield' | 'conditionalCreature' | 'cauldron' | 'noUntapNonbasicLands' | 'opponentsSorcerySpeedOnly' | 'creaturesLoseAbilities'>>;
+  flags13: Partial<Pick<CardDefinition, 'maxHandSize' | 'strive' | 'noUntapLandType' | 'riftstoneGrant' | 'spellModeChoiceIf' | 'cascadeCount' | 'opponentsNonbasicLandsEnterTapped' | 'ensnaringBridge' | 'gaddockTeeg' | 'trinisphere' | 'lockAbilitiesOfTypes' | 'noGraveyardTargets' | 'revealOpponentHandOnEnter' | 'activationTaxChosenName' | 'noManaToCast' | 'castFromGraveyardSelf' | 'escalate' | 'tabernacle' | 'allPermanentsArtifacts' | 'allColorless' | 'manaAnyColor' | 'allCardsChosenColor' | 'controlOpponentSearches' | 'companion' | 'uncounterableColors' | 'demonstrate' | 'creatureOffBattlefield' | 'conditionalCreature' | 'cauldron' | 'noUntapNonbasicLands' | 'opponentsSorcerySpeedOnly' | 'creaturesLoseAbilities' | 'laviniaCap'>>;
   flashbackPayLife?: number;
   /** Leva 6a (Legacy, parte 2). */
   flags9: Partial<Pick<CardDefinition, 'everyNonbasicLandType' | 'exileNoncastCreatures' | 'reanimateAura' | 'entersUnlessDiscard' | 'grantToNamed'>>;
@@ -2105,6 +2115,22 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   }
   if (/^Nonbasic lands don't untap during their controllers' untap steps\.$/i.test(line)) { st.flags13.noUntapNonbasicLands = true; return true; }
   if (/^Each opponent can cast spells only any time they could cast a sorcery\.$/i.test(line)) { st.flags13.opponentsSorcerySpeedOnly = true; return true; }
+  // ---- Leva 22: Lavinia, Void Mirror, Undermountain Adventurer
+  if (/^Each opponent can't cast noncreature spells with mana value greater than the number of lands that player controls\.$/i.test(line)) { st.flags13.laviniaCap = true; return true; }
+  if (/^Whenever an opponent casts a spell, if no mana was spent to cast it, counter that spell\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'opponentCastsSpell' }, condition: { kind: 'triggeringNoManaSpent' }, effect: [{ op: 'counterSpell', what: 'triggering' }], text: 'anula a mágica do oponente conjurada sem gastar mana' });
+    return true;
+  }
+  if (/^Whenever a player casts a spell, if no colored mana was spent to cast it, counter that spell\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'anyCastsSpell' }, condition: { kind: 'triggeringNoColoredManaSpent' }, effect: [{ op: 'counterSpell', what: 'triggering' }], text: 'anula a mágica conjurada sem gastar mana colorida' });
+    return true;
+  }
+  if ((m = line.match(/^\{T\}: Add ((?:\{[WUBRGC]\})+)\. If you've completed a dungeon, add (\w+) (\{[WUBRGC]\}) instead\.$/i))) {
+    const base = [...m[1].matchAll(/\{([WUBRGC])\}/g)].map((x) => x[1] as ManaSymbol);
+    const n = num(m[2]) ?? 0; const sym = m[3].slice(1, -1) as ManaSymbol;
+    st.abilities.push({ kind: 'activated', cost: { tap: true }, isManaAbility: true, text: `Adicionar ${m[1]} (${m[2]} ${m[3]} se completou uma masmorra)`, effect: [{ op: 'addMana', who: 'controller', mana: base }, { op: 'if', cond: { kind: 'completedDungeon' }, then: [{ op: 'addMana', who: 'controller', mana: Array.from({ length: Math.max(0, n - base.length) }, () => sym) }] }] });
+    return true;
+  }
   if (/^Creatures lose all abilities\.$/i.test(line)) { st.flags13.creaturesLoseAbilities = true; return true; }
   if (/^When ~ enters, target instant or sorcery card in your graveyard gains flashback until end of turn\. The flashback cost is equal to its mana cost\.$/i.test(line)) {
     st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, targets: [{ what: 'card', zone: 'graveyard', ownedBy: 'you', typeAnyOf: ['Instant', 'Sorcery'] }], effect: [{ op: 'grantFlashbackUntilEot', what: 'target:0' }], text: 'carta de instantâneo ou feitiço no seu cemitério ganha flashback (custo = custo de mana) até o fim do turno' });

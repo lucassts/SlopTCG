@@ -325,6 +325,8 @@ export interface PlayerState {
   nextSpellUncounterable?: boolean;
   /** Teferi +1: sorceries have flash while turn < this. */
   sorceriesAsFlashUntilTurn?: number;
+  /** Borne Upon a Wind: every spell has flash during this turn. */
+  spellsAsFlashTurn?: number;
   /** Arena of Glory: the next creature spell cast this turn gains haste. */
   hasteManaTurn?: number;
   /** Firebending: mana that survives step changes until the end of combat. */
@@ -782,7 +784,7 @@ export function staticConditionHolds(state: GameState, source: GameObject, cond:
     case 'escaped': return source.castMethod === 'escape';
     case 'sourceAttackedThisTurn': return !!source.attackedThisTurn;
     case 'targetCmcAtMostColorsSpent': return false; // needs the effect context (condHolds)
-    case 'triggeringManaSpentAtLeast': return false; // needs the effect context (condHolds)
+    case 'triggeringManaSpentAtLeast': case 'triggeringNoManaSpent': case 'triggeringNoColoredManaSpent': return false; // needs the effect context (condHolds)
     case 'sacrificedWasSubtype': return false; // needs the effect context (condHolds)
     case 'descended': return (state.players[me].permanentCardsToGraveyardThisTurn ?? 0) > 0;
     case 'sourceUntapped': return !source.tapped;

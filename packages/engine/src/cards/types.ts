@@ -41,6 +41,10 @@ export type Cond =
   | { kind: 'sacrificedWasSubtype'; subtype: string }
   /** Exhibition Tidecaller: the triggering spell was cast with at least N mana. */
   | { kind: 'triggeringManaSpentAtLeast'; amount: number }
+  /** Lavinia: "if no mana was spent to cast it". */
+  | { kind: 'triggeringNoManaSpent' }
+  /** Void Mirror: "if no colored mana was spent to cast it". */
+  | { kind: 'triggeringNoColoredManaSpent' }
   /** Numeric comparison between two amounts ("If X is greater than or equal to the number of cards in your library"). */
   | { kind: 'compare'; left: DynAmount; cmp: 'gte' | 'gt' | 'lte' | 'lt' | 'eq'; right: DynAmount }
   // ---- Leva 6a
@@ -694,6 +698,8 @@ export type EffectStep =
   /** (choice) Witherbloom Command: return a matching card from your graveyard to your hand. */
   /** Teferi +1: until your next turn, sorceries have flash. */
   | { op: 'sorceriesFlashUntilNextTurn' }
+  /** Borne Upon a Wind: "You may cast spells this turn as though they had flash." */
+  | { op: 'spellsFlashThisTurn' }
   /** Reflexive "When you do…" with its own target (Agatha's Soul Cauldron). */
   | { op: 'reflexiveTargeted'; spec: TargetSpec; effect: EffectScript; text: string }
   /** Talon Gates of Madara: the permanent phases out (returns at its controller's next untap step). */
@@ -1099,6 +1105,8 @@ export interface CardDefinition {
   opponentsSorcerySpeedOnly?: boolean;
   /** Dress Down. */
   creaturesLoseAbilities?: boolean;
+  /** Lavinia: opponents can't cast noncreature spells with mana value greater than the number of lands they control. */
+  laviniaCap?: boolean;
   /** Arena of Glory: mana that gives haste to a creature spell it pays for (approximation: the next creature spell this turn). */
   hasteMana?: boolean;
   /** Wastescape Battlemage: "Kicker {A} and/or {B}" — a second, independent kicker cost. */
