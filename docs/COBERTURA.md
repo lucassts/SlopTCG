@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-10, v0.38.0 — Sheltered by Ghosts, Chancellor of the Annex, Call Forth the Tempest, Curie, Abhorrent Oculus; Legacy a 99,1%)
+## Estado (2026-09-11, v0.39.0 — delve escolhido pelo jogador antes do pagamento; Legacy a 99,1%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -931,6 +931,23 @@ código de coleção "40k"). O "erro" é a validação de deck apto da v0.34
 — "deck com 52 cartas no main (27 linhas somadas) e 15 no sideboard —
 precisa de pelo menos 60 no main" — para o motivo ficar evidente sem
 abrir o arquivo. Verificado no navegador colando o texto do Bant.
+
+**v0.39.0 — delve escolhido antes do pagamento (Murktide Regent).** Lucas:
+"o player precisa decidir o delve primeiro antes de pagar as manas, porque
+o delve altera o custo total, e pode ser zero". Antes a engine escolhia
+sozinha as cartas do cemitério quando a mana não bastava. Agora a ação
+`castSpell` aceita `delve: number[]` — as cartas do cemitério do próprio
+conjurador (sem repetição, sem a própria carta, no máximo o custo
+genérico); `[]` significa sem delve; sem o campo, a engine continua
+escolhendo sozinha (compatibilidade com testes e com o simulador). As
+cartas reduzem `cost.generic` antes do `planPayment`, então em mana manual
+o pedido de pagamento já vem reduzido ("Pague {1}{U}{U}" com quatro cartas
+exiladas de {5}{U}{U}) e o exílio só acontece quando o pagamento fecha
+(cancelar não perde as cartas). Cliente: ao clicar numa carta com delve,
+`beginCast` abre a caixa "Nome — delve" (à direita, como as decisões) com
+as cartas do cemitério em lista, "Exilar N e pagar o resto", "Sem delve" e
+"Cancelar"; a escolha segue em `targeting.delve` até a ação. Verificado no
+navegador com dois jogadores. 540 testes (m46: 5, incluindo mana manual).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

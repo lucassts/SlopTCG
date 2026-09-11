@@ -121,6 +121,8 @@ interface Targeting {
   /** "Choose one or both": several modes. */
   modes?: number[];
   replicateTimes?: number;
+  /** Delve: graveyard cards chosen before paying. */
+  delve?: number[];
 }
 
 /** A little menu of things a clicked card can do (cast / cycle / abilities…). */
@@ -171,6 +173,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const [modalSel, setModalSel] = useState<Set<number>>(new Set());
   const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
   const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' | 'sideboard' } | null>(null);
+  const [delvePick, setDelvePick] = useState<{ cv: CardView; mode: number | undefined; fromGraveyard: boolean; extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[]; face?: 'back'; fuse?: boolean; delve?: number[] }; options: CardView[]; max: number; chosen: number[] } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   // Perguntas de conjuração/ataque (X, kicker, barganha, buyback, replicar, vida, casualty, exert…):
   // modal no mesmo padrão das decisões da engine — nada de confirm()/prompt() do navegador.
@@ -460,6 +463,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           entwine: t.entwine,
           modes: t.modes,
           replicateTimes: t.replicateTimes,
+          delve: t.delve,
         });
       } else {
         // Ordem dos picks: cartas da mão (custo de descarte) → criatura a virar (station) → sacrifícios → alvos.
@@ -648,10 +652,18 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     cv: CardView,
     mode: number | undefined,
     fromGraveyard = false,
-    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[]; face?: 'back'; fuse?: boolean } = {},
+    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[]; face?: 'back'; fuse?: boolean; delve?: number[] } = {},
   ) => {
     // Leva 5b: conjurar o verso (MDFC, aventura, metade de carta dividida) usa a definição do verso.
     const def = (extra.face === 'back' || extra.method === 'disturb') && cv.card.backFace ? cv.card.backFace : cv.card;
+    // Delve (Murktide Regent): o jogador escolhe as cartas do cemitério antes de pagar — pode ser nenhuma.
+    if (def.delve && extra.delve === undefined) {
+      const options = me.graveyard.filter((c) => c.objectId !== cv.objectId);
+      const max = Math.min(options.length, [...(def.manaCost ?? '').matchAll(/\{(\d+)\}/g)].reduce((n, m) => n + parseInt(m[1], 10), 0));
+      if (options.length === 0 || max === 0) return beginCast(cv, mode, fromGraveyard, { ...extra, delve: [] });
+      setDelvePick({ cv, mode, fromGraveyard, extra, options, max, chosen: [] });
+      return;
+    }
     let x: number | undefined;
     if (def.manaCost && def.manaCost.includes('{X}')) {
       const n = await askNumber(def.name, t('Escolha o valor de X'), '1');
@@ -725,11 +737,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               : def.spellTargets ?? [];
     const specs = [...handSpecs, ...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse, delve: extra.delve });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : extra.modes ? `${def.name} — ${extra.modes.map((i) => def.spellModes?.[i]?.label).join(' + ')}` : def.name;
       const label = handPickCount > 0 ? t('{base} (escolha {what} a descartar primeiro)', { base, what: extra.method === 'retrace' ? t('o terreno') : t('a(s) carta(s)') }) : sacCount > 0 ? t('{base} (escolha o sacrifício primeiro)', { base }) : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, delve: extra.delve, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
     }
   };
 
@@ -1422,6 +1434,37 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         </div>
       )}
 
+      {/* -------- delve: cartas do cemitério antes do pagamento -------- */}
+      {delvePick && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>{delvePick.cv.card.name} — delve</h2>
+            <div className="muted">{t('Escolha até {max} carta(s) do cemitério para exilar — cada uma paga {1} do custo. Pode ser nenhuma.', { max: delvePick.max })}</div>
+            <div className="reveal-cards" style={{ maxHeight: '40vh', overflowY: 'auto' }}>
+              {delvePick.options.map((c) => (
+                <CardRow
+                  key={c.objectId}
+                  card={c}
+                  selected={delvePick.chosen.includes(c.objectId)}
+                  onClick={() => setDelvePick((d) => {
+                    if (!d) return d;
+                    const has = d.chosen.includes(c.objectId);
+                    if (!has && d.chosen.length >= d.max) return d;
+                    return { ...d, chosen: has ? d.chosen.filter((id) => id !== c.objectId) : [...d.chosen, c.objectId] };
+                  })}
+                />
+              ))}
+            </div>
+            <div className="row" style={{ justifyContent: 'center' }}>
+              <button onClick={() => { const d = delvePick; setDelvePick(null); void beginCast(d.cv, d.mode, d.fromGraveyard, { ...d.extra, delve: d.chosen }); }}>
+                {t('Exilar {n} e pagar o resto', { n: delvePick.chosen.length })}
+              </button>
+              <button onClick={() => { const d = delvePick; setDelvePick(null); void beginCast(d.cv, d.mode, d.fromGraveyard, { ...d.extra, delve: [] }); }}>{t('Sem delve')}</button>
+              <button onClick={() => setDelvePick(null)}>{t('Cancelar')}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* -------- escolha da cor de mana ("any color") -------- */}
       {colorPick && (
         <div className="mulligan-overlay" onClick={() => setColorPick(null)}>

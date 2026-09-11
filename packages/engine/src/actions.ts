@@ -43,6 +43,8 @@ export type PlayerAction =
         | 'bestow' | 'emerge' | 'mayhem' | 'retrace' | 'freerunning' | 'overload' | 'sneak' | 'miracle' | 'prototype' | 'disturb';
       /** Escape: graveyard cards exiled as part of the cost. */
       escapeExile?: number[];
+      /** Delve: graveyard cards chosen by the player before paying (each pays {1}); [] = no delve. Omitted = the engine picks. */
+      delve?: number[];
       /** Morph/Disguise: cast face down as a 2/2 for {3}. */
       faceDown?: boolean;
       /** Pay buyback. */

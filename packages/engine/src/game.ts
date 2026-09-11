@@ -69,6 +69,7 @@ export interface GameOptions {
 /** Extra options of a castSpell action (alternative methods, costs, faces). */
 interface CastExtra {
   method?: Extract<import('./actions.js').PlayerAction, { type: 'castSpell' }>['method'];
+  delve?: number[];
   altReturnLand?: number;
   kickers?: number[];
   escapeExile?: number[];
@@ -357,6 +358,7 @@ export class Game {
           altReturnLand: action.altReturnLand,
           kickers: action.kickers,
           escapeExile: action.escapeExile,
+          delve: action.delve,
           faceDown: action.faceDown,
           buyback: action.buyback,
           kickerTimes: action.kickerTimes,
@@ -1107,16 +1109,26 @@ export class Game {
         cost.colored = []; cost.colorless = 0; cost.hybrid = []; cost.phyrexian = [];
       }
       const anyColor = this.manaAnyColor() || (obj.exiledAs === 'agent' && obj.playableBy === playerId);
+      const helpers: { kind: 'convoke' | 'improvise' | 'delve'; ids: number[] }[] = [];
+      // Delve escolhido pelo jogador (Murktide Regent): as cartas do cemitério vêm antes do pagamento
+      // e reduzem o custo genérico; [] = sem delve. Sem o campo, a engine escolhe sozinha (abaixo).
+      const delveIds = card.delve && extra.delve ? extra.delve : undefined;
+      if (delveIds) {
+        if (new Set(delveIds).size !== delveIds.length || delveIds.some((id) => id === obj.id || s.objects[id]?.zone !== 'graveyard' || s.objects[id]?.owner !== playerId))
+          { this.fail(playerId, 'delve: escolha cartas do seu cemitério'); return false; }
+        if (delveIds.length > cost.generic) { this.fail(playerId, `delve: no máximo ${cost.generic} carta(s) — o custo genérico`); return false; }
+        cost.generic -= delveIds.length;
+        if (delveIds.length > 0) helpers.push({ kind: 'delve', ids: [...delveIds] });
+      }
       let plan = card.noManaToCast ? null : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor });
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
       // tap creatures / artifacts, exile graveyard cards, one generic each.
-      const helpers: { kind: 'convoke' | 'improvise' | 'delve'; ids: number[] }[] = [];
-      if (!plan && (card.convoke || card.improvise || card.delve)) {
+      if (!plan && (card.convoke || card.improvise || (card.delve && !delveIds))) {
         const pool = (pred: (o: GameObject) => boolean) => s.players[playerId].zones.battlefield.map((id) => s.objects[id]).filter((o) => !o.tapped && pred(o)).map((o) => o.id);
         const candidates: { kind: 'convoke' | 'improvise' | 'delve'; ids: number[] }[] = [];
         if (card.convoke) candidates.push({ kind: 'convoke', ids: pool((o) => isCreature(o)) });
         if (card.improvise) candidates.push({ kind: 'improvise', ids: pool((o) => o.card.types.includes('Artifact') && !isCreature(o)) });
-        if (card.delve) candidates.push({ kind: 'delve', ids: s.players[playerId].zones.graveyard.filter((id) => id !== obj.id) });
+        if (card.delve && !delveIds) candidates.push({ kind: 'delve', ids: s.players[playerId].zones.graveyard.filter((id) => id !== obj.id) });
         for (const c of candidates) {
           for (const id of c.ids) {
             if (cost.generic <= 0) break;
