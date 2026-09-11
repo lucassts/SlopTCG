@@ -920,6 +920,17 @@ e o pop-up da pilha na direita com o botão livre. Auditor: 13.890 full /
 é o simulador não escolher o custo de exílio da Curie, como já acontece
 com estacionar). Legacy 99,0% → 99,1% (424 de 509 full, 85 com lacuna).
 535 testes (m45: 7).
+
+**v0.38.1 — mensagem de deck curto com a conta.** Lucas reportou que os
+arquivos "Deck - Bant lands.txt" e "Deck - Jund.txt" "dão erro e sobem
+menos cartas" (52 e 56). Verificado: os arquivos têm mesmo 52+15 e 56+12
+(sem BOM, sem linha escondida, sem caractere estranho; parser reconhece
+as 27 linhas de cada main, incluindo "Minsc & Boo, Timeless Heroes" e
+código de coleção "40k"). O "erro" é a validação de deck apto da v0.34
+(mínimo 60 no main; sideboard 0 ou 15). A mensagem agora mostra a conta
+— "deck com 52 cartas no main (27 linhas somadas) e 15 no sideboard —
+precisa de pelo menos 60 no main" — para o motivo ficar evidente sem
+abrir o arquivo. Verificado no navegador colando o texto do Bant.
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

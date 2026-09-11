@@ -76,7 +76,7 @@ export function Lobby({ roomCode, you, players, onSetDeck, onReady, onStart }: L
       if (main.length === 0) throw new Error(t('nenhuma carta reconhecida — use linhas como "4 Lightning Bolt"'));
       const mainTotal = main.reduce((n, c) => n + c.count, 0);
       const sideTotal = side.reduce((n, c) => n + c.count, 0);
-      if (mainTotal < 60) throw new Error(t('deck com {n} cartas — precisa de pelo menos 60', { n: mainTotal }));
+      if (mainTotal < 60) throw new Error(t('deck com {n} cartas no main ({lines} linhas somadas) e {side} no sideboard — precisa de pelo menos 60 no main', { n: mainTotal, lines: main.length, side: sideTotal }));
       if (sideTotal > 15) throw new Error(t('sideboard com {n} cartas — o máximo é 15', { n: sideTotal }));
       if (sideTotal > 0 && sideTotal < 15) throw new Error(t('sideboard com {n} cartas — precisa ter 15 (ou nenhum)', { n: sideTotal }));
       await finishImport(main, side);
