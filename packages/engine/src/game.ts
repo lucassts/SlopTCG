@@ -380,7 +380,7 @@ export class Game {
       case 'chooseTargets':
         return this.doChooseTargets(playerId, action.targets);
       case 'activateAbility':
-        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices, action.manaColor, action.discards, action.tapCreature, action.x);
+        return this.doActivateAbility(playerId, action.objectId, action.abilityIndex, action.targets ?? [], action.sacrifices, action.manaColor, action.discards, action.tapCreature, action.x, action.gyExile);
       case 'crew':
         return this.doCrew(playerId, action.objectId, action.creatures);
       case 'chooseMode':
@@ -706,6 +706,7 @@ export class Game {
     const card = obj.card;
     const method = extra.method;
     obj.manaSpent = 0; obj.colorsSpent = 0; // recalculado no pagamento (Lavinia / Void Mirror leem isto)
+    obj.uncounterable = undefined; // marcado de novo pela Cavern of Souls / Mistrise Village nesta conjuração
     const cm: import('./cards/types.js').CastMethod | undefined =
       method === 'disturb'
         ? (obj.baseCard?.disturb !== undefined ? { kind: 'disturb', cost: obj.baseCard.disturb, label: `perturbar ${obj.baseCard.disturb}` } : undefined)
@@ -730,7 +731,8 @@ export class Game {
     if (method === 'suspend') {
       if (!card.suspend || obj.zone !== 'hand') { this.fail(playerId, 'essa carta não tem suspender'); return false; }
       if (!this.sorceryTiming(playerId) && !card.types.includes('Instant')) { this.fail(playerId, 'suspender: só na sua fase principal com a pilha vazia'); return false; }
-      const plan = planPayment(s, playerId, parseCost(card.suspend.cost));
+      const plan = planPayment(s, playerId, parseCost(card.suspend.cost), { poolOnly: !!this.options.manualMana });
+      if (!plan && this.options.manualMana) return this.deferPayment(playerId, `${card.name} (suspender)`, parseCost(card.suspend.cost));
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
       moveWithEvent(s, obj, 'exile', 'exiled', this.emit);
@@ -1120,7 +1122,7 @@ export class Game {
         cost.generic -= delveIds.length;
         if (delveIds.length > 0) helpers.push({ kind: 'delve', ids: [...delveIds] });
       }
-      let plan = card.noManaToCast ? null : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor });
+      let plan = card.noManaToCast ? null : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor, spellCard: card });
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
       // tap creatures / artifacts, exile graveyard cards, one generic each.
       if (!plan && (card.convoke || card.improvise || (card.delve && !delveIds))) {
@@ -1134,7 +1136,7 @@ export class Game {
             if (cost.generic <= 0) break;
             cost.generic -= 1;
             (helpers.find((h) => h.kind === c.kind) ?? helpers[helpers.push({ kind: c.kind, ids: [] }) - 1]).ids.push(id);
-            plan = card.noManaToCast ? (cost.generic <= 0 ? { taps: [], fromPool: [], lifePaid: 0 } : null) : planPayment(s, playerId, cost, { anyColor });
+            plan = card.noManaToCast ? (cost.generic <= 0 ? { taps: [], fromPool: [], lifePaid: 0 } : null) : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor, spellCard: card });
             if (plan) break;
           }
           if (plan) break;
@@ -1143,6 +1145,7 @@ export class Game {
       if (!plan && this.options.manualMana) return this.deferPayment(playerId, card.name, cost);
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
+      if (plan.fromTagged?.length) { obj.uncounterable = true; this.emit({ type: 'fizzled', description: `${card.name}: paga com mana da ${s.players[playerId].manaTagged?.[0]?.source ?? 'Cavern of Souls'} — não pode ser anulada` }); }
       // Sunburst / converge: distinct colors of mana actually spent.
       const spentColors = new Set<string>();
       for (const t of plan.taps) for (const sym of t.produce) if (sym !== 'C') spentColors.add(sym);
@@ -1292,7 +1295,8 @@ export class Game {
     if (!obj || obj.zone !== 'battlefield' || obj.controller !== playerId || !obj.faceDown || (!obj.card.morph && !manifestUp))
       { this.fail(playerId, 'isso não é uma permanente sua virada para baixo'); return false; }
     const upCost = obj.card.morph ? obj.card.morph.cost : obj.card.manaCost ?? '{0}';
-    const plan = planPayment(s, playerId, parseCost(upCost));
+    const plan = planPayment(s, playerId, parseCost(upCost), { poolOnly: !!this.options.manualMana });
+    if (!plan && this.options.manualMana) return this.deferPayment(playerId, `${obj.card.name} (virar para cima)`, parseCost(upCost));
     if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
     this.payWithPlan(playerId, plan);
     obj.faceDown = false;
@@ -1319,7 +1323,8 @@ export class Game {
       { this.fail(playerId, 'ninjutsu: só depois dos bloqueadores serem declarados, no seu turno'); return false; }
     if (!atk || atk.zone !== 'battlefield' || atk.controller !== playerId || !atk.attacking || atk.wasBlocked)
       { this.fail(playerId, 'escolha um atacante seu não bloqueado'); return false; }
-    const plan = planPayment(s, playerId, parseCost(ninja.card.ninjutsu));
+    const plan = planPayment(s, playerId, parseCost(ninja.card.ninjutsu), { poolOnly: !!this.options.manualMana });
+    if (!plan && this.options.manualMana) return this.deferPayment(playerId, `${ninja.card.name} (ninjutsu)`, parseCost(ninja.card.ninjutsu));
     if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
     this.payWithPlan(playerId, plan);
     const pw = atk.pwTarget;
@@ -1482,6 +1487,7 @@ export class Game {
     discards?: number[],
     tapCreature?: number,
     x?: number,
+    gyExile?: number[],
   ): boolean {
     const s = this.state;
     const obj = s.objects[objectId];
@@ -1576,11 +1582,19 @@ export class Game {
       const { counter, count } = ability.cost.removeCounters;
       if ((obj.counters[counter] ?? 0) < count) { this.fail(playerId, `${obj.card.name}: precisa de ${count} marcador(es) ${counter}`); return false; }
     }
-    let gyExile: number[] = [];
+    const gyExileGiven = gyExile;
+    gyExile = [];
     if (ability.cost.exileFromGraveyard) {
       const { filter, count } = ability.cost.exileFromGraveyard;
-      gyExile = s.players[playerId].zones.graveyard.filter((id) => id !== obj.id && cardMatchesFilter(s.objects[id].card, filter)).slice(0, count);
-      if (gyExile.length < count) { this.fail(playerId, `${obj.card.name}: precisa exilar ${count} carta(s) do cemitério`); return false; }
+      if (gyExileGiven && gyExileGiven.length > 0) {
+        // Escolhidas pelo jogador: têm de ser exatamente N cartas do seu cemitério que satisfaçam o filtro.
+        gyExile = [...gyExileGiven];
+        const bad = gyExile.length !== count || new Set(gyExile).size !== gyExile.length || gyExile.some((id) => { const g = s.objects[id]; return !g || g.zone !== 'graveyard' || g.owner !== playerId || id === obj.id || !cardMatchesFilter(g.card, filter); });
+        if (bad) { this.fail(playerId, `${obj.card.name}: escolha ${count} carta(s) do seu cemitério para exilar`); return false; }
+      } else {
+        gyExile = s.players[playerId].zones.graveyard.filter((id) => id !== obj.id && cardMatchesFilter(s.objects[id].card, filter)).slice(0, count);
+        if (gyExile.length < count) { this.fail(playerId, `${obj.card.name}: precisa exilar ${count} carta(s) do cemitério`); return false; }
+      }
     }
     let landBack: number | undefined;
     if (ability.cost.returnLand) {
@@ -1834,7 +1848,8 @@ export class Game {
         { this.fail(playerId, 'escolha uma permanente válida para sacrificar ao reciclar'); return false; }
     }
     if (cycling.mana) {
-      const plan = planPayment(s, playerId, parseCost(cycling.mana));
+      const plan = planPayment(s, playerId, parseCost(cycling.mana), { poolOnly: !!this.options.manualMana });
+      if (!plan && this.options.manualMana) return this.deferPayment(playerId, `${obj.card.name} (ciclar)`, parseCost(cycling.mana));
       if (!plan) { this.fail(playerId, 'mana insuficiente'); return false; }
       this.payWithPlan(playerId, plan);
     }
@@ -2234,6 +2249,7 @@ export class Game {
       // Firebending: mana added "until end of combat" survives the combat steps.
       ps.manaPool = inCombat && ps.stickyPool ? { ...ps.stickyPool } : { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
       ps.manaPoolRestricted = undefined;
+      ps.manaTagged = undefined;
       if (!inCombat) ps.stickyPool = undefined;
     }
     this.emit({ type: 'stepChanged', step });

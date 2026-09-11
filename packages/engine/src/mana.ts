@@ -98,6 +98,8 @@ export interface PaymentPlan {
   fromRestricted?: ManaSymbol[];
   /** Life paid for phyrexian symbols without a matching source. */
   lifePaid: number;
+  /** Cavern of Souls: tagged floating mana spent on this (creature) spell — it can't be countered. */
+  fromTagged?: { sym: ManaSymbol; creatureType: string }[];
 }
 
 /**
@@ -105,14 +107,28 @@ export interface PaymentPlan {
  * Greedy: colored requirements claim matching sources first, then generic
  * consumes whatever is left. Correct for single-color producers (MVP).
  */
-export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCost, opts: { poolOnly?: boolean; /** Mycosynth Lattice / Opposition Agent: colored requirements can be paid with any mana. */ anyColor?: boolean } = {}): PaymentPlan | null {
+export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCost, opts: { /** The spell being cast: tagged mana (Cavern of Souls) only pays for an eligible creature spell. */ spellCard?: import('./cards/types.js').CardDefinition; poolOnly?: boolean; /** Mycosynth Lattice / Opposition Agent: colored requirements can be paid with any mana. */ anyColor?: boolean } = {}): PaymentPlan | null {
   const player = state.players[playerId];
   const pool: Record<ManaSymbol, number> = { ...player.manaPool };
   const restricted: Record<ManaSymbol, number> = { ...(player.manaPoolRestricted ?? { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }) };
   const taps: PaymentPlan['taps'] = [];
   const fromPool: ManaSymbol[] = [];
   const fromRestricted: ManaSymbol[] = [];
+  const fromTagged: { sym: ManaSymbol; creatureType: string }[] = [];
   let lifePaid = 0;
+  // Cavern of Souls: mana marcada só paga criatura do tipo escolhido (e a torna não anulável); para o resto ela nem existe.
+  const eligibleTags: Record<ManaSymbol, string[]> = { W: [], U: [], B: [], R: [], G: [], C: [] };
+  for (const t of player.manaTagged ?? []) {
+    const ok = !!opts.spellCard && opts.spellCard.types.includes('Creature') && opts.spellCard.subtypes.includes(t.creatureType);
+    if (ok) eligibleTags[t.sym].push(t.creatureType); else pool[t.sym] = Math.max(0, pool[t.sym] - 1);
+  }
+  // Tira do pool: a mana marcada elegível sai primeiro (é a que dá o bônus e não serve para mais nada).
+  const takePool = (sym: ManaSymbol) => {
+    pool[sym] -= 1;
+    fromPool.push(sym);
+    const tag = eligibleTags[sym].shift();
+    if (tag !== undefined) fromTagged.push({ sym, creatureType: tag });
+  };
   if (opts.anyColor) {
     // Qualquer mana serve para as partes coloridas; {C} continua exigindo incolor.
     cost = { ...cost, generic: cost.generic + cost.colored.length + cost.hybrid.length + cost.phyrexian.length, colored: [], hybrid: [], phyrexian: [] };
@@ -168,22 +184,14 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
       const fromRestrictedSym = req.find((c) => restricted[c] > 0);
       if (fromRestrictedSym) { restricted[fromRestrictedSym] -= 1; fromRestricted.push(fromRestrictedSym); continue; }
       const fromPoolSym = req.find((c) => pool[c] > 0);
-      if (fromPoolSym) {
-        pool[fromPoolSym] -= 1;
-        fromPool.push(fromPoolSym);
-        continue;
-      }
+      if (fromPoolSym) { takePool(fromPoolSym); continue; }
       if (claimSource((syms) => req.find((c) => syms.includes(c)) ?? null)) continue;
       return null;
     }
     if (typeof req === 'object') {
       const c = req.phyrexian;
       if (restricted[c] > 0) { restricted[c] -= 1; fromRestricted.push(c); continue; }
-      if (pool[c] > 0) {
-        pool[c] -= 1;
-        fromPool.push(c);
-        continue;
-      }
+      if (pool[c] > 0) { takePool(c); continue; }
       if (claimSource((syms) => (syms.includes(c) ? c : null))) continue;
       if (player.life - lifePaid >= 2) {
         lifePaid += 2; // sem a cor: paga 2 de vida (phyrexiano)
@@ -193,25 +201,17 @@ export function planPayment(state: GameState, playerId: PlayerId, cost: ParsedCo
     }
     if (req !== 'generic') {
       if (req !== 'C' && restricted[req] > 0) { restricted[req] -= 1; fromRestricted.push(req); continue; }
-      if (pool[req] > 0) {
-        pool[req] -= 1;
-        fromPool.push(req);
-        continue;
-      }
+      if (pool[req] > 0) { takePool(req); continue; }
       if (claimSource((syms) => (syms.includes(req) ? req : null))) continue;
       return null;
     }
     // generic: floating mana of any type first, then any untapped source
     const anyPool = (Object.keys(pool) as ManaSymbol[]).find((s) => pool[s] > 0);
-    if (anyPool) {
-      pool[anyPool] -= 1;
-      fromPool.push(anyPool);
-      continue;
-    }
+    if (anyPool) { takePool(anyPool); continue; }
     if (claimSource((syms) => syms[0] ?? null)) continue;
     return null;
   }
-  return { taps, fromPool, fromRestricted: fromRestricted.length > 0 ? fromRestricted : undefined, lifePaid };
+  return { taps, fromPool, fromRestricted: fromRestricted.length > 0 ? fromRestricted : undefined, lifePaid, fromTagged: fromTagged.length > 0 ? fromTagged : undefined };
 }
 
 export function canPay(state: GameState, playerId: PlayerId, cost: ParsedCost): boolean {
@@ -221,12 +221,18 @@ export function canPay(state: GameState, playerId: PlayerId, cost: ParsedCost): 
 export function emptyPool(player: PlayerState): boolean {
   if (poolTotal(player.manaPool) === 0) return false;
   player.manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+  player.manaTagged = undefined;
   return true;
 }
 
 /** Subtract what a plan consumed from the floating pools (normal + Jegantha's restricted). */
-export function consumePlanPools(player: { manaPool: ManaPool; manaPoolRestricted?: ManaPool }, plan: PaymentPlan): void {
+export function consumePlanPools(player: { manaPool: ManaPool; manaPoolRestricted?: ManaPool; manaTagged?: { sym: ManaSymbol; creatureType: string; source: string }[] }, plan: PaymentPlan): void {
   for (const sym of plan.fromPool) player.manaPool[sym] = Math.max(0, player.manaPool[sym] - 1);
+  for (const t of plan.fromTagged ?? []) {
+    const i = (player.manaTagged ?? []).findIndex((x) => x.sym === t.sym && x.creatureType === t.creatureType);
+    if (i >= 0) player.manaTagged!.splice(i, 1);
+  }
+  if (player.manaTagged && player.manaTagged.length === 0) player.manaTagged = undefined;
   for (const sym of plan.fromRestricted ?? []) if (player.manaPoolRestricted) player.manaPoolRestricted[sym] = Math.max(0, player.manaPoolRestricted[sym] - 1);
 }
 

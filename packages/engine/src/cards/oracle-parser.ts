@@ -2736,6 +2736,11 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     });
     return true;
   }
+  // Cavern of Souls: mana marcada — só paga criatura do tipo escolhido, e ela não pode ser anulada.
+  if (/^\{T\}: Add one mana of any color\. Spend this mana only to cast a creature spell of the chosen type(?:, and that spell|\. That spell) can't be countered\.$/i.test(line)) {
+    st.abilities.push({ kind: 'activated', cost: { tap: true }, effect: [{ op: 'addManaChoice', who: 'controller', cavern: true }], text: 'Adicionar uma mana de qualquer cor — só para criatura do tipo escolhido, que não pode ser anulada', isManaAbility: true });
+    return true;
+  }
   if ((m = line.match(/^((?:\{[^}]+\})+, )?\{T\}(?:, Sacrifice ~)?(?:, Pay (\d+) life)?: Add one mana of any color\.(?: (Activate only if [^.]+)\.)?$/))) {
     const sacSelf = line.includes(', Sacrifice ~');
     const payLife = m[2] ? parseInt(m[2], 10) : undefined;

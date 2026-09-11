@@ -632,3 +632,6 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 /* Companion e mana restrita (Jegantha) */
 .companion-btn { cursor: pointer; border: 1px solid var(--accent); color: var(--text); }
 .mana-chip.restricted { outline: 1px dashed rgba(255, 255, 255, 0.6); }
+
+/* Mana marcada (Cavern of Souls): chip com o tipo de criatura escolhido. */
+.mana-chip.tagged { width: auto; padding: 0 6px; font-size: 10px; letter-spacing: 0.2px; border: 1px dashed rgba(255, 255, 255, 0.7); }

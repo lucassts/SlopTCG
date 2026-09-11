@@ -91,6 +91,8 @@ export type PlayerAction =
       discards?: number[];
       /** Station: the other untapped creature tapped as the cost. */
       tapCreature?: number;
+      /** "Exile N cards from your graveyard" cost: the cards chosen by the player (omitted = the engine picks). */
+      gyExile?: number[];
     }
   /** Vehicles: tap these creatures (total power ≥ crew N) to animate the vehicle. */
   | { type: 'crew'; objectId: number; creatures: number[] }

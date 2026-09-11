@@ -746,7 +746,7 @@ export type EffectStep =
   | { op: 'addMana'; who: PlayerSel; mana: ManaSymbol[]; /** Urza's Workshop: repeat the symbols N times. */ times?: DynAmount; /** Firebending: the mana stays until end of combat. */ untilEndOfCombat?: boolean; /** Jegantha: this mana can't pay generic costs. */ noGeneric?: boolean; /** Arena of Glory: a creature spell paid with it gains haste (approximation: the next creature spell this turn). */ hasteIfCreature?: boolean }
   /** "Add one mana of any color" (or "of these colors") — the activation
    *  carries the chosen color; `colors` restricts the legal choices. */
-  | { op: 'addManaChoice'; who: PlayerSel; count?: DynAmount; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean; /** Carpet of Flowers: remember the use for \"if you haven't added mana with this ability this turn\". */ markUsed?: boolean }
+  | { op: 'addManaChoice'; who: PlayerSel; count?: DynAmount; colors?: Color[]; /** Chrome Mox: any of the imprinted card's colors. */ colorsOfImprint?: boolean; /** Carpet of Flowers: remember the use for \"if you haven't added mana with this ability this turn\". */ markUsed?: boolean; /** Cavern of Souls: spend only on a creature spell of the chosen type; that spell can't be countered. */ cavern?: true }
   /**
    * (choice) Cabal Therapy: the controller names a nonland card; the `who`
    * player reveals their hand and discards every card with that name.

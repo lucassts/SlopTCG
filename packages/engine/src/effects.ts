@@ -1075,6 +1075,11 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
       const produced = dampingMana(state, ctx.sourceId, Array(count).fill(sym));
       for (const p of resolvePlayers(step.who, ctx.controller)) {
         for (const m of produced) state.players[p].manaPool[m] += 1;
+        if (step.cavern) {
+          // Cavern of Souls: mana marcada com o tipo de criatura escolhido — só paga criatura desse tipo, e ela não pode ser anulada.
+          const type = state.objects[ctx.sourceId]?.chosenType ?? '';
+          for (const m of produced) (state.players[p].manaTagged ??= []).push({ sym: m, creatureType: type, source: ctx.sourceName });
+        }
         emit({ type: 'manaAdded', player: p, mana: produced, sourceName: ctx.sourceName });
       }
       return;

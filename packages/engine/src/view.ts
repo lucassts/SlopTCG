@@ -103,6 +103,8 @@ export interface PlayerView {
   manaPool: ManaPool;
   /** Jegantha: floating mana that can't pay generic costs. */
   manaPoolRestricted?: ManaPool;
+  /** Cavern of Souls: floating mana that only pays for a creature of the chosen type (uncounterable). */
+  manaTagged?: { sym: string; creatureType: string; source: string }[];
   /** Companion chosen at game start (name; taken = already in hand). */
   companion?: { name: string; taken: boolean };
   librarySize: number;
@@ -228,6 +230,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
       dredgeArmed: p.dredgeNext !== undefined ? state.objects[p.dredgeNext]?.card.name : undefined,
       manaPool: p.manaPool,
       manaPoolRestricted: p.manaPoolRestricted,
+      manaTagged: p.manaTagged,
       companion: p.companion !== undefined && state.objects[p.companion] ? { name: state.objects[p.companion].card.name, taken: !!p.companionTaken } : undefined,
       librarySize: p.zones.library.length,
       handSize: p.zones.hand.length,

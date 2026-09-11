@@ -123,6 +123,8 @@ interface Targeting {
   replicateTimes?: number;
   /** Delve: graveyard cards chosen before paying. */
   delve?: number[];
+  /** "Exile N cards from your graveyard" cost of an ability: the cards chosen. */
+  gyExile?: number[];
 }
 
 /** A little menu of things a clicked card can do (cast / cycle / abilities…). */
@@ -173,7 +175,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const [modalSel, setModalSel] = useState<Set<number>>(new Set());
   const [loyaltyPick, setLoyaltyPick] = useState<CardView | null>(null);
   const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' | 'sideboard' } | null>(null);
-  const [delvePick, setDelvePick] = useState<{ cv: CardView; mode: number | undefined; fromGraveyard: boolean; extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[]; face?: 'back'; fuse?: boolean; delve?: number[] }; options: CardView[]; max: number; chosen: number[] } | null>(null);
+  /** Escolha de cartas do cemitério feita pelo jogador (delve, escapar, custo adicional, custo de habilidade). */
+  const [gyPick, setGyPick] = useState<{ title: string; hint: string; options: CardView[]; min: number; max: number; chosen: number[]; confirmLabel: (n: number) => string; noneLabel?: string; validate?: (ids: number[]) => string | null; onConfirm: (ids: number[]) => void } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   // Perguntas de conjuração/ataque (X, kicker, barganha, buyback, replicar, vida, casualty, exert…):
   // modal no mesmo padrão das decisões da engine — nada de confirm()/prompt() do navegador.
@@ -488,6 +491,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           sacrifices: sacCount > 0 ? sacrifices : undefined,
           discards: handPick > 0 ? discards : undefined,
           tapCreature,
+          gyExile: t.gyExile,
         });
       }
       setTargeting(null);
@@ -661,7 +665,28 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       const options = me.graveyard.filter((c) => c.objectId !== cv.objectId);
       const max = Math.min(options.length, [...(def.manaCost ?? '').matchAll(/\{(\d+)\}/g)].reduce((n, m) => n + parseInt(m[1], 10), 0));
       if (options.length === 0 || max === 0) return beginCast(cv, mode, fromGraveyard, { ...extra, delve: [] });
-      setDelvePick({ cv, mode, fromGraveyard, extra, options, max, chosen: [] });
+      setGyPick({
+        title: `${def.name} — delve`,
+        hint: t('Escolha até {max} carta(s) do cemitério para exilar — cada uma paga {1} do custo. Pode ser nenhuma.', { max }),
+        options, min: 0, max, chosen: [],
+        confirmLabel: (n) => t('Exilar {n} e pagar o resto', { n }),
+        noneLabel: t('Sem delve'),
+        onConfirm: (ids) => void beginCast(cv, mode, fromGraveyard, { ...extra, delve: ids }),
+      });
+      return;
+    }
+    // Custo adicional "exile N cards from your graveyard" (Abhorrent Oculus): escolhido pelo jogador.
+    if (def.additionalCost?.exileFromGraveyard && extra.escapeExile === undefined && extra.method !== 'escape') {
+      const { count } = def.additionalCost.exileFromGraveyard;
+      const options = me.graveyard.filter((c) => c.objectId !== cv.objectId);
+      if (options.length < count) { alert(t('Custo adicional: precisa exilar {n} carta(s) do cemitério (você tem {have}).', { n: count, have: options.length })); return; }
+      setGyPick({
+        title: `${def.name} — ${t('custo adicional')}`,
+        hint: t('Escolha {n} carta(s) do cemitério para exilar como custo adicional.', { n: count }),
+        options, min: count, max: count, chosen: [],
+        confirmLabel: (n) => t('Exilar {n} e conjurar', { n }),
+        onConfirm: (ids) => void beginCast(cv, mode, fromGraveyard, { ...extra, escapeExile: ids }),
+      });
       return;
     }
     let x: number | undefined;
@@ -761,18 +786,18 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const othersCards = me.graveyard.filter((c) => c.objectId !== cv.objectId);
     const others = othersCards.map((c) => c.objectId);
     if (cm.escapeTypes !== undefined) {
-      // Nethergoyf: cobre N tipos de carta com o menor número de cartas (uma por tipo novo).
-      const seen = new Set<string>();
-      const picked: number[] = [];
-      for (const c of othersCards) {
-        const fresh = c.card.types.filter((t) => !seen.has(t));
-        if (fresh.length === 0) continue;
-        fresh.forEach((t) => seen.add(t));
-        picked.push(c.objectId);
-        if (seen.size >= cm.escapeTypes) break;
-      }
-      if (seen.size < cm.escapeTypes) { alert(t('Escapar precisa de {n} tipos de carta entre as outras cartas do cemitério (há {have}).', { n: cm.escapeTypes, have: seen.size })); return; }
-      beginCast(cv, undefined, false, { method: 'escape', escapeExile: picked });
+      // Nethergoyf: o jogador escolhe as cartas; entre elas precisa haver N tipos de carta.
+      const typesOf = (ids: number[]) => new Set(othersCards.filter((c) => ids.includes(c.objectId)).flatMap((c) => c.card.types)).size;
+      if (typesOf(others) < cm.escapeTypes) { alert(t('Escapar precisa de {n} tipos de carta entre as outras cartas do cemitério (há {have}).', { n: cm.escapeTypes, have: typesOf(others) })); return; }
+      const needTypes = cm.escapeTypes;
+      setGyPick({
+        title: `${cv.card.name} — ${t('escapar')}`,
+        hint: t('Escolha outras cartas do cemitério para exilar: entre elas precisa haver {n} tipos de carta.', { n: needTypes }),
+        options: othersCards, min: 1, max: others.length, chosen: [],
+        confirmLabel: (n) => t('Exilar {n} e escapar', { n }),
+        validate: (ids) => (typesOf(ids) >= needTypes ? null : t('Ainda faltam tipos de carta: {have} de {n}.', { have: typesOf(ids), n: needTypes })),
+        onConfirm: (ids) => void beginCast(cv, undefined, false, { method: 'escape', escapeExile: ids }),
+      });
       return;
     }
     const need = cm.exileFromGraveyard ?? 0;
@@ -780,7 +805,14 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       alert(t('Escapar precisa exilar {n} outras cartas do cemitério (você tem {have}).', { n: need, have: others.length }));
       return;
     }
-    beginCast(cv, undefined, false, { method: 'escape', escapeExile: others.slice(0, need) });
+    if (need === 0) { void beginCast(cv, undefined, false, { method: 'escape', escapeExile: [] }); return; }
+    setGyPick({
+      title: `${cv.card.name} — ${t('escapar')}`,
+      hint: t('Escolha {n} outra(s) carta(s) do cemitério para exilar.', { n: need }),
+      options: othersCards, min: need, max: need, chosen: [],
+      confirmLabel: (n) => t('Exilar {n} e escapar', { n }),
+      onConfirm: (ids) => void beginCast(cv, undefined, false, { method: 'escape', escapeExile: ids }),
+    });
   };
 
   const clickFieldCard = (cv: CardView, owner: PlayerId, e?: React.MouseEvent) => {
@@ -911,8 +943,22 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const beginAbility = (
     cv: CardView,
     idx: number,
-    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; returnToHand?: { what?: string }; exile?: { what?: string }; discard?: number; tapCreature?: boolean } },
+    ability: { targets?: { what: string }[]; text: string; cost?: number | { sacrifice?: { what?: string }; returnToHand?: { what?: string }; exile?: { what?: string }; discard?: number; tapCreature?: boolean; exileFromGraveyard?: { count: number } } },
+    gyExile?: number[],
   ) => {
+    const gyCost = typeof ability.cost === 'object' ? ability.cost.exileFromGraveyard : undefined;
+    if (gyCost && gyExile === undefined) {
+      const options = me.graveyard.filter((c) => c.objectId !== cv.objectId);
+      if (options.length < gyCost.count) { alert(t('Precisa exilar {n} carta(s) do cemitério (você tem {have}).', { n: gyCost.count, have: options.length })); return; }
+      setGyPick({
+        title: `${cv.card.name} — ${ability.text}`,
+        hint: t('Escolha {n} carta(s) do cemitério para exilar como custo.', { n: gyCost.count }),
+        options, min: gyCost.count, max: gyCost.count, chosen: [],
+        confirmLabel: (n) => t('Exilar {n} e ativar', { n }),
+        onConfirm: (ids) => beginAbility(cv, idx, ability, ids),
+      });
+      return;
+    }
     const returnCost = typeof ability.cost === 'object' ? ability.cost.returnToHand : undefined;
     const exileCost = typeof ability.cost === 'object' ? ability.cost.exile : undefined;
     const sacFilter = typeof ability.cost === 'object' ? ability.cost.sacrifice ?? returnCost ?? exileCost : undefined;
@@ -924,7 +970,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const sacSpecs = sacCount > 0 ? [{ what: sacFilter?.what ?? 'permanent' }] : [];
     const specs = [...discardSpecs, ...tapSpecs, ...sacSpecs, ...(ability.targets ?? [])];
     if (specs.length === 0) {
-      onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx });
+      onAction({ type: 'activateAbility', objectId: cv.objectId, abilityIndex: idx, gyExile });
     } else {
       const label =
         discardCount > 0
@@ -934,7 +980,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             : sacCount > 0
               ? t('{name}: {text} ({which})', { name: cv.card.name, text: ability.text, which: returnCost ? t('escolha o que devolver à mão primeiro') : exileCost ? t('escolha o que exilar primeiro') : t('escolha o sacrifício primeiro') })
               : `${cv.card.name}: ${ability.text}`;
-      setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined, tapPick: tapPick || undefined });
+      setTargeting({ kind: 'ability', objectId: cv.objectId, abilityIndex: idx, specs, chosen: [], label, sacCount, handPickCount: discardCount || undefined, tapPick: tapPick || undefined, gyExile });
     }
   };
 
@@ -1079,7 +1125,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             🌀 {opp.exile.length}
           </span>
         </div>
-        <ManaChips pool={opp.manaPool} restricted={opp.manaPoolRestricted} />
+        <ManaChips pool={opp.manaPool} restricted={opp.manaPoolRestricted} tagged={opp.manaTagged} />
       </div>
 
       <div className="opp-field battlefield">
@@ -1256,7 +1302,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             </button>
           )}
         </div>
-        <ManaChips pool={me.manaPool} restricted={me.manaPoolRestricted} />
+        <ManaChips pool={me.manaPool} restricted={me.manaPoolRestricted} tagged={me.manaTagged} />
         <div className="hand-row">
           {(me.hand ?? []).map((c) => (
             <CardTile
@@ -1434,19 +1480,19 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         </div>
       )}
 
-      {/* -------- delve: cartas do cemitério antes do pagamento -------- */}
-      {delvePick && (
+      {/* -------- escolha de cartas do cemitério (delve, escapar, custos) -------- */}
+      {gyPick && (
         <div className="mulligan-overlay">
           <div className="mulligan-box">
-            <h2>{delvePick.cv.card.name} — delve</h2>
-            <div className="muted">{t('Escolha até {max} carta(s) do cemitério para exilar — cada uma paga {1} do custo. Pode ser nenhuma.', { max: delvePick.max })}</div>
+            <h2>{gyPick.title}</h2>
+            <div className="muted">{gyPick.hint}</div>
             <div className="reveal-cards" style={{ maxHeight: '40vh', overflowY: 'auto' }}>
-              {delvePick.options.map((c) => (
+              {gyPick.options.map((c) => (
                 <CardRow
                   key={c.objectId}
                   card={c}
-                  selected={delvePick.chosen.includes(c.objectId)}
-                  onClick={() => setDelvePick((d) => {
+                  selected={gyPick.chosen.includes(c.objectId)}
+                  onClick={() => setGyPick((d) => {
                     if (!d) return d;
                     const has = d.chosen.includes(c.objectId);
                     if (!has && d.chosen.length >= d.max) return d;
@@ -1455,12 +1501,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                 />
               ))}
             </div>
+            {gyPick.validate && gyPick.chosen.length > 0 && gyPick.validate(gyPick.chosen) && <div className="muted">{gyPick.validate(gyPick.chosen)}</div>}
             <div className="row" style={{ justifyContent: 'center' }}>
-              <button onClick={() => { const d = delvePick; setDelvePick(null); void beginCast(d.cv, d.mode, d.fromGraveyard, { ...d.extra, delve: d.chosen }); }}>
-                {t('Exilar {n} e pagar o resto', { n: delvePick.chosen.length })}
+              <button
+                disabled={gyPick.chosen.length < gyPick.min || (gyPick.validate ? gyPick.validate(gyPick.chosen) !== null : false)}
+                onClick={() => { const d = gyPick; setGyPick(null); d.onConfirm(d.chosen); }}
+              >
+                {gyPick.confirmLabel(gyPick.chosen.length)}
               </button>
-              <button onClick={() => { const d = delvePick; setDelvePick(null); void beginCast(d.cv, d.mode, d.fromGraveyard, { ...d.extra, delve: [] }); }}>{t('Sem delve')}</button>
-              <button onClick={() => setDelvePick(null)}>{t('Cancelar')}</button>
+              {gyPick.noneLabel && <button onClick={() => { const d = gyPick; setGyPick(null); d.onConfirm([]); }}>{gyPick.noneLabel}</button>}
+              <button onClick={() => setGyPick(null)}>{t('Cancelar')}</button>
             </div>
           </div>
         </div>
@@ -2115,15 +2165,21 @@ function StopRow({ step, stops, onChange }: { step: Step; stops: StopsConfig; on
 
 const MANA_COLORS: Record<string, string> = { W: '#e8e2d0', U: '#5b9bd5', B: '#9b8fb0', R: '#d5745b', G: '#6bbf7e', C: '#b0b0b0' };
 
-function ManaChips({ pool, restricted }: { pool: Record<string, number>; restricted?: Record<string, number> }) {
+function ManaChips({ pool, restricted, tagged }: { pool: Record<string, number>; restricted?: Record<string, number>; tagged?: { sym: string; creatureType: string; source: string }[] }) {
   const COLORS = MANA_COLORS;
-  const chips = Object.entries(pool).filter(([, n]) => n > 0);
+  // A mana marcada (Cavern of Souls) também está contada no pool: mostra só a parte livre como chip comum.
+  const taggedCount: Record<string, number> = {};
+  for (const tg of tagged ?? []) taggedCount[tg.sym] = (taggedCount[tg.sym] ?? 0) + 1;
+  const chips = Object.entries(pool).map(([sym, n]) => [sym, n - (taggedCount[sym] ?? 0)] as const).filter(([, n]) => n > 0);
   const rchips = Object.entries(restricted ?? {}).filter(([, n]) => n > 0);
-  if (chips.length === 0 && rchips.length === 0) return null;
+  if (chips.length === 0 && rchips.length === 0 && (tagged?.length ?? 0) === 0) return null;
   return (
     <div className="mana-pool" title={t('Mana flutuante')}>
       {chips.map(([sym, n]) => (
         <span key={sym} className="mana-chip" style={{ background: COLORS[sym] }}>{n}</span>
+      ))}
+      {(tagged ?? []).map((tg, i) => (
+        <span key={`t${i}`} className="mana-chip tagged" style={{ background: COLORS[tg.sym] }} title={t('{source}: só paga criatura {type} — ela não pode ser anulada', { source: tg.source, type: tg.creatureType })}>{tg.creatureType}</span>
       ))}
       {rchips.map(([sym, n]) => (
         <span key={`r${sym}`} className="mana-chip restricted" style={{ background: COLORS[sym] }} title={t('Mana restrita (não paga custo genérico)')}>{n}🔒</span>

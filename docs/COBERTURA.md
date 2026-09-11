@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-11, v0.39.0 — delve escolhido pelo jogador antes do pagamento; Legacy a 99,1%)
+## Estado (2026-09-11, v0.40.0 — mana marcada da Cavern of Souls, escolhas de cemitério pelo jogador, mana manual em todo pagamento; Legacy a 99,1%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -948,6 +948,41 @@ exiladas de {5}{U}{U}) e o exílio só acontece quando o pagamento fecha
 as cartas do cemitério em lista, "Exilar N e pagar o resto", "Sem delve" e
 "Cancelar"; a escolha segue em `targeting.delve` até a ação. Verificado no
 navegador com dois jogadores. 540 testes (m46: 5, incluindo mana manual).
+
+**v0.40.0 — mana marcada (Cavern of Souls), escolhas de cemitério pelo
+jogador, mana manual em todo pagamento.** Lucas: "habilidades que envolvem
+escolher cartas do cemitério têm que ser feitas pelo jogador" e "a escolha
+de quais manas usar precisa ser do jogador — mana da Cavern of Souls
+nomeada Wizard gasta numa Thassa's Oracle". **Mana marcada**: a Cavern
+compilava sem o rider ("Spend this mana only…" era ignorado). Agora
+`addManaChoice.cavern` grava em `player.manaTagged` cada mana produzida
+com o tipo de criatura escolhido (`obj.chosenType`) e a fonte; a mana
+continua contada em `manaPool`. `planPayment` recebe `spellCard`: a mana
+marcada só é elegível para criatura do tipo (senão é descontada do pool
+antes de planejar) e, quando elegível, sai primeiro (`takePool` →
+`plan.fromTagged`); `consumePlanPools` remove as etiquetas gastas;
+`payWithPlan` marca `obj.uncounterable` e registra no log; o pool marcado
+zera junto com o pool normal (`emptyPool`, fim de etapa). Regra aceita as
+duas redações ("…, and that spell can't be countered" oficial; "That spell
+can't be countered"). Cliente: chip com o nome do tipo (tracejado) nos dois
+lados, com a explicação no título. Por que não há um botão "escolher a
+mana": mana restrita não serve para outra coisa, então gastá-la na criatura
+elegível é sempre o melhor uso — a escolha do jogador continua sendo quais
+fontes virar. **Escolhas de cemitério**: o modal do delve virou `gyPick`
+genérico (título, dica, mín/máx, validação, confirmação) e passou a cobrir
+escapar (Uro/Kroxa: N outras cartas; Nethergoyf: N tipos de carta entre as
+escolhidas, validado ao vivo), custo adicional "exile N cards from your
+graveyard" (Abhorrent Oculus, via `escapeExile`) e custo de habilidade
+"Exile N cards from your graveyard:" (ação `activateAbility.gyExile`,
+validado na engine: N exatas, do seu cemitério, dentro do filtro; sem o
+campo a engine escolhe como antes). **Mana manual em todo pagamento**:
+virar para cima (morph/manifest), ninjutsu, ciclagem e suspender pediam
+`planPayment` sem `poolOnly` — viravam terrenos sozinhos em mana manual;
+agora pedem pagamento como as mágicas (`deferPayment`); o mesmo para o
+fallback de convoke/improvise/delve. `obj.uncounterable` é zerado no início
+de cada conjuração. Verificado no navegador: Cavern jogada, tipo Wizard
+escolhido, mana marcada aparece como chip "Wizard" nos dois lados, Thassa's
+Oracle paga com ela ("não pode ser anulada" no log). 547 testes (m47: 7).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

@@ -323,6 +323,8 @@ export interface PlayerState {
   manaPool: ManaPool;
   /** Jegantha: floating mana that can't pay generic costs. */
   manaPoolRestricted?: ManaPool;
+  /** Cavern of Souls: floating mana (also counted in manaPool) that can only pay for a creature spell of the chosen type — and makes it uncounterable. */
+  manaTagged?: { sym: ManaSymbol; creatureType: string; source: string }[];
   /** Companion chosen from the sideboard at game start (object id), and whether it was already taken. */
   companion?: number;
   companionTaken?: boolean;
