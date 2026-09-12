@@ -355,6 +355,8 @@ interface ChoiceSetup {
   /** 'confirm' with nothing to decide (target gone / can't pay) resolves immediately. */
   autoAnswer?: 'yes' | 'no' | 'skip';
   skipLabel?: string;
+  /** Duress: the rest of the revealed hand — visible to the decider, not selectable. */
+  shown?: number[];
 }
 
 /** Tap a permanent for mana through a payment plan: adds what it produces and runs the riders of its intrinsic mana ability (Cephalid Coliseum: "deals 1 damage to you"). */
@@ -415,6 +417,8 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
             ? `${ctx.sourceName}: descarte ${n} carta(s)`
             : `${ctx.sourceName}: escolha ${n} carta(s) da mão do oponente para descartar`,
         mode: 'cards',
+        // Duress/Thoughtseize: a mão inteira aparece — as que não servem ficam visíveis, mas travadas.
+        shown: decider !== victim ? state.players[victim].zones.hand.filter((id) => !hand.includes(id)) : undefined,
       };
     }
     case 'sacrifice': {
@@ -791,8 +795,9 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const hand = state.players[victim].zones.hand.filter((id) => !state.objects[id].card.types.includes('Land'));
       const creature = t1?.kind === 'object' && objectAlive(state, t1)?.zone === 'battlefield' ? [t1.id] : [];
       const options = [...hand, ...creature];
+      const shown = state.players[victim].zones.hand.filter((id) => !hand.includes(id));
       if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
-      return { player: controller, options, min: 0, max: 1, prompt: `${ctx.sourceName}: exile uma carta não-terreno da mão de ${state.players[victim].name} ou a criatura escolhida (até ${ctx.sourceName} sair)`, mode: 'cards', skipLabel: 'Não exilar' };
+      return { player: controller, options, shown, min: 0, max: 1, prompt: `${ctx.sourceName}: exile uma carta não-terreno da mão de ${state.players[victim].name} ou a criatura escolhida (até ${ctx.sourceName} sair)`, mode: 'cards', skipLabel: 'Não exilar' };
     }
     case 'manifestDread': {
       const top = state.players[controller].zones.library.slice(0, 2);
@@ -1755,6 +1760,7 @@ function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep
     prompt: setup.prompt,
     mode: setup.mode,
     options: setup.options,
+    shown: setup.shown,
     min: setup.min,
     max: setup.max,
     skipLabel: setup.skipLabel,

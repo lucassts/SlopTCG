@@ -1839,7 +1839,15 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                   ? <CardRow key={c.objectId} card={c} selected={choiceSel.has(c.objectId)} badge={badge} onClick={toggle} />
                   : <CardTile key={c.objectId} card={c} size="hand" selected={choiceSel.has(c.objectId)} badge={badge} onClick={toggle} />;
               })}
+              {(myChoice.shown ?? []).map((c) => (
+                <div key={`shown-${c.objectId}`} className="choice-ineligible" title={t('Na mão, mas não elegível para esta escolha')}>
+                  {cardView === 'list' ? <CardRow card={c} /> : <CardTile card={c} size="hand" dimmed />}
+                </div>
+              ))}
             </div>
+            {myChoice.shown && myChoice.shown.length > 0 && (
+              <div className="muted">{t('Esmaecidas: o resto da mão revelada — não podem ser escolhidas.')}</div>
+            )}
             {myChoice.mode === 'scry' && (
               <div className="muted">{t('Selecionadas vão para o fundo; as demais continuam no topo — se sobrar mais de uma, você escolhe a ordem em seguida.')}</div>
             )}

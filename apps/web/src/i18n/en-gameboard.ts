@@ -106,6 +106,8 @@ export const EN_GAMEBOARD: Record<string, string> = {
   'Escolha até {max} carta(s) do cemitério para exilar — cada uma paga {1} do custo. Pode ser nenhuma.': 'Choose up to {max} card(s) from your graveyard to exile — each pays {1} of the cost. It can be none.',
   'Exilar {n} e pagar o resto': 'Exile {n} and pay the rest',
   'Sem delve': 'No delve',
+  'Na mão, mas não elegível para esta escolha': 'In hand, but not eligible for this choice',
+  'Esmaecidas: o resto da mão revelada — não podem ser escolhidas.': 'Dimmed: the rest of the revealed hand — they cannot be chosen.',
   'custo adicional': 'additional cost',
   'Custo adicional: precisa exilar {n} carta(s) do cemitério (você tem {have}).': 'Additional cost: you need to exile {n} card(s) from your graveyard (you have {have}).',
   'Escolha {n} carta(s) do cemitério para exilar como custo adicional.': 'Choose {n} card(s) from your graveyard to exile as an additional cost.',

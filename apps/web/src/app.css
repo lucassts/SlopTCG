@@ -635,3 +635,6 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
 /* Mana marcada (Cavern of Souls): chip com o tipo de criatura escolhido. */
 .mana-chip.tagged { width: auto; padding: 0 6px; font-size: 10px; letter-spacing: 0.2px; border: 1px dashed rgba(255, 255, 255, 0.7); }
+
+/* Cartas da mão revelada que não são elegíveis para a escolha (Duress): visíveis, travadas. */
+.choice-ineligible { opacity: 0.45; pointer-events: none; filter: grayscale(0.6); }

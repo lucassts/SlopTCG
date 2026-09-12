@@ -71,6 +71,8 @@ export type PendingDecisionView =
       skipLabel?: string;
       /** Card data of the options — only for the deciding player. */
       options: CardView[] | null;
+      /** Duress: the rest of the revealed hand, visible but not selectable — only for the deciding player. */
+      shown?: CardView[] | null;
     };
 
 export interface StackItemView {
@@ -164,6 +166,12 @@ function pendingDecisionView(state: GameState, viewer: PlayerId): PendingDecisio
       viewer === pd.player
         ? pd.options.map((id) => cardView(state, state.objects[id])).filter((c) => !!c.card)
         : null,
+    shown:
+      pd.shown && pd.shown.length > 0
+        ? viewer === pd.player
+          ? pd.shown.map((id) => cardView(state, state.objects[id])).filter((c) => !!c.card)
+          : null
+        : undefined,
   };
 }
 

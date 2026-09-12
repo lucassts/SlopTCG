@@ -462,6 +462,8 @@ export type PendingDecision =
       /** 'cards' → pick objects; 'scry' → picks go to the bottom; text answers: 'nameCard', 'confirm' (yes/no), 'chooseColor' (WUBRG), 'chooseType' (creature type). */
       mode: 'cards' | 'scry' | 'surveil' | 'order' | 'nameCard' | 'confirm' | 'chooseColor' | 'chooseType' | 'number';
       options: number[];
+      /** Duress: cards shown to the decider but not selectable (the rest of the revealed hand). */
+      shown?: number[];
       min: number;
       max: number;
       /** Label of the "pick nothing" button when that is the normal outcome ("Comprar a carta" vs. dredge). */

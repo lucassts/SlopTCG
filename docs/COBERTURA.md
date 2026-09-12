@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-11, v0.40.0 — mana marcada da Cavern of Souls, escolhas de cemitério pelo jogador, mana manual em todo pagamento; Legacy a 99,1%)
+## Estado (2026-09-12, v0.40.1 — decisão do Duress mostra a mão inteira; Legacy a 99,1%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -983,6 +983,23 @@ fallback de convoke/improvise/delve. `obj.uncounterable` é zerado no início
 de cada conjuração. Verificado no navegador: Cavern jogada, tipo Wizard
 escolhido, mana marcada aparece como chip "Wizard" nos dois lados, Thassa's
 Oracle paga com ela ("não pode ser anulada" no log). 547 testes (m47: 7).
+
+**v0.40.1 — a decisão do Duress mostra a mão inteira.** Lucas: "quando
+cartas revelam a mão para escolher um descarte, o modal deveria mostrar
+todas as cartas, mesmo as não elegíveis — o jogador vê a mão de verdade".
+`ChoiceSetup.shown` / `PendingDecision.shown`: o resto da mão revelada
+(Duress, Thoughtseize, Inquisition — `discard` com `chooser: 'caster'`; e
+Cloak and Dagger, `cloakExile`) vai junto com a decisão; `viewFor` entrega
+as cartas só para quem decide (o dono da mão recebe `null`, como as
+opções). No cliente, o modal de escolha desenha essas cartas depois das
+opções, esmaecidas e sem clique (`.choice-ineligible`), com a legenda
+"Esmaecidas: o resto da mão revelada — não podem ser escolhidas" e o
+título "Na mão, mas não elegível para esta escolha"; a engine continua
+recusando a escolha de uma carta fora das opções. Quando só há uma carta
+elegível a engine escolhe sozinha, sem modal — a mão inteira segue
+visível no painel de revelação (✕), como na v0.29. Verificado no
+navegador: Duress numa mão com Bolt, Counterspell e três Islands — as
+Islands aparecem esmaecidas. 548 testes (m48: 1).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.
