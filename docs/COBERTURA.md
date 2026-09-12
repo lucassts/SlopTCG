@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-12, v0.40.1 — decisão do Duress mostra a mão inteira; Legacy a 99,1%)
+## Estado (2026-09-12, v0.41.0 — convidado só entra, escolha forçada fica com o jogador, pilha arrastável, Atraxa com escolhidas, marcadores em Show and Tell; Legacy a 99,1%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1000,6 +1000,30 @@ elegível a engine escolhe sozinha, sem modal — a mão inteira segue
 visível no painel de revelação (✕), como na v0.29. Verificado no
 navegador: Duress numa mão com Bolt, Counterspell e três Islands — as
 Islands aparecem esmaecidas. 548 testes (m48: 1).
+
+**v0.41.0 — cinco ajustes do Lucas.** (1) **Tela do convidado**: quem
+chega por `?sala=` ou por um endereço que não é o do host (hostname fora
+de localhost/127.0.0.1/::1) vê só "Entrar na sala", com o código
+preenchido e a frase "Digite seu nome e entre na sala do host". (2)
+**Escolha forçada continua com o jogador**: `GameOptions.askForcedChoices`
+(o servidor liga) → `state.askForcedChoices`; em `beginChoice`, uma
+escolha de cartas com uma opção só (Duress com um alvo elegível) vai ao
+jogador em vez de resolver sozinha — sem opção nenhuma continua
+automático; testes e auditor seguem com o comportamento antigo. Quando há
+menos opções que o mínimo, mín/máx são reduzidos para o jogador conseguir
+confirmar. (3) **Pilha arrastável**: `stackRef`/`stackPos` no GameBoard;
+arraste pelo título, posição salva em `localStorage`
+(`sloptcg-stackpos`) e reaplicada ao abrir — o clamp fica no render
+(na aba oculta `innerWidth` chega a 0 na montagem). (4) **Atraxa**:
+`revealTopByType` emite `cardsRevealed` com `picked` (nomes que foram
+para a mão); o painel de revelação do oponente marca as escolhidas com
+✓ e borda e explica a legenda. (5) **"Entra com marcadores" em toda
+entrada**: `moveWithEvent` aplica `entersWithCounters` (número fixo, sem
+condição) quando a carta entra por efeito — Show and Tell, reanimação —
+e não pela pilha (a resolução já cuida de X e condições): Wishclaw
+Talisman entra com três marcadores de desejo. Verificado no navegador:
+link do convidado, pilha arrastada e reaberta no mesmo lugar. 552 testes
+(m49: 4).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

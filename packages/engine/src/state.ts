@@ -480,6 +480,8 @@ export interface MulliganState {
 }
 
 export interface GameState {
+  /** Real matches: forced card choices (one eligible option) still ask the player. */
+  askForcedChoices?: boolean;
   seed: number;
   rngState: number;
   nextId: number;

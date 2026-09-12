@@ -151,7 +151,7 @@ export interface GameBoardProps {
   /** Fim de um jogo da série: o jogador leu o resultado e segue para o sideboard. */
   onContinue?: () => void;
   /** Mão revelada do oponente (Duress…): painel que fica aberto até o jogador fechar. */
-  reveal?: { kind: 'hand' | 'cards' | 'look'; player: PlayerId; cards: string[]; source?: string; zone?: 'hand' | 'library'; seq: number } | null;
+  reveal?: { kind: 'hand' | 'cards' | 'look'; player: PlayerId; cards: string[]; picked?: string[]; source?: string; zone?: 'hand' | 'library'; seq: number } | null;
   onCloseReveal?: () => void;
 }
 
@@ -228,6 +228,24 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     const offY = e.clientY - rect.top;
     const move = (ev: PointerEvent) => setRevealPos({ x: Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - offX)), y: Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - offY)) });
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    e.preventDefault();
+  };
+  const stackRef = useRef<HTMLDivElement | null>(null);
+  const [stackPos, setStackPos] = useState<{ x: number; y: number } | null>(() => {
+    try { const raw = localStorage.getItem('sloptcg-stackpos'); if (raw) { const p = JSON.parse(raw); if (typeof p?.x === 'number' && typeof p?.y === 'number') return { x: p.x, y: p.y }; } } catch { /* sem posição salva */ }
+    return null;
+  });
+  const dragStack = (e: React.PointerEvent) => {
+    const el = stackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const offX = e.clientX - rect.left;
+    const offY = e.clientY - rect.top;
+    let last: { x: number; y: number } | null = null;
+    const move = (ev: PointerEvent) => { last = { x: Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - offX)), y: Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - offY)) }; setStackPos(last); };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); if (last) { try { localStorage.setItem('sloptcg-stackpos', JSON.stringify(last)); } catch { /* sem storage */ } } };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     e.preventDefault();
@@ -1403,8 +1421,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- pilha (pop-up com as cartas, estilo MTGO) -------- */}
       {view.stack.length > 0 && (
-        <div className="stack-popup" onClick={(e) => e.stopPropagation()}>
-          <div className="panel-title">{t('Pilha — a da esquerda resolve primeiro')}</div>
+        <div className="stack-popup" ref={stackRef} style={stackPos ? { left: Math.max(0, Math.min(Math.max(window.innerWidth, 400) - 80, stackPos.x)), top: Math.max(0, Math.min(Math.max(window.innerHeight, 300) - 40, stackPos.y)), right: 'auto' } : undefined} onClick={(e) => e.stopPropagation()}>
+          <div className="panel-title stack-drag" onPointerDown={dragStack} title={t('Arraste para mover — a pilha abre sempre onde você deixou')}>{t('Pilha — a da esquerda resolve primeiro')}</div>
           <div className="stack-cards">
             {[...view.stack].reverse().map((item, i) => (
               <div
@@ -1734,8 +1752,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           </div>
           <div className="reveal-cards">
             {reveal.cards.length === 0 && <div className="muted">{t('vazia')}</div>}
-            {reveal.cards.map((n, i) => <CardFace key={`${n}-${i}`} name={n} title={n} />)}
+            {(() => { const left = new Map<string, number>(); for (const p of reveal.picked ?? []) left.set(p, (left.get(p) ?? 0) + 1); return reveal.cards.map((n, i) => {
+              const took = (left.get(n) ?? 0) > 0; if (took) left.set(n, left.get(n)! - 1);
+              return <div key={`${n}-${i}`} className={took ? 'reveal-picked' : undefined} title={took ? t('{name} — escolhida (foi para a mão)', { name: n }) : n}><CardFace name={n} title={n} />{took && <span className="reveal-pick-badge">✓</span>}</div>;
+            }); })()}
           </div>
+          {reveal.picked && <div className="muted">{t('✓ = escolhidas pelo jogador (foram para a mão); as demais foram para o fundo.')}</div>}
         </div>
       )}
 

@@ -43,7 +43,7 @@ export function App() {
   /** Nomes do meu deck (principal + sideboard): as imagens são pré-carregadas quando a partida começa e ficam no cache do navegador. */
   const myDeckNamesRef = useRef<string[]>([]);
   const prefetchedRef = useRef(false);
-  const [reveal, setReveal] = useState<{ kind: 'hand' | 'cards' | 'look'; player: PlayerId; cards: string[]; source?: string; zone?: 'hand' | 'library'; seq: number } | null>(null);
+  const [reveal, setReveal] = useState<{ kind: 'hand' | 'cards' | 'look'; player: PlayerId; cards: string[]; picked?: string[]; source?: string; zone?: 'hand' | 'library'; seq: number } | null>(null);
   const [match, setMatch] = useState<MatchStateMsg | null>(null);
   const [sideboard, setSideboard] = useState<SideboardInfo | null>(null);
   /** Número do último jogo cujo resultado o jogador já viu (o sideboard só abre depois). */
@@ -83,9 +83,12 @@ export function App() {
           if (ev.type === 'cardsLooked' && ev.viewer === msg.view.you && ev.cards.length > 0) setReveal({ kind: 'look', player: ev.player, cards: ev.cards, source: ev.source, zone: ev.zone, seq: Date.now() });
           if (ev.type === 'cardsRevealed' && ev.player !== msg.view.you) {
             // Revelações seguidas da mesma fonte (Ad Nauseam, carta a carta) somam no mesmo painel.
-            setReveal((prev) => prev && prev.kind === 'cards' && prev.player === ev.player && prev.source === ev.source && Date.now() - prev.seq < 20000
-              ? { ...prev, cards: [...prev.cards, ...ev.cards], seq: Date.now() }
-              : { kind: 'cards', player: ev.player, cards: ev.cards, source: ev.source, seq: Date.now() });
+            // Com `picked` (Atraxa) o painel é substituído: as reveladas com as escolhidas marcadas.
+            setReveal((prev) => ev.picked
+              ? { kind: 'cards', player: ev.player, cards: ev.cards, picked: ev.picked, source: ev.source, seq: Date.now() }
+              : prev && prev.kind === 'cards' && prev.player === ev.player && prev.source === ev.source && Date.now() - prev.seq < 20000
+                ? { ...prev, cards: [...prev.cards, ...ev.cards], seq: Date.now() }
+                : { kind: 'cards', player: ev.player, cards: ev.cards, source: ev.source, seq: Date.now() });
           }
         }
         if (msg.events.length > 0) {

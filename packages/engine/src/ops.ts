@@ -373,6 +373,13 @@ export function moveWithEvent(
   });
   // Lands (and everything else) put onto the battlefield by an effect follow the same enter-tapped rules as a played/cast one.
   if (to === 'battlefield' && from !== 'battlefield' && reason !== 'manual') enterHook?.(state, obj, emit);
+  // "Enters with N counters" (Wishclaw Talisman, Walking Ballista…) also when put onto the battlefield by an effect (Show and Tell,
+  // reanimação): a resolução de mágica cuida do caso com X/condição; aqui só o número fixo.
+  const ewc = obj.card.entersWithCounters;
+  if (to === 'battlefield' && from !== 'stack' && from !== 'battlefield' && reason !== 'manual' && ewc && typeof ewc.count === 'number' && ewc.count > 0 && !obj.card.entersWithCountersIf) {
+    obj.counters[ewc.counter] = (obj.counters[ewc.counter] ?? 0) + ewc.count;
+    emit({ type: 'countersChanged', objectId: obj.id, cardName: obj.card.name, counter: ewc.counter, delta: ewc.count, total: obj.counters[ewc.counter] });
+  }
   // Earthbend: "When it dies or is exiled, return it to the battlefield tapped."
   if (obj.earthbendReturn && from === 'battlefield' && (to === 'graveyard' || to === 'exile')) {
     obj.earthbendReturn = undefined;

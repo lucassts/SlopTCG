@@ -638,3 +638,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
 /* Cartas da mão revelada que não são elegíveis para a escolha (Duress): visíveis, travadas. */
 .choice-ineligible { opacity: 0.45; pointer-events: none; filter: grayscale(0.6); }
+
+/* Pilha: arrastável pelo título; a posição fica salva no navegador. */
+.stack-popup .stack-drag { cursor: move; user-select: none; }
+/* Revelação com escolhas (Atraxa): as que foram para a mão ganham borda e ✓. */
+.reveal-picked { position: relative; border-radius: 8px; box-shadow: 0 0 0 2px var(--ok); }
+.reveal-pick-badge { position: absolute; top: -6px; right: -6px; background: var(--ok); color: #111; border-radius: 999px; font-size: 11px; font-weight: 700; padding: 1px 5px; }

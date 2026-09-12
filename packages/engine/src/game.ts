@@ -57,6 +57,8 @@ export interface ApplyResult {
 export interface GameOptions {
   /** Manual mana: spells and abilities wait for the player to float the mana (no automatic tapping). */
   manualMana?: boolean;
+  /** Real matches: a card choice with a single eligible option still goes to the player (Duress with one target), instead of being picked automatically. */
+  askForcedChoices?: boolean;
   /** Force who goes first, skipping the roll AND the choice (tests). */
   firstPlayer?: PlayerId;
   /**
@@ -95,6 +97,7 @@ export class Game {
   constructor(players: PlayerConfig[], seed: number, options: GameOptions = {}) {
     this.state = createGameState(players, seed);
     this.options = options;
+    if (options.askForcedChoices) this.state.askForcedChoices = true;
   }
 
   private emit = (ev: GameEvent): void => {

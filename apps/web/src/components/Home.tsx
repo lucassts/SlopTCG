@@ -13,6 +13,8 @@ export function Home({ onCreate, onJoin, connecting, initialCode }: HomeProps) {
   const [lang, setLang] = useLang();
   const [name, setName] = useState(localStorage.getItem('sloptcg-name') ?? '');
   const [code, setCode] = useState((initialCode ?? '').toUpperCase().slice(0, 5));
+  // Quem chega pelo link (?sala=) ou por um endereço que não é o do host só entra numa sala — criar é coisa do host.
+  const guestOnly = !!initialCode || !['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
 
   const remember = (n: string) => {
     setName(n);
@@ -36,9 +38,11 @@ export function Home({ onCreate, onJoin, connecting, initialCode }: HomeProps) {
           maxLength={32}
           onChange={(e) => remember(e.target.value)}
         />
-        <button className="primary" disabled={!name.trim() || connecting} onClick={() => onCreate(name.trim())}>
-          {t('Criar sala')}
-        </button>
+        {!guestOnly && (
+          <button className="primary" disabled={!name.trim() || connecting} onClick={() => onCreate(name.trim())}>
+            {t('Criar sala')}
+          </button>
+        )}
         <div className="row">
           <input
             placeholder={t('CÓDIGO')}
@@ -55,7 +59,7 @@ export function Home({ onCreate, onJoin, connecting, initialCode }: HomeProps) {
           </button>
         </div>
         <div className="muted">
-          {t('Crie uma sala e mande o código para o seu oponente — é só isso o matchmaking, por enquanto.')}
+          {guestOnly ? t('Digite seu nome e entre na sala do host — o código já veio pelo link.') : t('Crie uma sala e mande o código para o seu oponente — é só isso o matchmaking, por enquanto.')}
         </div>
       </div>
       <div className="muted" style={{ maxWidth: 480, textAlign: 'center', fontSize: 12 }}>

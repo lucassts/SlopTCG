@@ -1101,6 +1101,8 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         used.add(t);
         keep.push(id);
       }
+      // Atraxa: o oponente vê as reveladas e quais foram para a mão.
+      emit({ type: 'cardsRevealed', player: ctx.controller, cards: top.map((id) => state.objects[id].card.name), source: ctx.sourceName, picked: keep.map((id) => state.objects[id].card.name) });
       for (const id of keep) moveWithEvent(state, state.objects[id], 'hand', 'returned', emit);
       const rest = top.filter((id) => !keep.includes(id));
       const r = shuffle(rest, state.rngState);
@@ -1745,10 +1747,12 @@ function beginChoice(ctx: EffectContext, step: ChoiceStep, remaining: EffectStep
   // Text answers always need the round-trip (the answer is text, not picks).
   if (setup.mode !== 'nameCard' && setup.mode !== 'confirm' && setup.mode !== 'chooseColor' && setup.mode !== 'chooseType' && setup.mode !== 'number') {
     // Forced choice (all options must be picked) or nothing to pick → no round-trip.
-    if (setup.mode === 'cards' && setup.options.length <= setup.min) {
+    // Em partida real (askForcedChoices) a escolha com uma opção só continua com o jogador: ele precisa ver o que está escolhendo.
+    if (setup.mode === 'cards' && setup.options.length <= setup.min && !(ctx.state.askForcedChoices && setup.options.length > 0)) {
       executeChoice(ctx, step, setup.options);
       return 'done';
     }
+    if (setup.mode === 'cards' && setup.options.length < setup.min) { setup.min = setup.options.length; setup.max = Math.max(setup.min, Math.min(setup.max, setup.options.length)); }
     if (setup.options.length === 0) {
       executeChoice(ctx, step, []);
       return 'done';

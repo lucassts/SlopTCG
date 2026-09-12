@@ -58,7 +58,7 @@ export type GameEvent =
   /** A hand is revealed to everyone (Cabal Therapy naming). */
   | { type: 'handRevealed'; player: PlayerId; cards: string[] }
   /** Cards revealed to everyone by an effect (Ad Nauseam, Dark Confidant, Brainstorm-style reveals): the opponent sees them in a panel. */
-  | { type: 'cardsRevealed'; player: PlayerId; cards: string[]; source: string }
+  | { type: 'cardsRevealed'; player: PlayerId; cards: string[]; source: string; /** Atraxa: which of the revealed cards the player took. */ picked?: string[] }
   /** `viewer` looked at hidden cards of `player` (hand or top of library); redacted for the other player. */
   | { type: 'cardsLooked'; viewer: PlayerId; player: PlayerId; zone: 'hand' | 'library'; cards: string[]; source: string; hiddenFrom: PlayerId }
   | { type: 'cardNamed'; player: PlayerId; name: string }
