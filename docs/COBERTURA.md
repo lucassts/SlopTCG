@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-12, v0.41.0 — convidado só entra, escolha forçada fica com o jogador, pilha arrastável, Atraxa com escolhidas, marcadores em Show and Tell; Legacy a 99,1%)
+## Estado (2026-09-12, v0.41.1 — sala não esconde mais o código em telas baixas; Legacy a 99,1%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1024,6 +1024,16 @@ e não pela pilha (a resolução já cuida de X e condições): Wishclaw
 Talisman entra com três marcadores de desejo. Verificado no navegador:
 link do convidado, pilha arrastada e reaberta no mesmo lugar. 552 testes
 (m49: 4).
+
+**v0.41.1 — o código da sala sumia para cima em telas baixas.** Lucas
+reportou que, ao criar a sala, o código ficava escondido acima da tela
+dependendo da resolução. Causa: `.screen-center` (tela inicial e sala)
+tinha `height: 100%` com `justify-content: center` e sem rolagem — com o
+conteúdo mais alto que a janela, o flex centraliza e corta o começo.
+Correção em CSS: `justify-content: safe center` + `overflow-y: auto` +
+`box-sizing: border-box` — quando cabe, continua centralizado; quando
+não cabe, alinha no topo e rola. Verificado no navegador a 1000×520:
+conteúdo de 874 px rolando, código a 96 px do topo.
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.
