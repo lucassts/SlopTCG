@@ -59,6 +59,8 @@ export interface GameOptions {
   manualMana?: boolean;
   /** Real matches: a card choice with a single eligible option still goes to the player (Duress with one target), instead of being picked automatically. */
   askForcedChoices?: boolean;
+  /** Real matches: manual tools start disabled; a player requests them and the opponent must accept. */
+  manualToolsOptIn?: boolean;
   /** Force who goes first, skipping the roll AND the choice (tests). */
   firstPlayer?: PlayerId;
   /**
@@ -98,6 +100,7 @@ export class Game {
     this.state = createGameState(players, seed);
     this.options = options;
     if (options.askForcedChoices) this.state.askForcedChoices = true;
+    if (options.manualToolsOptIn) this.state.manualTools = { enabled: false };
   }
 
   private emit = (ev: GameEvent): void => {
@@ -398,6 +401,21 @@ export class Game {
         return this.doChooseDiscard(playerId, action.objectIds);
       case 'cancelPayment':
         return this.doCancelPayment(playerId);
+      case 'requestManual': {
+        const mt = this.state.manualTools ?? (this.state.manualTools = { enabled: true });
+        if (mt.enabled) { this.fail(playerId, 'os controles manuais já estão ativos'); return false; }
+        mt.requestedBy = playerId;
+        this.emit({ type: 'manualRequested', player: playerId });
+        return true;
+      }
+      case 'answerManual': {
+        const mt = this.state.manualTools;
+        if (!mt || mt.enabled || !mt.requestedBy || mt.requestedBy === playerId) { this.fail(playerId, 'não há pedido de controles manuais para responder'); return false; }
+        if (action.accept) mt.enabled = true;
+        mt.requestedBy = undefined;
+        this.emit({ type: 'manualAnswered', player: playerId, accept: action.accept });
+        return true;
+      }
       default:
         return this.doManual(playerId, action);
     }
@@ -2086,6 +2104,7 @@ export class Game {
 
   private doManual(playerId: PlayerId, action: PlayerAction): boolean {
     const s = this.state;
+    if (s.manualTools && !s.manualTools.enabled) { this.fail(playerId, 'controles manuais desativados — peça ao oponente nas configurações'); return false; }
     const player = s.players[playerId];
     const say = (text: string) => this.emit({ type: 'manualAction', player: playerId, text });
 

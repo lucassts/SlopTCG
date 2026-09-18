@@ -97,6 +97,8 @@ export type GameEvent =
   | { type: 'decisionRequired'; player: PlayerId; decision: string }
   | { type: 'gameEnded'; winner: PlayerId | 'draw'; reason: string }
   | { type: 'manualAction'; player: PlayerId; text: string }
+  | { type: 'manualRequested'; player: PlayerId }
+  | { type: 'manualAnswered'; player: PlayerId; accept: boolean }
   | { type: 'chat'; player: PlayerId; text: string }
   | { type: 'error'; player: PlayerId; message: string };
 

@@ -119,6 +119,9 @@ export type PlayerAction =
   | { type: 'cancelPayment' }
   | { type: 'chat'; text: string }
   // --- manual mode (Tier 3) ---
+  /** Controles manuais (Tier 3): um jogador pede, o outro aceita ou recusa — aceito, valem para os dois pelo resto da partida. */
+  | { type: 'requestManual' }
+  | { type: 'answerManual'; accept: boolean }
   | { type: 'manualMove'; objectId: number; to: Exclude<ZoneName, 'stack'>; position?: 'top' | 'bottom' }
   | { type: 'manualTap'; objectId: number; tapped: boolean }
   | { type: 'manualLife'; player: PlayerId; delta: number }

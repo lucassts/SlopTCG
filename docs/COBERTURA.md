@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-12, v0.41.1 — sala não esconde mais o código em telas baixas; Legacy a 99,1%)
+## Estado (2026-09-17, v0.42.0 — controles manuais por consentimento; modal do cemitério fica aberto ao conjurar; Legacy a 99,1%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1034,6 +1034,28 @@ Correção em CSS: `justify-content: safe center` + `overflow-y: auto` +
 `box-sizing: border-box` — quando cabe, continua centralizado; quando
 não cabe, alinha no topo e rola. Verificado no navegador a 1000×520:
 conteúdo de 874 px rolando, código a 96 px do topo.
+
+**v0.42.0 — controles manuais por consentimento; modal do cemitério fica
+aberto.** (1) **Controles manuais (Tier 3) desligados por padrão** em
+partida real: `GameOptions.manualToolsOptIn` (o servidor liga) →
+`state.manualTools = { enabled: false }`; `doManual` recusa qualquer ação
+manual enquanto desligado; ações `requestManual` (quem pede) e
+`answerManual { accept }` (só o outro responde; aceito, vale para os dois
+pelo resto da partida); eventos `manualRequested`/`manualAnswered` no
+log; `GameView.manualTools`. Sem a opção (testes, auditor) continua tudo
+livre. Cliente: o botão 🛠, a gaveta manual, o menu de contexto do botão
+direito e os itens "⚠ Manual" do menu de clique só aparecem com os
+controles ativos; nas Configurações (engrenagem) há a linha "Controles
+manuais (Tier 3)" com "Pedir ao oponente para ativar" → o oponente recebe
+o pop-up "X quer ativar os controles manuais…" com Aceitar/Recusar; o
+estado aparece na mesma linha (pedido enviado / ativos para os dois). (2)
+**Conjurar, jogar terreno, escapar e ativar do cemitério (e do exílio)
+não fecham mais o modal da zona** — os botões só chamavam
+`setZonePick(null)` antes da ação; o modal segue aberto durante alvos e
+pagamento (o fundo não bloqueia cliques). Verificado no navegador: 🛠
+ausente → pedido → pop-up no oponente → aceite → 🛠 nos dois e log; Deep
+Analysis com flashback do cemitério mantém o modal aberto durante a
+escolha de alvo. 555 testes (m50: 3).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

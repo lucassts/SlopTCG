@@ -482,6 +482,8 @@ export interface MulliganState {
 export interface GameState {
   /** Real matches: forced card choices (one eligible option) still ask the player. */
   askForcedChoices?: boolean;
+  /** Manual tools (Tier 3): off until the opponent accepts a request; absent = always on (tests). */
+  manualTools?: { enabled: boolean; requestedBy?: PlayerId };
   seed: number;
   rngState: number;
   nextId: number;

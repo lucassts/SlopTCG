@@ -160,6 +160,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const you = view.you;
   const oppId: PlayerId = you === 'p1' ? 'p2' : 'p1';
   const me = view.players[you];
+  const manualOn = view.manualTools?.enabled ?? true;
+  const manualPending = view.manualTools?.requestedBy;
   const opp = view.players[oppId];
 
   const [targeting, setTargeting] = useState<Targeting | null>(null);
@@ -626,8 +628,10 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         run: () => beginCycle(cv),
       });
     if (!castable) {
-      opts.push({ label: t('⚠ Manual: → campo de batalha'), run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'battlefield' }) });
-      opts.push({ label: t('⚠ Manual: → cemitério'), run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'graveyard' }) });
+      if (manualOn) {
+        opts.push({ label: t('⚠ Manual: → campo de batalha'), run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'battlefield' }) });
+        opts.push({ label: t('⚠ Manual: → cemitério'), run: () => onAction({ type: 'manualMove', objectId: cv.objectId, to: 'graveyard' }) });
+      }
     }
     if (opts.length === 0) return;
     if (opts.length === 1) {
@@ -1038,6 +1042,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
   const openMenu = (e: React.MouseEvent, cv: CardView) => {
     e.preventDefault();
+    if (!manualOn) return; // menu de contexto é o menu manual; reciclar continua no menu do clique
     setMenu({ x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 320), card: cv });
   };
 
@@ -1334,9 +1339,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             />
           ))}
         </div>
-        <button onClick={(e) => { e.stopPropagation(); setShowManual(!showManual); }} title={t('Ações manuais (Tier 3)')}>
-          🛠
-        </button>
+        {manualOn && (
+          <button onClick={(e) => { e.stopPropagation(); setShowManual(!showManual); }} title={t('Ações manuais (Tier 3)')}>
+            🛠
+          </button>
+        )}
       </div>
 
       {/* -------- painel lateral -------- */}
@@ -1369,7 +1376,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           </button>
         </div>
         <HoverPreview slot />
-        {showManual && (
+        {showManual && manualOn && (
           <div className="stack-panel">
             <div className="panel-title">{t('Modo manual — tudo fica no log')}</div>
             <div className="manual-drawer">
@@ -1472,6 +1479,16 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
             <button className={lang === 'pt-BR' ? 'yield-on' : ''} onClick={() => setLang('pt-BR')}>Português (BR)</button>
             <button className={lang === 'en-US' ? 'yield-on' : ''} onClick={() => setLang('en-US')}>English (US)</button>
           </div>
+          <div className="settings-row">
+            <span className="muted">{t('Controles manuais (Tier 3)')}</span>
+            {manualOn
+              ? <span className="yield-on" style={{ padding: '2px 8px', borderRadius: 6 }}>{t('ativos para os dois')}</span>
+              : manualPending === you
+                ? <span className="muted">{t('pedido enviado — aguardando o oponente')}</span>
+                : manualPending
+                  ? <span className="muted">{t('o oponente pediu — responda no pop-up')}</span>
+                  : <button onClick={() => onAction({ type: 'requestManual' })}>{t('Pedir ao oponente para ativar')}</button>}
+          </div>
           <div className="panel-title" style={{ padding: '4px 10px' }}>{t('Parar automaticamente em:')}</div>
           <div className="stops-grid">
             <span />
@@ -1498,6 +1515,19 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         </div>
       )}
 
+      {/* -------- pedido de controles manuais: o oponente aceita ou recusa -------- */}
+      {!manualOn && manualPending && manualPending !== you && (
+        <div className="mulligan-overlay">
+          <div className="mulligan-box">
+            <h2>{t('Controles manuais (Tier 3)')}</h2>
+            <div className="muted">{t('{name} quer ativar os controles manuais (mover cartas, virar, marcadores, vida). Se aceitar, valem para os dois pelo resto da partida e tudo fica no log.', { name: view.players[manualPending].name })}</div>
+            <div className="row" style={{ justifyContent: 'center' }}>
+              <button className="primary" onClick={() => onAction({ type: 'answerManual', accept: true })}>{t('Aceitar')}</button>
+              <button onClick={() => onAction({ type: 'answerManual', accept: false })}>{t('Recusar')}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* -------- escolha de cartas do cemitério (delve, escapar, custos) -------- */}
       {gyPick && (
         <div className="mulligan-overlay">
@@ -2020,15 +2050,14 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                   />
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.castableFromGraveyard && myPriority && (
-                    <button onClick={() => { setZonePick(null); beginCast(c, undefined); }}>{t('⚡ Conjurar do cemitério')}</button>
+                    <button onClick={() => { beginCast(c, undefined); }}>{t('⚡ Conjurar do cemitério')}</button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.playableFromGraveyard && myPriority && (
-                    <button onClick={() => { setZonePick(null); onAction({ type: 'playLand', objectId: c.objectId }); }}>{t('🏞 Jogar terreno do cemitério')}</button>
+                    <button onClick={() => { onAction({ type: 'playLand', objectId: c.objectId }); }}>{t('🏞 Jogar terreno do cemitério')}</button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.flashback && (
                     <button
                       onClick={() => {
-                        setZonePick(null);
                         beginCast(c, undefined, true);
                       }}
                     >
@@ -2036,41 +2065,41 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.castMethods?.some((m) => m.kind === 'escape') && (
-                    <button onClick={() => { setZonePick(null); beginEscape(c); }}>
+                    <button onClick={() => { beginEscape(c); }}>
                       ⚡ {c.card.castMethods.find((m) => m.kind === 'escape')?.label}
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you &&
                     (c.card.castMethods ?? []).filter((m) => m.kind === 'mayhem' || m.kind === 'retrace' || m.kind === 'disturb').map((m) => (
-                      <button key={m.kind} onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: m.kind }); }}>
+                      <button key={m.kind} onClick={() => { beginCast(c, undefined, false, { method: m.kind }); }}>
                         ⚡ {m.label}
                       </button>
                     ))}
                   {zonePick.zone === 'graveyard' && zonePick.player === you && c.card.backFace?.aftermath && myPriority && (
-                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { face: 'back' }); }}>
+                    <button onClick={() => { beginCast(c, undefined, false, { face: 'back' }); }}>
                       {t('⚡ Aftermath — conjurar {name} {cost} (do cemitério)', { name: c.card.backFace.name, cost: c.card.backFace.manaCost ?? '' })}
                     </button>
                   )}
                   {zonePick.zone === 'graveyard' && zonePick.player === you &&
                     (c.card.abilities ?? []).map((a, i) =>
                       a.kind === 'activated' && a.zone === 'graveyard' ? (
-                        <button key={i} onClick={() => { setZonePick(null); beginAbility(c, i, a); }}>
+                        <button key={i} onClick={() => { beginAbility(c, i, a); }}>
                           ⚙ {a.text}
                         </button>
                       ) : null,
                     )}
                   {zonePick.zone === 'exile' && (zonePick.player === you || c.playableByYou) && c.playableNow && myPriority && (
                     c.card.types.includes('Land') ? (
-                      <button onClick={() => { setZonePick(null); onAction({ type: 'playLand', objectId: c.objectId }); }}>{t('⛰ Jogar terreno (do exílio, este turno)')}</button>
+                      <button onClick={() => { onAction({ type: 'playLand', objectId: c.objectId }); }}>{t('⛰ Jogar terreno (do exílio, este turno)')}</button>
                     ) : (
-                      <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>{t('✨ Conjurar {cost} (do exílio, este turno)', { cost: c.card.manaCost ?? '' })}</button>
+                      <button onClick={() => { beginCast(c, undefined, false); }}>{t('✨ Conjurar {cost} (do exílio, este turno)', { cost: c.card.manaCost ?? '' })}</button>
                     )
                   )}
                   {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs === 'adventure' && myPriority && (
-                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false); }}>{t('✨ Conjurar {name} {cost} (de volta da aventura)', { name: c.card.name, cost: c.card.manaCost ?? '' })}</button>
+                    <button onClick={() => { beginCast(c, undefined, false); }}>{t('✨ Conjurar {name} {cost} (de volta da aventura)', { name: c.card.name, cost: c.card.manaCost ?? '' })}</button>
                   )}
                   {zonePick.zone === 'exile' && zonePick.player === you && c.exiledAs && (c.exiledAs === 'foretold' || c.exiledAs === 'plotted' || c.exiledAs === 'warped') && (
-                    <button onClick={() => { setZonePick(null); beginCast(c, undefined, false, { method: c.exiledAs as CastMethodKind }); }}>
+                    <button onClick={() => { beginCast(c, undefined, false, { method: c.exiledAs as CastMethodKind }); }}>
                       {t('⚡ Conjurar ({how})', { how: c.exiledAs === 'foretold' ? t('prever {cost}', { cost: c.card.castMethods?.find((m) => m.kind === 'foretold')?.cost ?? '' }) : c.exiledAs === 'plotted' ? t('tramada, de graça') : t('warp, de graça') })}
                     </button>
                   )}

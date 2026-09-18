@@ -118,4 +118,7 @@ export const EN_LOGTEXT: Record<string, string> = {
   'a mão de {name}': "{name}'s hand",
   '{source}: {viewer} olhou {where}: {cards}.': '{source}: {viewer} looked at {where}: {cards}.',
   '{source}: {viewer} olhou {where}.': '{source}: {viewer} looked at {where}.',
+  '{player} pediu para ativar os controles manuais (Tier 3).': '{player} asked to enable manual controls (Tier 3).',
+  '{player} aceitou: controles manuais ativos para os dois.': '{player} accepted: manual controls are on for both players.',
+  '{player} recusou os controles manuais.': '{player} declined manual controls.',
 };

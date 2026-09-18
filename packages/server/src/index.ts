@@ -172,7 +172,7 @@ function startNextGame(room: Room): void {
       { id: 'p2', name: p2.name, deck: expand(p2.pool) },
     ],
     seed,
-    { starterChooser: m.lastLoser, manualMana: true, askForcedChoices: true },
+    { starterChooser: m.lastLoser, manualMana: true, askForcedChoices: true, manualToolsOptIn: true },
   );
   broadcastMatch(room);
   broadcastGame(room, room.game.start());

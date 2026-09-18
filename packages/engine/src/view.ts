@@ -126,6 +126,8 @@ export interface PlayerView {
 
 export interface GameView {
   you: PlayerId;
+  /** Manual tools (Tier 3): enabled for both, or pending a request. */
+  manualTools: { enabled: boolean; requestedBy?: PlayerId };
   turn: number;
   /** Spells cast this turn by anyone (storm count). */
   spellsCastThisTurn: number;
@@ -281,6 +283,7 @@ export function viewFor(state: GameState, viewer: PlayerId): GameView {
     combatAwaiting: state.combatAwaiting,
     monarch: state.monarch,
     initiative: state.initiative,
+    manualTools: state.manualTools ?? { enabled: true },
     pendingDecision: pendingDecisionView(state, viewer),
     mulligan: state.mulligan,
     starter: state.starter,

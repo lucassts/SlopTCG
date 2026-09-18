@@ -224,6 +224,10 @@ export function eventText(ev: GameEvent, view: GameView | null): string | null {
       return t('Fim de partida: {reason}. Vencedor: {winner}.', { reason: ev.reason, winner: ev.winner === 'draw' ? t('empate') : name(ev.winner) });
     case 'manualAction':
       return t('[manual] {player} {text}.', { player: name(ev.player), text: ev.text });
+    case 'manualRequested':
+      return t('{player} pediu para ativar os controles manuais (Tier 3).', { player: name(ev.player) });
+    case 'manualAnswered':
+      return ev.accept ? t('{player} aceitou: controles manuais ativos para os dois.', { player: name(ev.player) }) : t('{player} recusou os controles manuais.', { player: name(ev.player) });
     case 'chat':
       return `${name(ev.player)}: ${ev.text}`;
     case 'error':
