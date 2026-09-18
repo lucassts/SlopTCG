@@ -44,6 +44,9 @@ Mesma fronteira e mesmo critério de `docs/LEVA-FACIL.md`, aplicados a
 | Clockwork Percussionist | 16.0 | v0.46.0 | mesma regra do Reckless Impulse, disparada por `dies` |
 | Defile | 7.8 | v0.46.0 | `pump` com `powerDyn: { times: -1, of: { per: Pântanos que você controla } }` |
 | End the Festivities | 6.9 | v0.46.0 | `damage` no oponente + `damageEach` nas permanentes dele |
+| Refurbished Familiar | 52.0 | v0.47.0 | numa partida de dois, "cada oponente que não puder descartar" é `Cond.compare` com `handSize: 'opponent'` = 0 |
+| Cast into the Fire | 25.1 | v0.47.0 | "each of up to two target creatures" → dois alvos `optional` + dois `damage` (vale também para Dual Shot) |
+| Temur Battle Rage | 1.6 | v0.47.0 | a segunda linha reaproveita `target:0` da primeira, dentro de um `if` com `Cond.controlsAtLeast` |
 
 ### Ganho colateral
 As regras gerais valem para muito mais que a lista do Pauper: **78 cartas** na
@@ -63,7 +66,6 @@ Pyrohemia, Call to the Grave, Festergloom e Into the Core.
 |---|---|---|---|
 | Highway Robbery | 59.2 | escolha entre dois custos diferentes ("descarte uma carta **ou** sacrifique um terreno") antes do efeito | `op: 'chooseCost'` (modo com custos, não com efeitos) |
 | Grab the Prize | 59.2 | não há condição sobre o **tipo da carta descartada** como custo adicional | `Cond { kind: 'discardedWasType'; types: CardType[] }` |
-| Refurbished Familiar | 52.0 | "para cada oponente que não puder descartar, compre" — falta a condição de mão vazia por oponente | `op: 'discardElseDraw'` ou `Cond { kind: 'handEmpty'; who }` |
 | Relic of Progenitus | 44.2 | "o jogador alvo exila **uma carta** do próprio cemitério" (escolha dele) | `op: 'exileFromGraveyardChoice'; who: WhoSel; count` |
 | Dispel | 44.1 | `TargetSpec.spellType` só tem `creature`/`noncreature`/`instantSorcery` | acrescentar `instant`, `sorcery`, `artifact`, `enchantment` |
 | Fireblast | 41.7 | `altCost` não tem sacrifício como custo alternativo | `altCost.sacrifice: { filter: FilterSpec; count: number }` |
@@ -76,7 +78,6 @@ Pyrohemia, Call to the Grave, Festergloom e Into the Core.
 | Bonder's Ornament | 27.8 | "cada jogador que controla uma permanente com este nome" | `FilterSpec.sameNameAsSource` |
 | Utopia Sprawl / Wild Growth | 27.2 / 13.5 | não há gatilho de "terreno encantado virado para mana" | `attachEffect.extraManaOnTap: Color \| 'chosen'` |
 | Steel Sabotage / Annul / Envelop | 25.9 / 6.1 / 9.3 | ver Dispel (tipo de mágica no alvo) | idem |
-| Cast into the Fire | 25.1 | "dano a cada uma de até duas criaturas alvo" | `TargetSpec.upTo: number` com efeito por alvo |
 | Skred | 22.8 | não há contagem de permanentes de neve | `FilterSpec.snow` |
 | Deem Inferior | 22.4 | redução por cartas compradas no turno | `costModifiers.perCardsDrawnThisTurn` |
 | Moon-Circuit Hacker | 22.4 | "descarte a menos que tenha entrado neste turno" | `Cond { kind: 'sourceEnteredThisTurn' }` |
@@ -123,23 +124,42 @@ Pyrohemia, Call to the Grave, Festergloom e Into the Core.
 |---|---|
 
 ## Situação
-- Cartas da lista processadas: **121 de 159** (37 feitas; 55 linhas de "não fáceis",
-  algumas cobrindo mais de uma carta). Restam 121 na lista regenerada; as de peso ≤ 0,5
-  ainda não foram lidas uma a uma.
-- Releases publicadas: v0.45.0 e v0.46.0
-- Totais do auditor na última release: 14.048 full / 14.372 parciais / 4.661 manuais /
+- **Parei aqui**: as 118 cartas que restam na lista do Pauper precisam de engine.
+  Todas foram lidas e classificadas; nenhuma delas cabe no vocabulário atual sem
+  inventar op ou relaxar semântica.
+- Cartas da lista processadas: **159 de 159** (41 feitas, o resto na tabela acima
+  com o op que falta).
+- Releases publicadas: v0.45.0, v0.46.0 e v0.47.0
+- Totais do auditor na última release: 14.053 full / 14.370 parciais / 4.658 manuais /
   0 estruturais / 42 falhas de simulação
-- As 42 falhas de simulação são as mesmas da v0.45.0 — nenhuma nova nesta leva.
-  A única acrescentada desde a v0.44.0 é **Melek, Reforged Researcher**: com a união de
-  tipos, o `cdaPower/cdaToughness` dela passou a compilar ("o dobro do número de cartas
-  de instantâneo e feitiço no seu cemitério"). No cenário do auditor o cemitério está
-  vazio, então ela entra 0/0 e morre — comportamento **correto** de Magic, igual aos 17
-  casos já presentes nesse mesmo balde (Splinterfright, Boneyard Wurm, Uro, Kroxa…).
-  A carta saiu de manual para parcial: é ganho, não regressão.
-- Cobertura ponderada do Pauper: 72,1% → 78,9% (v0.45.0) → **80,5%** (v0.46.0);
-  cartas full do meta Pauper: 298 → 336 (lacunas 159 → 121). Legacy segue em 99,2%.
-- Diff de compilação das 38.629 cartas em cada release: nenhuma carta perdeu automação.
-  Na v0.46.0, a primeira versão da regra do Rally at the Hornburg derrubou o Grand
-  Crescendo ("Create **X** 1/1 …") de full para injogável; corrigida movendo as guardas
-  para a **condição** do `if`, de modo que uma regra que não casa inteira deixa a linha
-  seguir para as regras seguintes em vez de reprovar a carta.
+- As 42 falhas de simulação são as mesmas desde a v0.45.0 — nenhuma nova nas duas
+  últimas levas. A única acrescentada em toda a corrida é **Melek, Reforged
+  Researcher**: com a união de tipos, o `cdaPower/cdaToughness` dela passou a compilar
+  ("o dobro do número de cartas de instantâneo e feitiço no seu cemitério"). No cenário
+  do auditor o cemitério está vazio, então ela entra 0/0 e morre — comportamento
+  **correto** de Magic, igual aos 17 casos já presentes nesse balde (Splinterfright,
+  Boneyard Wurm, Uro, Kroxa…). A carta saiu de manual para parcial: é ganho.
+- Cobertura ponderada do Pauper: 72,1% → 78,9% → 80,5% → **81,8%**; cartas full do
+  meta Pauper: 298 → **339** (lacunas 159 → 118). Legacy segue em 99,2%.
+- Diff de compilação das 38.629 cartas em cada release: **nenhuma carta perdeu
+  automação** em nenhuma delas. Na v0.46.0, a primeira versão da regra do Rally at the
+  Hornburg derrubou o Grand Crescendo ("Create **X** 1/1 …") de full para injogável;
+  corrigida movendo as guardas para a **condição** do `if`, de modo que uma regra que
+  não casa inteira deixa a linha seguir para as regras seguintes em vez de reprovar a
+  carta. Foi o diff que pegou isso, não os testes.
+
+## Onde um único op destrava mais de uma carta (prioridade para o Fable)
+1. **`TargetSpec.spellType`** só tem `creature`/`noncreature`/`instantSorcery`.
+   Acrescentar `instant`, `sorcery`, `artifact` e `enchantment` destrava Dispel (44,1),
+   Steel Sabotage (25,9), Envelop (9,3) e Annul (6,1) — ~85 de peso somado.
+2. **Aura que muda o hospedeiro além de P/T e keywords** (`attachEffect.becomesSubtype`,
+   `attachEffect.grantAbilities`, `attachEffect.extraManaOnTap`): Utopia Sprawl (27,2),
+   Wild Growth (13,5), Abundant Growth (9,2), Spreading Seas (8,4) — ~58.
+3. **Escolha entre dois custos** (`op: 'chooseCost'`): Highway Robbery (59,2) e
+   Monstrous Emergence (13,4) — ~73.
+4. **Permanentes/terrenos de neve** (`FilterSpec.snow`): Skred (22,8) e Thermokarst
+   (13,6) — ~36.
+5. **`chooseOnEnter` com cor excluída**: os quatro Gates (Citadel, Cliffgate, Manor,
+   Sea) — ~19.
+6. **`SubjectRef` aceitar `controllerOf:${n}`**: Smash to Smithereens (13,9) e
+   Molten Rain (1,8).

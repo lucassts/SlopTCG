@@ -547,6 +547,11 @@ function parseEffectText(
   let spec: TargetSpec | undefined;
   let specs: TargetSpec[] | undefined;
   let selfExile = false;
+  // Leva F (pauper): "deals N damage to each of up to two target creatures" (Cast into the Fire).
+  if ((m = text.match(/^~ deals (\d+) damage to each of up to two target creatures\.$/i))) {
+    const n = parseInt(m[1], 10);
+    return { steps: [{ op: 'damage', to: 'target:0', amount: n }, { op: 'damage', to: 'target:1', amount: n }], specs: [{ what: 'creature', optional: true }, { what: 'creature', optional: true }] };
+  }
   // Borne Upon a Wind: "You may cast spells this turn as though they had flash."
   if ((m = text.match(/^You may cast spells this turn as though they had flash\.\s*(.*)$/i))) {
     steps.push({ op: 'spellsFlashThisTurn' });
@@ -2307,6 +2312,32 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     return true;
   }
   // ---- Leva F3 (pauper)
+  // Refurbished Familiar: numa partida de dois, "para cada oponente que não puder
+  // descartar" é exatamente "se a mão do oponente estiver vazia".
+  if (/^When ~ enters, each opponent discards a card\. For each opponent who can't, you draw a card\.$/i.test(line)) {
+    st.abilities.push({
+      kind: 'triggered',
+      trigger: { on: 'etb', self: true },
+      effect: [{
+        op: 'if',
+        cond: { kind: 'compare', left: { handSize: 'opponent' }, cmp: 'eq', right: 0 },
+        then: [{ op: 'draw', who: 'controller', count: 1 }],
+        else: [{ op: 'discard', who: 'opponent', count: 1 }],
+      }],
+      text: 'cada oponente descarta uma carta; quem não puder, você compra uma',
+    });
+    return true;
+  }
+  // Temur Battle Rage: a segunda linha volta ao alvo já escolhido pela primeira.
+  if (isSpell && (m = line.match(/^(?:Ferocious — )?That creature also gains (\w[\w\s]*?) until end of turn if you control a creature with power (\d+) or greater\.$/i))
+      && keywordList(m[1]) && st.spellTargets.length > 0) {
+    st.spellEffect.push({
+      op: 'if',
+      cond: { kind: 'controlsAtLeast', count: 1, filter: { what: 'creature', controlledBy: 'you', powerAtLeast: parseInt(m[2], 10) } },
+      then: [{ op: 'pump', what: 'target:0', power: 0, toughness: 0, keywords: keywordList(m[1])! }],
+    });
+    return true;
+  }
   // Rally at the Hornburg: fichas + keyword coletiva por subtipo, na mesma linha.
   // Guardas na condição, não no corpo: se algum pedaço não casar, a linha segue
   // para as regras seguintes em vez de derrubar a carta inteira (Grand Crescendo).
