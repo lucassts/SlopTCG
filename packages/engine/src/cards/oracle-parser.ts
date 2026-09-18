@@ -1175,6 +1175,8 @@ function specsOf(p: { spec?: TargetSpec; specs?: TargetSpec[] }): TargetSpec[] |
 // ----------------------------------------------------------------- state
 
 interface ParseState {
+  /** Nome curto da carta (o que vira `~` no texto), para tokens "named ~'s X". */
+  shortName?: string;
   keywords: Keyword[];
   protectionFrom: Color[];
   entersTapped: boolean;
@@ -2276,6 +2278,104 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     st.abilities.push({ kind: 'loyalty', cost: parseInt(m[1].replace('−', '-'), 10), effect: [{ op: 'keepOnePerTypeSacrificeRest', who: 'opponent' }], text: line });
     return true;
   }
+  // ---- Leva F (fáceis): lacunas do Legacy que a engine já sabe executar
+  // Craterhoof Behemoth.
+  if (/^When ~ enters, creatures you control gain trample and get \+X\/\+X until end of turn, where X is the number of creatures you control\.$/i.test(line)) {
+    const f: FilterSpec = { what: 'creature', controlledBy: 'you' };
+    st.abilities.push({
+      kind: 'triggered',
+      trigger: { on: 'etb', self: true },
+      effect: [{ op: 'forEach', filter: f, effect: [{ op: 'pump', what: 'iter', power: 0, toughness: 0, powerDyn: { per: f }, toughnessDyn: { per: f }, keywords: ['trample'] }] }],
+      text: 'criaturas que você controla ganham atropelar e +X/+X até o fim do turno (X = criaturas que você controla)',
+    });
+    return true;
+  }
+  // Koma, World-Eater: fichas com nome derivado do nome da carta ("~'s Coil").
+  if ((m = line.match(/^Whenever ~ deals combat damage to a player, create (\w+) (\d+)\/(\d+) (white|blue|black|red|green|colorless) ([\w\s]+?) creature tokens? named ~'s ([\w\s]+)\.$/i))) {
+    const count = num(m[1]);
+    if (count === null || !st.shortName) return false;
+    const colorWord = m[4].toLowerCase();
+    const colors: Color[] = colorWord === 'colorless' ? [] : [COLOR_WORDS[colorWord]];
+    const tokenName = `${st.shortName}'s ${m[6].trim()}`;
+    st.abilities.push({
+      kind: 'triggered',
+      trigger: { on: 'combatDamageToPlayer', self: true },
+      effect: [{ op: 'token', who: 'controller', count, name: tokenName, power: parseInt(m[2], 10), toughness: parseInt(m[3], 10), colors, subtypes: [m[5].trim()] }],
+      text: `cria ${count} ficha(s) ${m[2]}/${m[3]} de criatura ${m[5].trim()} chamada(s) ${tokenName}`,
+    });
+    return true;
+  }
+  // Runehorn Hellkite: habilidade ativada do cemitério que exila a própria carta.
+  if ((m = line.match(/^((?:\{[^}]+\})+), Exile this card from your graveyard: Each player discards their hand, then draws (\w+) cards\.$/i))) {
+    const n = num(m[2]);
+    if (n === null) return false;
+    st.abilities.push({
+      kind: 'activated',
+      zone: 'graveyard',
+      exileSelf: true,
+      cost: { mana: m[1] },
+      effect: [{ op: 'discardHand', who: 'each' }, { op: 'draw', who: 'each', count: n }],
+      text: `${m[1]}, exile do cemitério: cada jogador descarta a mão e compra ${n} cartas`,
+    });
+    return true;
+  }
+  // Jack-o'-Lantern: mana de qualquer cor exilando a carta do cemitério.
+  if ((m = line.match(/^((?:\{[^}]+\})+), Exile this card from your graveyard: Add one mana of any color\.$/i))) {
+    st.abilities.push({
+      kind: 'activated',
+      zone: 'graveyard',
+      exileSelf: true,
+      cost: { mana: m[1] },
+      isManaAbility: true,
+      effect: [{ op: 'addManaChoice', who: 'controller' }],
+      text: `${m[1]}, exile do cemitério: adicione uma mana de qualquer cor`,
+    });
+    return true;
+  }
+  // Firemind's Foresight: três buscas encadeadas por valor de mana decrescente.
+  if ((m = line.match(/^Search your library for an instant card with mana value (\d+), reveal it, and put it into your hand\. Then repeat this process for instant cards with mana values (\d+) and (\d+)\. Then shuffle\.$/i))) {
+    const mvs = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+    st.spellEffect.push(...mvs.map((mv): EffectStep => ({ op: 'search', filter: { what: 'instant', cmcEquals: mv }, count: 1, to: 'hand' })));
+    return true;
+  }
+  // Parallax Wave: ao sair do campo, devolve o que ela exilou.
+  if (/^When ~ leaves the battlefield, each player returns to the battlefield all cards they own exiled with it\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'leaves', self: true }, effect: [{ op: 'returnExiledBy', to: 'battlefield' }], text: 'devolve ao campo as cartas exiladas por ela' });
+    return true;
+  }
+  // Cityscape Leveler: "When you cast ~ and whenever ~ attacks, <efeito>" — dois gatilhos, um corpo.
+  if ((m = line.match(/^When you cast (?:~|this spell) and whenever (.+?), (.+)$/i)) && !/except/i.test(m[1])) {
+    return parseLine(`When you cast ~, ${m[2]}`, st, isSpell, subtypes) && parseLine(`Whenever ${m[1]}, ${m[2]}`, st, isSpell, subtypes);
+  }
+  // Loran of the Third Path.
+  if (/^\{T\}: You and target opponent each draw a card\.$/i.test(line)) {
+    st.abilities.push({
+      kind: 'activated',
+      cost: { tap: true },
+      targets: [{ what: 'player', controlledBy: 'opponent' }],
+      effect: [{ op: 'draw', who: 'controller', count: 1 }, { op: 'draw', who: 'target:0', count: 1 }],
+      text: 'Você e o oponente alvo compram uma carta cada',
+    });
+    return true;
+  }
+  // Lavaspur Boots: equipamento com bônus, keywords e ward.
+  if ((m = line.match(/^Equipped creature gets ([+-]\d+)\/([+-]\d+) and has (\w[\w\s]*?) and ward \{(\d+)\}\.$/i))) {
+    const kws = keywordList(m[3]);
+    if (!kws) return false;
+    st.attachEffect = { ...(st.attachEffect ?? {}), power: parseInt(m[1], 10), toughness: parseInt(m[2], 10), keywords: [...(st.attachEffect?.keywords ?? []), ...kws], ward: parseInt(m[4], 10) };
+    return true;
+  }
+  // Conjurer's Bauble.
+  if (/^\{T\}, Sacrifice ~: Put up to one target card from your graveyard on the bottom of your library\. Draw a card\.$/i.test(line)) {
+    st.abilities.push({
+      kind: 'activated',
+      cost: { tap: true, sacrificeSelf: true },
+      targets: [{ what: 'card', zone: 'graveyard', ownedBy: 'you', optional: true }],
+      effect: [{ op: 'putOnLibraryBottom', what: 'target:0' }, { op: 'draw', who: 'controller', count: 1 }],
+      text: 'Põe até uma carta alvo do seu cemitério no fundo do grimório e compra uma carta',
+    });
+    return true;
+  }
   // ---- Leva 6a (Legacy, parte 2): Planar Nexus, Containment Priest, Animate Dead, Mox Diamond, Chrome Mox, Petrified Hamlet, Bilbo
   if (/^~ is every nonbasic land type\.$/i.test(line)) { st.flags9.everyNonbasicLandType = true; return true; }
   if (/^If a nontoken creature would enter and it wasn't cast, exile it instead\.$/i.test(line)) { st.flags9.exileNoncastCreatures = true; return true; }
@@ -3040,7 +3140,11 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
 
   // Normalize: strip reminder text, replace the card's own name with ~.
   // "Acererak the Archlich" → "Acererak"; "Karn, the Great Creator" → "Karn".
-  const shortName = input.name.includes(',') ? input.name.split(',')[0] : (input.name.match(/^(\w{4,}) the /)?.[1] ?? input.name);
+  // Lendárias no formato "Loran of the Third Path" / "Svyelun of Sea and Sky" também
+  // são citadas pelo primeiro nome no texto oracle; fora de lendárias o primeiro termo
+  // ("Sword of …", "Wall of …") não é apelido e não pode virar ~.
+  const legendaryOf = types.includes('Creature') && /^Legendary\b/.test(input.typeLine ?? '') ? input.name.match(/^(\w{4,}) of /)?.[1] : undefined;
+  const shortName = input.name.includes(',') ? input.name.split(',')[0] : (input.name.match(/^(\w{4,}) the /)?.[1] ?? legendaryOf ?? input.name);
   let text = (input.oracleText ?? '')
     .replace(/\([^)]*\)/g, '')
     .split(input.name).join('~')
@@ -3054,6 +3158,7 @@ export function compileOracleCard(input: OracleInput, diag?: OracleDiagnostics):
     .trim();
 
   const st = newParseState();
+  st.shortName = shortName;
 
   // Spells stay all-or-nothing (a resolução tem que estar certa); permanentes
   // sem linhas de spell podem ser jogados mesmo com habilidades não

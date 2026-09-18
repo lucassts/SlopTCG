@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-18, v0.43.0 — convoke/improvise escolhidos pelo jogador; ordem dinâmica dos modais; Legacy a 99,1%)
+## Estado (2026-09-18, v0.44.0 — leva fácil: 10 cartas do Legacy; Legacy a 99,2%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1084,6 +1084,41 @@ no campo, log "delve pagou 4 / convoke pagou 3". 559 testes (m51: 4).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.
+
+**v0.44.0 — leva fácil (10 cartas do Legacy).** Lacunas do Legacy cuja linha
+pendente já cabia no vocabulário da engine, sem tocar em `effects.ts`/`game.ts`.
+Bloco `// ---- Leva F (fáceis)` em `oracle-parser.ts`. (1) **Craterhoof
+Behemoth**: ETB → `forEach` nas criaturas suas com `pump what:'iter'` e
+`powerDyn/toughnessDyn: { per: criaturas que você controla }` + `trample`.
+(2) **Koma, World-Eater**: dano de combate ao jogador → `token` cujo nome deriva
+do nome curto da carta; `ParseState.shortName` passou a guardar esse nome
+(`~'s Coil` → `Koma's Coil`). (3) **Conjurer's Bauble**: `{T}, Sacrifice ~` com
+alvo opcional no cemitério → `putOnLibraryBottom` + `draw`. (4) **Runehorn
+Hellkite** e (5) **Jack-o'-Lantern**: habilidades ativadas do cemitério com
+`exileSelf` — `discardHand who:'each'` + `draw 7` e `addManaChoice` (mana de
+qualquer cor). (6) **Firemind's Foresight**: três `search` com
+`filter.cmcEquals` 3, 2 e 1. (7) **Parallax Wave**: gatilho `leaves` →
+`returnExiledBy to:'battlefield'`. (8) **Lavaspur Boots**: `attachEffect` com
+bônus, keywords e `ward` numérico. (9) **Loran of the Third Path**: ETB
+`destroy` com alvo opcional artefato/encantamento + `{T}` que compra para você e
+para o oponente alvo. (10) **Cityscape Leveler**: `When you cast ~ and whenever
+<X>, <corpo>` passou a virar dois gatilhos com o mesmo corpo.
+Correção de parser junto: lendárias com nome `Palavra of …` (Loran, Svyelun,
+Purraj of Urborg) não tinham o apelido trocado por `~`; `Purraj has first
+strike…` chegava a compilar como estática sobre um **subtipo** inventado
+chamado "Purraj". Agora criatura lendária `Palavra of …` também usa a primeira
+palavra como apelido. Efeito colateral: ficaram full também Parallax Tide,
+Falcon's Wing Harness, Krydle of Baldur's Gate, Gimli of the Glittering Caves,
+Beregond of the Guard, Karlov of the Ghost Council, Braulios of Pheres Band,
+Iwamori of the Open Fist, Veldrane of Sengir e Tivadar of Thorn.
+Diff de compilação das 38.629 cartas: 21 mudaram de status, todas para full,
+nenhuma perdeu automação. Auditor: **13.911 full / 14.452 parciais / 4.718
+manuais**, 0 estruturais, 41 falhas de simulação (eram 40; a nova é o
+Jack-o'-Lantern e vem de `scripts/audit-cards.mjs`, que não informa `manaColor`
+para habilidades de mana **do cemitério** — a carta está correta). Legacy:
+99,1% → **99,2%**, 434 cartas full do meta (lacunas 85 → 75). 573 testes
+(mF1: 5, mF2: 9). O que sobrou da lista está em `docs/LEVA-FACIL-relatorio.md`,
+com o op que falta em cada carta.
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.
