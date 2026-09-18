@@ -45,6 +45,10 @@ export type PlayerAction =
       escapeExile?: number[];
       /** Delve: graveyard cards chosen by the player before paying (each pays {1}); [] = no delve. Omitted = the engine picks. */
       delve?: number[];
+      /** Convoke: untapped creatures the player taps (each pays {1}); [] = none. Omitted = the engine picks. */
+      convoke?: number[];
+      /** Improvise: untapped noncreature artifacts the player taps (each pays {1}); [] = none. Omitted = the engine picks. */
+      improvise?: number[];
       /** Morph/Disguise: cast face down as a 2/2 for {3}. */
       faceDown?: boolean;
       /** Pay buyback. */

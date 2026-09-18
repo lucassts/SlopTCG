@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-17, v0.42.0 — controles manuais por consentimento; modal do cemitério fica aberto ao conjurar; Legacy a 99,1%)
+## Estado (2026-09-18, v0.43.0 — convoke/improvise escolhidos pelo jogador; ordem dinâmica dos modais; Legacy a 99,1%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1056,6 +1056,31 @@ pagamento (o fundo não bloqueia cliques). Verificado no navegador: 🛠
 ausente → pedido → pop-up no oponente → aceite → 🛠 nos dois e log; Deep
 Analysis com flashback do cemitério mantém o modal aberto durante a
 escolha de alvo. 555 testes (m50: 3).
+
+**v0.43.0 — convoke e improvise escolhidos pelo jogador; ordem dos
+modais.** Lucas: ao conjurar Hogaak do cemitério, a engine escolhia as
+criaturas a virar; e a interface de conjuração ficou escondida atrás de
+outro modal. (1) `castSpell.convoke: number[]` e `improvise: number[]`
+(como o `delve` da v0.39): permanentes desviradas do próprio jogador,
+sem repetição, dentro do custo genérico; `[]` = nenhuma; sem o campo a
+engine escolhe como antes (testes/auditor). Com `noManaToCast` (Hogaak),
+se as escolhas não cobrem o custo a conjuração falha com a mensagem
+"faltam N — só criaturas viradas e cartas exiladas pagam esta mágica",
+em vez de completar sozinha. Cliente: `beginCast` abre a caixa
+"Nome — convoke" (criaturas desviradas, `crewed` incluídas) e depois
+"Nome — improvise" (artefatos não-criatura), com "Virar N e pagar o
+resto" / "Sem convoke"; o máximo desconta o que o delve já pagou. (2)
+**Ordem dinâmica dos modais**: todos os `.mulligan-overlay` (decisão,
+cemitério/exílio, delve/convoke, cor, modo, lealdade, mulligan, sorteio,
+pedido de controles manuais, perguntas sim/não/número) recebem z-index de
+um contador: quem abre por último fica na frente (`useEffect` compara
+aberto/fechado a cada render) e clicar num modal o traz para a frente
+(`onPointerDown` → `bringToFront`). Era isto que escondia a caixa do
+delve atrás do modal do cemitério (mesma camada, ordem do DOM). Verificado
+no navegador: Hogaak no cemitério, 3 fichas e 4 cartas no cemitério →
+"Conjurar do cemitério" → caixa do delve por cima do modal do cemitério
+(z 254 > 253) → 4 escolhidas → caixa de convoke → 3 Goblins → Hogaak 8/8
+no campo, log "delve pagou 4 / convoke pagou 3". 559 testes (m51: 4).
  Auditor: 13.795 full / 14.522 parciais / 4.764
 manuais, 0 estruturais, 39 falhas de simulação. Legacy 97,5% (igual).
 478 testes.

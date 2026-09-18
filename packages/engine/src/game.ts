@@ -74,6 +74,8 @@ export interface GameOptions {
 interface CastExtra {
   method?: Extract<import('./actions.js').PlayerAction, { type: 'castSpell' }>['method'];
   delve?: number[];
+  convoke?: number[];
+  improvise?: number[];
   altReturnLand?: number;
   kickers?: number[];
   escapeExile?: number[];
@@ -365,6 +367,8 @@ export class Game {
           kickers: action.kickers,
           escapeExile: action.escapeExile,
           delve: action.delve,
+          convoke: action.convoke,
+          improvise: action.improvise,
           faceDown: action.faceDown,
           buyback: action.buyback,
           kickerTimes: action.kickerTimes,
@@ -1143,14 +1147,30 @@ export class Game {
         cost.generic -= delveIds.length;
         if (delveIds.length > 0) helpers.push({ kind: 'delve', ids: [...delveIds] });
       }
-      let plan = card.noManaToCast ? null : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor, spellCard: card });
+      // Convoke / improvise escolhidos pelo jogador (Hogaak): as permanentes que ele vira vêm com a ação; [] = nenhuma.
+      const convokeIds = card.convoke && extra.convoke ? extra.convoke : undefined;
+      const improviseIds = card.improvise && extra.improvise ? extra.improvise : undefined;
+      for (const [kind, ids, pred, label] of [
+        ['convoke', convokeIds, (o: GameObject) => isCreature(o), 'criaturas suas desviradas'],
+        ['improvise', improviseIds, (o: GameObject) => o.card.types.includes('Artifact') && !isCreature(o), 'artefatos não-criatura seus desvirados'],
+      ] as const) {
+        if (!ids) continue;
+        const bad = new Set(ids).size !== ids.length || ids.some((id) => { const o = s.objects[id]; return !o || o.zone !== 'battlefield' || o.controller !== playerId || o.tapped || id === obj.id || !pred(o); });
+        if (bad) { this.fail(playerId, `${kind}: escolha ${label}`); return false; }
+        if (ids.length > cost.generic) { this.fail(playerId, `${kind}: no máximo ${cost.generic} — o custo genérico`); return false; }
+        cost.generic -= ids.length;
+        if (ids.length > 0) helpers.push({ kind, ids: [...ids] });
+      }
+      if (card.noManaToCast && cost.generic > 0 && (convokeIds || delveIds) && !(card.convoke && !convokeIds) && !(card.delve && !delveIds))
+        { this.fail(playerId, `${card.name}: faltam ${cost.generic} — só criaturas viradas e cartas exiladas pagam esta mágica`); return false; }
+      let plan = card.noManaToCast ? (cost.generic <= 0 ? { taps: [], fromPool: [], lifePaid: 0 } : null) : planPayment(s, playerId, cost, { poolOnly: !!this.options.manualMana, anyColor, spellCard: card });
       // Convoke / Improvise / Delve: only when the mana alone doesn't cover it —
-      // tap creatures / artifacts, exile graveyard cards, one generic each.
-      if (!plan && (card.convoke || card.improvise || (card.delve && !delveIds))) {
+      // tap creatures / artifacts, exile graveyard cards, one generic each (sem escolha do jogador: a engine escolhe).
+      if (!plan && ((card.convoke && !convokeIds) || (card.improvise && !improviseIds) || (card.delve && !delveIds))) {
         const pool = (pred: (o: GameObject) => boolean) => s.players[playerId].zones.battlefield.map((id) => s.objects[id]).filter((o) => !o.tapped && pred(o)).map((o) => o.id);
         const candidates: { kind: 'convoke' | 'improvise' | 'delve'; ids: number[] }[] = [];
-        if (card.convoke) candidates.push({ kind: 'convoke', ids: pool((o) => isCreature(o)) });
-        if (card.improvise) candidates.push({ kind: 'improvise', ids: pool((o) => o.card.types.includes('Artifact') && !isCreature(o)) });
+        if (card.convoke && !convokeIds) candidates.push({ kind: 'convoke', ids: pool((o) => isCreature(o)) });
+        if (card.improvise && !improviseIds) candidates.push({ kind: 'improvise', ids: pool((o) => o.card.types.includes('Artifact') && !isCreature(o)) });
         if (card.delve && !delveIds) candidates.push({ kind: 'delve', ids: s.players[playerId].zones.graveyard.filter((id) => id !== obj.id) });
         for (const c of candidates) {
           for (const id of c.ids) {

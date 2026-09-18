@@ -123,6 +123,9 @@ interface Targeting {
   replicateTimes?: number;
   /** Delve: graveyard cards chosen before paying. */
   delve?: number[];
+  /** Convoke / improvise: permanents the player taps, chosen before paying. */
+  convoke?: number[];
+  improvise?: number[];
   /** "Exile N cards from your graveyard" cost of an ability: the cards chosen. */
   gyExile?: number[];
 }
@@ -179,6 +182,12 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   const [zonePick, setZonePick] = useState<{ player: PlayerId; zone: 'graveyard' | 'exile' | 'sideboard' } | null>(null);
   /** Escolha de cartas do cemitério feita pelo jogador (delve, escapar, custo adicional, custo de habilidade). */
   const [gyPick, setGyPick] = useState<{ title: string; hint: string; options: CardView[]; min: number; max: number; chosen: number[]; confirmLabel: (n: number) => string; noneLabel?: string; validate?: (ids: number[]) => string | null; onConfirm: (ids: number[]) => void } | null>(null);
+  // Ordem dos modais: o que abriu por último fica na frente; clicar num modal o traz para a frente. Sem isto, dois modais na mesma camada seguem a ordem do DOM e um pode ficar 100% escondido.
+  const zCounter = useRef(250);
+  const [modalZ, setModalZ] = useState<Record<string, number>>({});
+  const prevOpen = useRef<Record<string, boolean>>({});
+  const bringToFront = (key: string) => { if (modalZ[key] === zCounter.current) return; zCounter.current += 1; const z = zCounter.current; setModalZ((m) => ({ ...m, [key]: z })); };
+  const zFor = (key: string) => ({ zIndex: modalZ[key] ?? 250 });
   const [menu, setMenu] = useState<MenuState | null>(null);
   // Perguntas de conjuração/ataque (X, kicker, barganha, buyback, replicar, vida, casualty, exert…):
   // modal no mesmo padrão das decisões da engine — nada de confirm()/prompt() do navegador.
@@ -254,6 +263,22 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
   };
   const [showManual, setShowManual] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  useEffect(() => {
+    const open: Record<string, boolean> = {
+      manualReq: !manualOn && !!manualPending && manualPending !== you,
+      gyPick: !!gyPick,
+      colorPick: !!colorPick,
+      chooseMode: view.pendingDecision?.type === 'chooseMode' && view.pendingDecision.player === you,
+      choice: !!view.pendingDecision && view.pendingDecision.type === 'effectChoice' && view.pendingDecision.player === you,
+      mulligan: !!view.mulligan && view.status === 'playing',
+      modalPick: !!modalPick,
+      loyaltyPick: !!loyaltyPick,
+      zonePick: !!zonePick,
+      starter: !!view.starter && !view.starter.chosen,
+    };
+    for (const [k, v] of Object.entries(open)) if (v && !prevOpen.current[k]) bringToFront(k);
+    prevOpen.current = open;
+  });
   const [stops, setStops] = useState<StopsConfig>(loadStops);
   const [chatText, setChatText] = useState('');
   const [concedeArmed, setConcedeArmed] = useState(false);
@@ -487,6 +512,8 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
           modes: t.modes,
           replicateTimes: t.replicateTimes,
           delve: t.delve,
+          convoke: t.convoke,
+          improvise: t.improvise,
         });
       } else {
         // Ordem dos picks: cartas da mão (custo de descarte) → criatura a virar (station) → sacrifícios → alvos.
@@ -678,7 +705,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
     cv: CardView,
     mode: number | undefined,
     fromGraveyard = false,
-    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[]; face?: 'back'; fuse?: boolean; delve?: number[] } = {},
+    extra: { method?: CastMethodKind; escapeExile?: number[]; entwine?: boolean; modes?: number[]; face?: 'back'; fuse?: boolean; delve?: number[]; convoke?: number[]; improvise?: number[] } = {},
   ) => {
     // Leva 5b: conjurar o verso (MDFC, aventura, metade de carta dividida) usa a definição do verso.
     const def = (extra.face === 'back' || extra.method === 'disturb') && cv.card.backFace ? cv.card.backFace : cv.card;
@@ -694,6 +721,38 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         confirmLabel: (n) => t('Exilar {n} e pagar o resto', { n }),
         noneLabel: t('Sem delve'),
         onConfirm: (ids) => void beginCast(cv, mode, fromGraveyard, { ...extra, delve: ids }),
+      });
+      return;
+    }
+    // Convoke (Hogaak): o jogador escolhe as criaturas que vira; cada uma paga {1}. Pode ser nenhuma.
+    if (def.convoke && extra.convoke === undefined) {
+      const options = me.battlefield.filter((c) => !c.tapped && c.objectId !== cv.objectId && (c.card.types.includes('Creature') || c.crewed));
+      const symbols = [...(def.manaCost ?? '').matchAll(/\{([^}]+)\}/g)].reduce((n, m) => n + (/^\d+$/.test(m[1]) ? parseInt(m[1], 10) : 1), 0);
+      const max = Math.min(options.length, Math.max(0, symbols - (extra.delve?.length ?? 0)));
+      if (options.length === 0 || max === 0) return beginCast(cv, mode, fromGraveyard, { ...extra, convoke: [] });
+      setGyPick({
+        title: `${def.name} — convoke`,
+        hint: t('Escolha até {max} criatura(s) para virar — cada uma paga {1} do custo. Pode ser nenhuma.', { max }),
+        options, min: 0, max, chosen: [],
+        confirmLabel: (n) => t('Virar {n} e pagar o resto', { n }),
+        noneLabel: t('Sem convoke'),
+        onConfirm: (ids) => void beginCast(cv, mode, fromGraveyard, { ...extra, convoke: ids }),
+      });
+      return;
+    }
+    // Improvise: o jogador escolhe os artefatos (não-criatura) que vira.
+    if (def.improvise && extra.improvise === undefined) {
+      const options = me.battlefield.filter((c) => !c.tapped && c.objectId !== cv.objectId && c.card.types.includes('Artifact') && !c.card.types.includes('Creature') && !c.crewed);
+      const symbols = [...(def.manaCost ?? '').matchAll(/\{([^}]+)\}/g)].reduce((n, m) => n + (/^\d+$/.test(m[1]) ? parseInt(m[1], 10) : 1), 0);
+      const max = Math.min(options.length, Math.max(0, symbols - (extra.delve?.length ?? 0) - (extra.convoke?.length ?? 0)));
+      if (options.length === 0 || max === 0) return beginCast(cv, mode, fromGraveyard, { ...extra, improvise: [] });
+      setGyPick({
+        title: `${def.name} — improvise`,
+        hint: t('Escolha até {max} artefato(s) para virar — cada um paga {1} do custo. Pode ser nenhum.', { max }),
+        options, min: 0, max, chosen: [],
+        confirmLabel: (n) => t('Virar {n} e pagar o resto', { n }),
+        noneLabel: t('Sem improvise'),
+        onConfirm: (ids) => void beginCast(cv, mode, fromGraveyard, { ...extra, improvise: ids }),
       });
       return;
     }
@@ -784,11 +843,11 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
               : def.spellTargets ?? [];
     const specs = [...handSpecs, ...sacSpecs, ...targetSpecs];
     if (specs.length === 0) {
-      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse, delve: extra.delve });
+      onAction({ type: 'castSpell', objectId: cv.objectId, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, method: extra.method, escapeExile: extra.escapeExile, entwine: extra.entwine, replicateTimes, face: extra.face, fuse: extra.fuse, delve: extra.delve, convoke: extra.convoke, improvise: extra.improvise });
     } else {
       const base = mode !== undefined ? `${def.name} — ${def.spellModes?.[mode]?.label}` : extra.modes ? `${def.name} — ${extra.modes.map((i) => def.spellModes?.[i]?.label).join(' + ')}` : def.name;
       const label = handPickCount > 0 ? t('{base} (escolha {what} a descartar primeiro)', { base, what: extra.method === 'retrace' ? t('o terreno') : t('a(s) carta(s)') }) : sacCount > 0 ? t('{base} (escolha o sacrifício primeiro)', { base }) : base;
-      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, delve: extra.delve, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
+      setTargeting({ kind: 'spell', objectId: cv.objectId, specs, chosen: [], label, x, mode, modes: extra.modes, kicked, kickerTimes, kickers, buyback, sacCount: sacSpecs.length, method: extra.method, escapeExile: extra.escapeExile, delve: extra.delve, convoke: extra.convoke, improvise: extra.improvise, entwine: extra.entwine, handPickCount: handPickCount || undefined, handPickLand: extra.method === 'retrace' || undefined, handPickDiscard: discardCost > 0 || undefined, replicateTimes, casualtyPick: casualtyPick || undefined, face: extra.face, fuse: extra.fuse });
     }
   };
 
@@ -1517,7 +1576,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- pedido de controles manuais: o oponente aceita ou recusa -------- */}
       {!manualOn && manualPending && manualPending !== you && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('manualReq')} onPointerDown={() => bringToFront('manualReq')}>
           <div className="mulligan-box">
             <h2>{t('Controles manuais (Tier 3)')}</h2>
             <div className="muted">{t('{name} quer ativar os controles manuais (mover cartas, virar, marcadores, vida). Se aceitar, valem para os dois pelo resto da partida e tudo fica no log.', { name: view.players[manualPending].name })}</div>
@@ -1530,7 +1589,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       )}
       {/* -------- escolha de cartas do cemitério (delve, escapar, custos) -------- */}
       {gyPick && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('gyPick')} onPointerDown={() => bringToFront('gyPick')}>
           <div className="mulligan-box">
             <h2>{gyPick.title}</h2>
             <div className="muted">{gyPick.hint}</div>
@@ -1565,7 +1624,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       )}
       {/* -------- escolha da cor de mana ("any color") -------- */}
       {colorPick && (
-        <div className="mulligan-overlay" onClick={() => setColorPick(null)}>
+        <div className="mulligan-overlay" style={zFor('colorPick')} onPointerDown={() => bringToFront('colorPick')} onClick={() => setColorPick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>{colorPick.name}</h2>
             <div className="muted">{t('Escolha a cor da mana:')}</div>
@@ -1598,7 +1657,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- escolha de modo de gatilho ("ao entrar, escolha um") -------- */}
       {view.pendingDecision?.type === 'chooseMode' && view.pendingDecision.player === you && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('chooseMode')} onPointerDown={() => bringToFront('chooseMode')}>
           <div className="mulligan-box">
             <h2>{view.pendingDecision.cardName}</h2>
             <div className="muted">{t('Escolha um modo:')}</div>
@@ -1614,7 +1673,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       {/* -------- sim/não (Mana Leak: pagar ou deixar anular) -------- */}
       {/* -------- perguntas de conjuração/ataque (X, kicker, barganha, buyback…) -------- */}
       {ask && (
-        <div className="mulligan-overlay light">
+        <div className="mulligan-overlay light" style={zFor('ask')} onPointerDown={() => bringToFront('ask')}>
           <div className="mulligan-box">
             <h2>{ask.title}</h2>
             <div className="muted">{ask.text}</div>
@@ -1640,7 +1699,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
       )}
 
       {myChoice && myChoice.mode === 'confirm' && (
-        <div className="mulligan-overlay light">
+        <div className="mulligan-overlay light" style={zFor('choice')} onPointerDown={() => bringToFront('choice')}>
           <div className="mulligan-box">
             <h2>{t('Decisão')}</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1658,7 +1717,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- escolher cor ("as enters, choose a color") -------- */}
       {myChoice && myChoice.mode === 'chooseColor' && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('choice')} onPointerDown={() => bringToFront('choice')}>
           <div className="mulligan-box">
             <h2>{t('Escolha uma cor')}</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1675,7 +1734,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- escolher tipo de criatura -------- */}
       {myChoice && myChoice.mode === 'chooseType' && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('choice')} onPointerDown={() => bringToFront('choice')}>
           <div className="mulligan-box">
             <h2>{t('Escolha um tipo de criatura')}</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1701,7 +1760,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- nomear uma carta (Cabal Therapy) -------- */}
       {myChoice && myChoice.mode === 'number' && (
-        <div className="mulligan-overlay light">
+        <div className="mulligan-overlay light" style={zFor('choice')} onPointerDown={() => bringToFront('choice')}>
           <div className="mulligan-box">
             <h2>{t('Escolha um número')}</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1733,7 +1792,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
         </div>
       )}
       {myChoice && myChoice.mode === 'nameCard' && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('choice')} onPointerDown={() => bringToFront('choice')}>
           <div className="mulligan-box">
             <h2>{t('Nomear carta')}</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1815,7 +1874,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- mulligan -------- */}
       {view.mulligan && view.status === 'playing' && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('mulligan')} onPointerDown={() => bringToFront('mulligan')}>
           <div className="mulligan-box">
             <h2>{t('Mão inicial')}{mullTaken > 0 ? t(' — mulligan {n}', { n: mullTaken }) : ''}</h2>
             <div className="mulligan-hand">
@@ -1872,7 +1931,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- escolha de efeito (descarte, sacrifício, vidência, busca) -------- */}
       {myChoice && (myChoice.mode === 'cards' || myChoice.mode === 'scry' || myChoice.mode === 'surveil' || myChoice.mode === 'order') && myChoice.options && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('choice')} onPointerDown={() => bringToFront('choice')}>
           <div className="mulligan-box">
             <h2>{myChoice.mode === 'scry' ? t('Vidência') : myChoice.mode === 'surveil' ? t('Vigiar') : myChoice.mode === 'order' ? t('Ordem') : t('Escolha')}</h2>
             <div className="muted">{myChoice.prompt}</div>
@@ -1926,7 +1985,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- escolha de modo (mágicas modais) -------- */}
       {modalPick && (
-        <div className="mulligan-overlay" onClick={() => { setModalPick(null); setModalSel(new Set()); }}>
+        <div className="mulligan-overlay" style={zFor('modalPick')} onPointerDown={() => bringToFront('modalPick')} onClick={() => { setModalPick(null); setModalSel(new Set()); }}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>{modalPick.card.name}</h2>
             {modalPick.card.spellModeChoice ? (
@@ -1986,7 +2045,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- habilidades de lealdade -------- */}
       {loyaltyPick && (
-        <div className="mulligan-overlay" onClick={() => setLoyaltyPick(null)}>
+        <div className="mulligan-overlay" style={zFor('loyaltyPick')} onPointerDown={() => bringToFront('loyaltyPick')} onClick={() => setLoyaltyPick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>{loyaltyPick.card.name}</h2>
             <div className="muted">{t('Lealdade:')} {loyaltyPick.counters['loyalty'] ?? 0}</div>
@@ -2011,7 +2070,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- cemitério/exílio (estilo MTGO; flashback no próprio) -------- */}
       {zonePick && (
-        <div className="mulligan-overlay" onClick={() => setZonePick(null)}>
+        <div className="mulligan-overlay" style={zFor('zonePick')} onPointerDown={() => bringToFront('zonePick')} onClick={() => setZonePick(null)}>
           <div className="mulligan-box" onClick={(e) => e.stopPropagation()}>
             <h2>
               {t('{zone} de {name}', { zone: zonePick.zone === 'graveyard' ? t('Cemitério') : zonePick.zone === 'exile' ? t('Exílio') : t('Sideboard (fora do jogo)'), name: view.players[zonePick.player].name })}
@@ -2113,7 +2172,7 @@ export function GameBoard({ view, syncSeq, log, match, onAction, onExit, onConti
 
       {/* -------- roll inicial / escolha de quem começa -------- */}
       {view.starter && !view.starter.chosen && (
-        <div className="mulligan-overlay">
+        <div className="mulligan-overlay" style={zFor('starter')} onPointerDown={() => bringToFront('starter')}>
           <div className="mulligan-box">
             <h2>{t('Quem começa?')}</h2>
             {view.starter.rolls[you] > 0 ? (
