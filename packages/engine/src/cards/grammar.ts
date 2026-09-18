@@ -200,6 +200,16 @@ export function parseNounG(raw: string): NounInfo | null {
   const words = core.split(' ');
   const typeWord = (w: string) => CARD_TYPE_WORD[w.toLowerCase().replace(/s$/, '')];
   const alts = core.split(/,?\s+or\s+|,\s*/).map((s) => s.trim()).filter(Boolean);
+  // "instant and sorcery cards" / "artifact and enchantment cards": em MTG o "e" aqui
+  // é união de tipos (cada carta é de um dos tipos), não interseção.
+  if (alts.length === 1) {
+    const andAlts = core.split(/\s+and\s+/).map((x) => x.trim()).filter(Boolean);
+    if (andAlts.length > 1 && andAlts.every((a) => typeWord(a))) {
+      const types = andAlts.map((a) => typeWord(a)!);
+      if (types.includes('Instant') || types.includes('Sorcery')) return { filter: { ...filter, typeAnyOf: types }, zone };
+      return { filter: { ...filter, what: 'permanent', typeAnyOf: types }, zone };
+    }
+  }
   if (alts.length > 1) {
     // "artifact or enchantment", "Elf or Goblin", "Mountain or Forest card".
     if (alts.every((a) => BASIC_TYPES.includes(a))) return { filter: { ...filter, what: 'land', subtypeAnyOf: alts }, zone };
@@ -1095,12 +1105,19 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
         if (mm[3] && !info) return null;
         return [{ op: 'digTop', count: n, pick, filter: info?.filter, rest: /graveyard/i.test(tail) ? 'graveyard' : 'bottom' }];
       }
-      if ((mm = tail.match(/^you may reveal (?:a|an) (.+?) card from among them and put it into your hand[.,]? ?(?:then )?put the rest (?:on the bottom of your library in a random order|into your graveyard|on the bottom of your library)$/i))) {
+      if ((mm = tail.match(/^you may reveal (?:a|an) (.+?) card from among them and put it into your hand[.,]? ?(?:then )?put the rest (?:on the bottom of your library in a random order|on the bottom of your library in any order|into your graveyard|on the bottom of your library)$/i))) {
         const info = parseNounG(mm[1]);
         if (!info) return null;
         return [{ op: 'digTop', count: n, pick: 1, filter: info.filter, rest: /graveyard/i.test(tail) ? 'graveyard' : 'bottom' }];
       }
-      if ((mm = tail.match(/^put (?:one of them|(?:a|an) (.+?) card from among them) (?:into your hand|on top of your library)\.? ?(?:put the rest|and the rest) (?:on the bottom of your library in a random order|into your graveyard)$/i))) {
+      // Leva F (pauper): "you may reveal any number of <tipo> cards from among them and put the
+      // revealed cards into your hand" (Lead the Stampede) — o máximo é tudo o que foi olhado.
+      if ((mm = tail.match(/^you may reveal any number of (.+?) cards from among them and put the revealed cards into your hand[.,]? ?(?:then )?put the rest (?:on the bottom of your library in a random order|on the bottom of your library in any order|into your graveyard|on the bottom of your library)$/i))) {
+        const info = parseNounG(mm[1]);
+        if (!info) return null;
+        return [{ op: 'digTop', count: n, pick: n, filter: info.filter, rest: /graveyard/i.test(tail) ? 'graveyard' : 'bottom' }];
+      }
+      if ((mm = tail.match(/^put (?:one of them|(?:a|an) (.+?) card from among them) (?:into your hand|on top of your library)\.? ?(?:put the rest|and the rest) (?:on the bottom of your library in a random order|on the bottom of your library in any order|into your graveyard)$/i))) {
         const info = mm[1] ? parseNounG(mm[1]) : null;
         if (mm[1] && !info) return null;
         return [{ op: 'digTop', count: n, pick: 1, filter: info?.filter, rest: /graveyard/i.test(tail) ? 'graveyard' : 'bottom' }];
@@ -1242,14 +1259,18 @@ export interface StaticG {
 export function parseStaticG(line: string): StaticG | null {
   const t = line.trim().replace(/\.$/, '');
   let m: RegExpMatchArray | null;
-  if ((m = t.match(/^(~|enchanted creature|equipped creature) gets ([+-]\d+)\/([+-]\d+) for each (.+)$/i))) {
+  // Ethereal Armor: o bônus por contagem pode vir com keywords na mesma frase
+  // ("+1/+1 for each enchantment you control and has first strike").
+  if ((m = t.match(/^(~|enchanted creature|equipped creature) gets ([+-]\d+)\/([+-]\d+) for each (.+?)(?: and (?:has|have) (\w[\w\s]*?))?$/i))) {
     const per = forEachSuffix(`x for each ${m[4]}`)?.per;
     if (!per || !('per' in (per as object))) return null;
     const f = (per as { per: FilterSpec }).per;
     const p = parseInt(m[2], 10), tg = parseInt(m[3], 10);
     if (Math.abs(p) !== 1 && p !== 0) return null;
     if (Math.abs(tg) !== 1 && tg !== 0) return null;
-    return { filter: {}, selfOnly: m[1] === '~', hostOnly: m[1] !== '~', powerPer: p !== 0 ? f : undefined, toughnessPer: tg !== 0 ? f : undefined };
+    const kws = m[5] ? keywordList(m[5]) : undefined;
+    if (m[5] && !kws) return null;
+    return { filter: {}, selfOnly: m[1] === '~', hostOnly: m[1] !== '~', powerPer: p !== 0 ? f : undefined, toughnessPer: tg !== 0 ? f : undefined, keywords: kws ?? undefined };
   }
   let subject: string | undefined;
   let pw: string | undefined;

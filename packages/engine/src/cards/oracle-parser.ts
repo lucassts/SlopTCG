@@ -1898,7 +1898,8 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   if (/^Enchanted creature gets ([+-]\d+)\/([+-]\d+) for each (.+)\.$/i.test(line)) {
     const sg = parseStaticG(line);
     if (!sg) return false;
-    st.attachEffect = { ...(st.attachEffect ?? {}), powerPer: sg.powerPer, toughnessPer: sg.toughnessPer };
+    const armorKws = [...(st.attachEffect?.keywords ?? []), ...(sg.keywords ?? [])];
+    st.attachEffect = { ...(st.attachEffect ?? {}), powerPer: sg.powerPer, toughnessPer: sg.toughnessPer, keywords: armorKws.length > 0 ? armorKws : undefined };
     return true;
   }
   if ((m = line.match(/^(?:Enchanted|Equipped) creature gets ([+-]\d+)\/([+-]\d+) and has ward ((?:\{[^}]+\})+)\.$/i))) {
@@ -2305,6 +2306,16 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     });
     return true;
   }
+  // ---- Leva F (pauper)
+  // Ancient Stirrings / Lead the Stampede: em mágicas o texto vem numa linha só e o
+  // separador de frases não chega no `digTop` da gramática.
+  if (isSpell && (m = line.match(/^Look at the top (\w+) cards of your library\. You may reveal (?:(?:a|an) (.+?) card from among them and put it into your hand|any number of (.+?) cards from among them and put the revealed cards into your hand)\. (?:Then p|P)ut the rest on the bottom of your library in any order\.$/i))) {
+    const n = num(m[1]);
+    const info = parseNounG(m[2] ?? m[3]);
+    if (n === null || !info || info.player) return false;
+    st.spellEffect.push({ op: 'digTop', count: n, pick: m[2] ? 1 : n, filter: info.filter, rest: 'bottom' });
+    return true;
+  }
   // Runehorn Hellkite: habilidade ativada do cemitério que exila a própria carta.
   if ((m = line.match(/^((?:\{[^}]+\})+), Exile this card from your graveyard: Each player discards their hand, then draws (\w+) cards\.$/i))) {
     const n = num(m[2]);
@@ -2329,6 +2340,78 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
       isManaAbility: true,
       effect: [{ op: 'addManaChoice', who: 'controller' }],
       text: `${m[1]}, exile do cemitério: adicione uma mana de qualquer cor`,
+    });
+    return true;
+  }
+  // Lembas: volta para o grimório em vez de ficar no cemitério.
+  if (/^When ~ is put into a graveyard from the battlefield, its owner shuffles it into their library\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'dies', self: true }, effect: [{ op: 'shuffleSelfIntoLibrary' }], text: 'o dono embaralha ~ no grimório' });
+    return true;
+  }
+  // Lotleth Giant: dano por carta de criatura no cemitério.
+  if ((m = line.match(/^When ~ enters, it deals 1 damage to target opponent for each (.+?) in your graveyard\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player || info.zone) return false;
+    st.abilities.push({
+      kind: 'triggered',
+      trigger: { on: 'etb', self: true },
+      targets: [{ what: 'player', controlledBy: 'opponent' }],
+      effect: [{ op: 'damage', to: 'target:0', amount: { graveyardCount: 'controller', filter: info.filter } }],
+      text: `causa dano ao oponente alvo igual a ${m[1]} no seu cemitério`,
+    });
+    return true;
+  }
+  // Melded Moxite: ficha de artefato-criatura virada.
+  if ((m = line.match(/^((?:\{[^}]+\})+), Sacrifice ~: Create a tapped (\d+)\/(\d+) colorless ([\w\s]+?) artifact creature token\.$/i))) {
+    st.abilities.push({
+      kind: 'activated',
+      cost: { mana: m[1], sacrificeSelf: true },
+      effect: [{ op: 'token', who: 'controller', count: 1, name: m[4].trim(), power: parseInt(m[2], 10), toughness: parseInt(m[3], 10), colors: [], subtypes: [m[4].trim()], types: ['Artifact', 'Creature'], tapped: true }],
+      text: `${m[1]}, sacrifique: cria uma ficha ${m[2]}/${m[3]} de ${m[4].trim()} artefato virada`,
+    });
+    return true;
+  }
+  // Nylea's Disciple: vida igual à devoção.
+  if ((m = line.match(/^When ~ enters, you gain life equal to your devotion to (white|blue|black|red|green)\.$/i))) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'etb', self: true }, effect: [{ op: 'gainLife', who: 'controller', amount: { devotion: COLOR_WORDS[m[1].toLowerCase()] } }], text: `ganha vida igual à sua devoção a ${m[1]}` });
+    return true;
+  }
+  // Reckoner's Bargain: vida igual ao valor de mana do sacrificado (custo adicional já lido acima).
+  if (isSpell && (m = line.match(/^You gain life equal to the sacrificed permanent's mana value\. Draw (\w+) cards\.$/i))) {
+    const n = num(m[1]);
+    if (n === null) return false;
+    st.spellEffect.push({ op: 'gainLife', who: 'controller', amount: { sacrificedManaValuePlus: 0 } }, { op: 'draw', who: 'controller', count: n });
+    return true;
+  }
+  // Dust to Dust: dois alvos do mesmo tipo.
+  if (isSpell && (m = line.match(/^Exile (two) target artifacts\.$/i))) {
+    st.spellTargets.push({ what: 'artifact' }, { what: 'artifact' });
+    st.spellEffect.push({ op: 'exile', what: 'target:0' }, { op: 'exile', what: 'target:1' });
+    return true;
+  }
+  // Ichor Wellspring: "When ~ enters or is put into a graveyard from the battlefield, <corpo>".
+  if ((m = line.match(/^When ~ enters or is put into a graveyard from the battlefield, (.+)$/i))) {
+    return parseLine(`When ~ enters, ${m[1]}`, st, isSpell, subtypes) && parseLine(`When ~ is put into a graveyard from the battlefield, ${m[1]}`, st, isSpell, subtypes);
+  }
+  // Lava Dart: flashback pagando com o sacrifício de uma permanente qualquer (não só criatura).
+  if ((m = line.match(/^Flashback—Sacrifice (?:a|an) (.+?)\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player || info.zone) return false;
+    st.flashbackSacrifice = info.filter;
+    return true;
+  }
+  // Bramble Wurm e cia.: forma geral de "{custo}, Exile this card from your graveyard: <efeito>".
+  // Vem depois das duas regras específicas acima (Runehorn, Jack-o'-Lantern), que continuam valendo.
+  if ((m = line.match(/^((?:\{[^}]+\})+), Exile this card from your graveyard: (.+)$/i))) {
+    const parsed = parseEffectText(m[2]);
+    if (!parsed || parsed.selfExile || parsed.steps.length === 0 || parsed.spec || parsed.specs) return false;
+    st.abilities.push({
+      kind: 'activated',
+      zone: 'graveyard',
+      exileSelf: true,
+      cost: { mana: m[1] },
+      effect: parsed.steps,
+      text: `${m[1]}, exile do cemitério: ${m[2]}`,
     });
     return true;
   }

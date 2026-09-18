@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-18, v0.44.0 — leva fácil: 10 cartas do Legacy; Legacy a 99,2%)
+## Estado (2026-09-18, v0.45.0 — leva fácil no Pauper: 15 cartas; Pauper a 78,9%, Legacy a 99,2%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1119,6 +1119,41 @@ para habilidades de mana **do cemitério** — a carta está correta). Legacy:
 99,1% → **99,2%**, 434 cartas full do meta (lacunas 85 → 75). 573 testes
 (mF1: 5, mF2: 9). O que sobrou da lista está em `docs/LEVA-FACIL-relatorio.md`,
 com o op que falta em cada carta.
+
+**v0.45.0 — leva fácil no Pauper (15 cartas).** Mesma fronteira da v0.44.0,
+agora sobre `data/meta/pauper-gap.md` (457 cartas do meta, 159 com lacuna, 72,1%
+ponderado — bem mais espaço que o Legacy). O ganho veio quase todo de **cinco
+regras gerais**, não de regras por carta:
+(1) `parseNounG` passou a ler "instant **and** sorcery cards" como união de tipos
+(em Magic o "e" nessa posição é união, não interseção) — destrava Tolarian Terror,
+Cryptic Serpent, Enigma Drake, Haughty Djinn, Spellheart Chimera, Bedlam Reveler,
+Cleansing Nova, Devastation, Purify, Powder Keg, Awakening…
+(2) o `digTop` da gramática passou a aceitar o final "on the bottom of your library
+**in any order**" (só aceitava "in a random order" / sem sufixo) e ganhou a forma
+"reveal **any number of** X cards … put the revealed cards into your hand" —
+Augur of Bolas, Lead the Stampede, Commune with Nature, Adventurous Impulse,
+Glint-Nest Crane, Peer Through Depths…
+(3) `parseStaticG` passou a ler keywords no fim de "gets +1/+1 for each … **and
+has** …" — Ethereal Armor, Blanchwood Armor, All That Glitters, Empyrial Armor.
+(4) forma geral de `{custo}, Exile this card from your graveyard: <efeito>`, com o
+corpo lido pelo parser de efeitos (Bramble Wurm; generaliza as duas regras
+específicas da v0.44.0).
+(5) `Flashback—Sacrifice a <permanente>` deixou de aceitar só criaturas (Lava Dart).
+Regras por carta: Ichor Wellspring ("entra **ou** vai para o cemitério" → `etb` +
+`dies`), Ancient Stirrings e Lead the Stampede (linha única de mágica, que o
+separador de frases não alcançava), Lembas (`dies` → `shuffleSelfIntoLibrary`),
+Lotleth Giant (`damage` com `graveyardCount`), Melded Moxite (ficha de
+artefato-criatura virada), Nylea's Disciple (`gainLife` com `devotion`),
+Reckoner's Bargain (`sacrificedManaValuePlus`) e Dust to Dust (dois alvos).
+Diff de compilação das 38.629 cartas: 79 mudaram de status, 78 para full e
+1 de injogável para parcial; nenhuma perdeu automação — **78 cartas fora da lista
+do Pauper** ficaram full de brinde. Auditor: **13.992 full / 14.399 parciais /
+4.690 manuais**, 0 estruturais, 42 falhas de simulação (eram 41; a nova é Melek,
+Reforged Researcher, que saiu de manual para parcial e, com o cemitério vazio do
+cenário, entra 0/0 e morre — comportamento correto, mesmo balde de Splinterfright
+e Uro). Pauper: 72,1% → **78,9%**, 314 cartas full do meta (lacunas 159 → 143).
+Legacy segue em 99,2%. 588 testes (mF3: 15). O que sobrou da lista do Pauper está
+em `docs/LEVA-FACIL-PAUPER-relatorio.md`, com o op que falta em cada carta.
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.
