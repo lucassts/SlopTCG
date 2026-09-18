@@ -1099,7 +1099,7 @@ function playerEffect(who: WhoSel, verb: string, ctx: GCtx, specs: TargetSpec[])
       if (!tail) return [{ op: 'scry', count: n }];
       if (/^you may put (?:it|that card|one of them) into your graveyard$/i.test(tail) || /^you may put any of them into your graveyard$/i.test(tail)) return [{ op: 'surveil', count: n }];
       let mm: RegExpMatchArray | null;
-      if ((mm = tail.match(/^(?:you may )?put (?:one of them|up to (\w+) of them|(\w+) of them|(?:a|an) (.+?) card from among them) into your hand and the rest (?:on the bottom of your library in a random order|on the bottom of your library in any order|into your graveyard|on the bottom of your library)$/i))) {
+      if ((mm = tail.match(/^(?:you may )?put (?:one of them|up to (\w+) of them|(\w+) of them|(?:a|an) (.+?) card from among them) into your hand and the (?:rest|other) (?:on the bottom of your library in a random order|on the bottom of your library in any order|into your graveyard|on the bottom of your library)$/i))) {
         const pick = mm[1] ? num(mm[1]) ?? 1 : mm[2] ? num(mm[2]) ?? 1 : 1;
         const info = mm[3] ? parseNounG(mm[3]) : null;
         if (mm[3] && !info) return null;

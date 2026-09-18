@@ -2306,6 +2306,158 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
     });
     return true;
   }
+  // ---- Leva F3 (pauper)
+  // Rally at the Hornburg: fichas + keyword coletiva por subtipo, na mesma linha.
+  // Guardas na condição, não no corpo: se algum pedaço não casar, a linha segue
+  // para as regras seguintes em vez de derrubar a carta inteira (Grand Crescendo).
+  if (isSpell && (m = line.match(/^Create (\w+) (\d+)\/(\d+) (white|blue|black|red|green|colorless) ([\w\s]+?) creature tokens\. ([A-Z][a-z]+)s you control gain (\w[\w\s]*?) until end of turn\.$/i))
+      && num(m[1]) !== null && keywordList(m[7]) && m[5].trim().split(' ').includes(m[6])) {
+    const count = num(m[1])!;
+    const kws = keywordList(m[7])!;
+    const cw = m[4].toLowerCase();
+    const subs = m[5].trim().split(' ');
+    st.spellEffect.push(
+      { op: 'token', who: 'controller', count, name: m[5].trim(), power: parseInt(m[2], 10), toughness: parseInt(m[3], 10), colors: cw === 'colorless' ? [] : [COLOR_WORDS[cw]], subtypes: subs },
+      { op: 'pumpEach', filter: { what: 'creature', subtype: m[6], controlledBy: 'you' }, power: 0, toughness: 0, keywords: kws },
+    );
+    return true;
+  }
+  // Reckless Impulse / Clockwork Percussionist: impulse que dura até o fim do seu próximo turno.
+  if ((m = line.match(/^(?:(When ~ dies, )e|E)xile the top (\w+|card) (?:cards )?of your library\. (?:You may play (?:those cards|it) until the end of your next turn|Until the end of your next turn, you may play (?:those cards|it))\.$/i))
+      && (m[2].toLowerCase() === 'card' || num(m[2]) !== null) && (m[1] || isSpell)) {
+    const n = m[2].toLowerCase() === 'card' ? 1 : num(m[2])!;
+    const step: EffectStep = { op: 'impulse', count: n, untilNextEndStep: true };
+    if (m[1]) st.abilities.push({ kind: 'triggered', trigger: { on: 'dies', self: true }, effect: [step], text: 'exila do topo e você pode jogar até o fim do seu próximo turno' });
+    else st.spellEffect.push(step);
+    return true;
+  }
+  // Defile: -1/-1 por permanente contada.
+  if (isSpell && (m = line.match(/^Target creature gets -1\/-1 until end of turn for each (.+?) you control\.$/i))
+      && (() => { const i = parseNounG(m![1]); return !!i && !i.player && !i.zone; })()) {
+    const info = parseNounG(m[1])!;
+    const per = { times: -1, of: { per: { ...info.filter, controlledBy: 'you' as const } } } as const;
+    st.spellTargets.push({ what: 'creature' });
+    st.spellEffect.push({ op: 'pump', what: 'target:0', power: 0, toughness: 0, powerDyn: per, toughnessDyn: per });
+    return true;
+  }
+  // End the Festivities.
+  if (isSpell && (m = line.match(/^~ deals (\d+) damage to each opponent and each creature and planeswalker they control\.$/i))) {
+    const n = parseInt(m[1], 10);
+    st.spellEffect.push(
+      { op: 'damage', to: 'opponent', amount: n },
+      { op: 'damageEach', filter: { what: 'permanent', typeAnyOf: ['Creature', 'Planeswalker'], controlledBy: 'opponent' }, amount: n },
+    );
+    return true;
+  }
+  // Fanged Flames: dano que exila em vez de mandar ao cemitério.
+  if (isSpell && (m = line.match(/^~ deals (\d+) damage to target creature(?: or planeswalker)?\. If that creature(?: or planeswalker)? would die this turn, exile it instead\.$/i))) {
+    st.spellTargets.push({ what: 'creature' });
+    st.spellEffect.push({ op: 'damage', to: 'target:0', amount: parseInt(m[1], 10), exileIfDies: true });
+    return true;
+  }
+  // Pestilence: sacrifício no fim do turno se não houver criatura nenhuma.
+  if (/^At the beginning of the end step, if no creatures are on the battlefield, sacrifice ~\.$/i.test(line)) {
+    st.abilities.push({
+      kind: 'triggered',
+      trigger: { on: 'endStep', whose: 'each' },
+      condition: { kind: 'compare', left: { per: { what: 'creature', controlledBy: 'any' } }, cmp: 'eq', right: 0 },
+      effect: [{ op: 'sacrificeSelf' }],
+      text: 'sacrifique ~ se não houver criaturas no campo',
+    });
+    return true;
+  }
+  // Aurora / Sandstorm Eidolon: volta do cemitério ao conjurar mágica multicolorida.
+  if (/^Whenever you cast a multicolored spell, you may return this card from your graveyard to your hand\.$/i.test(line)) {
+    st.abilities.push({
+      kind: 'triggered',
+      zone: 'graveyard',
+      trigger: { on: 'youCastSpellOf', filter: { multicolored: true } },
+      effect: [{ op: 'mayDo', prompt: 'devolver ~ do cemitério para a mão?', effect: [{ op: 'returnToHand', what: 'self' }] }],
+      text: 'ao conjurar mágica multicolorida, pode voltar do cemitério para a mão',
+    });
+    return true;
+  }
+  // ---- Leva F2 (pauper, segunda leva)
+  // God-Pharaoh's Faithful: gatilho por cor da mágica conjurada.
+  if ((m = line.match(/^Whenever you cast a ((?:white|blue|black|red|green)(?:, (?:white|blue|black|red|green))*,? or (?:white|blue|black|red|green)) spell, (.+)$/i))
+      && (() => { const pr = parseEffectText(m![2].charAt(0).toUpperCase() + m![2].slice(1)); return !!pr && !pr.spec && !pr.specs && pr.steps.length > 0; })()) {
+    const colors = m[1].split(/,? or |, /).map((w) => COLOR_WORDS[w.trim().toLowerCase()]);
+    const parsed = parseEffectText(m[2].charAt(0).toUpperCase() + m[2].slice(1))!;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'youCastSpellOf', filter: { colorAnyOf: colors } }, effect: parsed.steps, text: line.replace(/\.$/, '') });
+    return true;
+  }
+  // Sunscape/Thornscape Familiar e Goblin Anarchomancer: desconto por cor da mágica.
+  if ((m = line.match(/^(?:(\w+) spells and (\w+) spells you cast|Each spell you cast that's (\w+) or (\w+)) costs? ((?:\{[^}]+\})+) less to cast\.$/i))
+      && !!COLOR_WORDS[(m[1] ?? m[3]).toLowerCase()] && !!COLOR_WORDS[(m[2] ?? m[4]).toLowerCase()]) {
+    const a = (m[1] ?? m[3]).toLowerCase(), b = (m[2] ?? m[4]).toLowerCase();
+    (st.costModifiers ??= []).push({ amount: -manaValueOfCost(m[5]), whose: 'you', filter: { colorAnyOf: [COLOR_WORDS[a], COLOR_WORDS[b]] } });
+    return true;
+  }
+  // Guardians' Pledge / Holy Light: pump coletivo com filtro de cor.
+  if (isSpell && (m = line.match(/^(White|Blue|Black|Red|Green|Nonwhite|Nonblue|Nonblack|Nonred|Nongreen) creatures(?: you control)? get ([+-]\d+)\/([+-]\d+) until end of turn\.$/i))) {
+    const w = m[1].toLowerCase();
+    const neg = w.startsWith('non');
+    const color = COLOR_WORDS[neg ? w.slice(3) : w];
+    if (!color) return false;
+    const filter: FilterSpec = { what: 'creature', controlledBy: / you control/i.test(line) ? 'you' : 'any', ...(neg ? { notColor: color } : { color }) };
+    st.spellEffect.push({ op: 'pumpEach', filter, power: parseInt(m[2], 10), toughness: parseInt(m[3], 10) });
+    return true;
+  }
+  // Words of Wisdom.
+  if (isSpell && (m = line.match(/^You draw (\w+) cards, then each other player draws a card\.$/i)) && num(m[1]) !== null) {
+    const n = num(m[1])!;
+    st.spellEffect.push({ op: 'draw', who: 'controller', count: n }, { op: 'draw', who: 'opponent', count: 1 });
+    return true;
+  }
+  // Sylvok Lifestaff: gatilho da criatura equipada morrendo.
+  if ((m = line.match(/^Whenever equipped creature dies, (.+)$/i))
+      && (() => { const pr = parseEffectText(m![1].charAt(0).toUpperCase() + m![1].slice(1)); return !!pr && !pr.spec && !pr.specs && pr.steps.length > 0; })()) {
+    const parsed = parseEffectText(m[1].charAt(0).toUpperCase() + m[1].slice(1))!;
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'hostDies' }, effect: parsed.steps, text: line.replace(/\.$/, '') });
+    return true;
+  }
+  // Kruphix's Insight: revelar N e levar até M de um tipo para a mão, resto no cemitério.
+  if (isSpell && (m = line.match(/^Reveal the top (\w+) cards of your library\. Put up to (\w+) (.+?) cards from among them into your hand and the rest of the revealed cards into your graveyard\.$/i))) {
+    const n = num(m[1]), pick = num(m[2]);
+    const info = parseNounG(m[3]);
+    if (n === null || pick === null || !info || info.player) return false;
+    st.spellEffect.push({ op: 'digTop', count: n, pick, filter: info.filter, rest: 'graveyard' });
+    // (guarda: nenhuma outra regra cobre esta redação)
+    return true;
+  }
+  // Ghostly Flicker: dois alvos piscados.
+  if (isSpell && (m = line.match(/^Exile two target (.+?) you control, then return those cards to the battlefield under your control\.$/i))) {
+    const info = parseNounG(m[1]);
+    if (!info || info.player || info.zone) return false;
+    const spec = filterToTargetSpec({ ...info, filter: { ...info.filter, controlledBy: 'you' } });
+    if (!spec) return false;
+    st.spellTargets.push(spec, { ...spec });
+    st.spellEffect.push({ op: 'blink', what: 'target:0' }, { op: 'blink', what: 'target:1' });
+    return true;
+  }
+  // Visionary's Dance: habilidade da mão que descarta a própria carta.
+  if ((m = line.match(/^((?:\{[^}]+\})+), Discard this card: Look at the top (\w+) cards of your library\. Put one of them into your hand and the other into your graveyard\.$/i)) && num(m[2]) !== null) {
+    const n = num(m[2])!;
+    st.abilities.push({
+      kind: 'activated',
+      zone: 'hand',
+      cost: { mana: m[1], discardSelf: true },
+      effect: [{ op: 'digTop', count: n, pick: 1, rest: 'graveyard' }],
+      text: `${m[1]}, descarte: olhe as ${m[2]} do topo, uma para a mão e a outra para o cemitério`,
+    });
+    return true;
+  }
+  // Nested Shambler: fichas em quantidade igual ao poder da própria carta.
+  if ((m = line.match(/^When ~ dies, create X tapped (\d+)\/(\d+) (white|blue|black|red|green|colorless) ([\w\s]+?) creature tokens, where X is ~'s power\.$/i))) {
+    const cw = m[3].toLowerCase();
+    st.abilities.push({
+      kind: 'triggered',
+      trigger: { on: 'dies', self: true },
+      effect: [{ op: 'token', who: 'controller', count: { powerOf: 'self' }, name: m[4].trim(), power: parseInt(m[1], 10), toughness: parseInt(m[2], 10), colors: cw === 'colorless' ? [] : [COLOR_WORDS[cw]], subtypes: [m[4].trim()], tapped: true }],
+      text: `ao morrer, cria fichas ${m[1]}/${m[2]} de ${m[4].trim()} viradas igual ao seu poder`,
+    });
+    return true;
+  }
   // ---- Leva F (pauper)
   // Ancient Stirrings / Lead the Stampede: em mágicas o texto vem numa linha só e o
   // separador de frases não chega no `digTop` da gramática.

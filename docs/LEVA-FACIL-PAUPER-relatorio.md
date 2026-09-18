@@ -24,16 +24,39 @@ Mesma fronteira e mesmo critério de `docs/LEVA-FACIL.md`, aplicados a
 | Nylea's Disciple | 6.2 | v0.45.0 | `gainLife { devotion: 'G' }` |
 | Ethereal Armor | 9.2 | v0.45.0 | `parseStaticG` passou a ler keywords no fim do "gets +1/+1 for each … **and has** …" |
 | Lotleth Giant | 7.8 | v0.45.0 | `damage` com `{ graveyardCount: 'controller', filter: { what: 'creature' } }` |
+| God-Pharaoh's Faithful | 5.6 | v0.46.0 | gatilho `youCastSpellOf` com `filter.colorAnyOf` a partir de "a blue, black, or red spell" |
+| Sunscape / Thornscape / Nightscape / Stormscape / Thunderscape Familiar | 5.6 | v0.46.0 | `costModifiers` com `filter.colorAnyOf` a partir de "X spells and Y spells you cast cost {1} less" |
+| Goblin Anarchomancer | 4.0 | v0.46.0 | mesma regra, na redação "Each spell you cast that's red or green" |
+| Guardians' Pledge | 4.4 | v0.46.0 | `pumpEach` com filtro de cor ("White creatures you control get +2/+2") |
+| Holy Light | 2.2 | v0.46.0 | mesma regra, com `notColor` ("Nonwhite creatures get -1/-1") |
+| Sea Gate Oracle | 4.2 | v0.46.0 | o `digTop` da gramática passou a aceitar "…and the **other** on the bottom of your library" |
+| Words of Wisdom | 1.1 | v0.46.0 | `draw` para o controlador + `draw` para o oponente |
+| Sylvok Lifestaff | 0.4 | v0.46.0 | gatilho `hostDies` com o corpo lido pelo parser de efeitos |
+| Kruphix's Insight | 2.3 | v0.46.0 | `digTop count:6 pick:3 filter:{enchantment} rest:'graveyard'` |
+| Ghostly Flicker | 2.0 | v0.46.0 | dois alvos + dois `blink` |
+| Visionary's Dance | 0.6 | v0.46.0 | habilidade ativada **da mão** com `discardSelf` → `digTop` |
+| Nested Shambler | 3.2 | v0.46.0 | `token` com `count: { powerOf: 'self' }` e `tapped` |
+| Pestilence | 2.1 | v0.46.0 | gatilho `endStep` com `Cond.compare` ("nenhuma criatura em jogo") → `sacrificeSelf` |
+| Aurora Eidolon / Sandstorm Eidolon | 2.0 / 1.0 | v0.46.0 | gatilho com `zone: 'graveyard'` + `mayDo` → `returnToHand` |
+| Fanged Flames | 3.5 | v0.46.0 | `damage` com `exileIfDies: true` |
+| Rally at the Hornburg | 16.0 | v0.46.0 | fichas + `pumpEach` por subtipo com keyword, na mesma linha |
+| Reckless Impulse | 12.0 | v0.46.0 | `impulse { untilNextEndStep: true }` (aceita as duas ordens de frase) |
+| Clockwork Percussionist | 16.0 | v0.46.0 | mesma regra do Reckless Impulse, disparada por `dies` |
+| Defile | 7.8 | v0.46.0 | `pump` com `powerDyn: { times: -1, of: { per: Pântanos que você controla } }` |
+| End the Festivities | 6.9 | v0.46.0 | `damage` no oponente + `damageEach` nas permanentes dele |
 
 ### Ganho colateral
-Cinco das regras acima são gerais, não por carta. Somadas, **78 cartas** fora da
-lista do Pauper ficaram full na mesma leva — entre elas Cleansing Nova, Devastation,
-Purify, Powder Keg, Awakening (união "artifacts **and** enchantments" / "creatures
-**and** lands"), Enigma Drake, Haughty Djinn, Spellheart Chimera, Bedlam Reveler
-(contagem de "instant and sorcery cards" no cemitério), Commune with Nature,
+As regras gerais valem para muito mais que a lista do Pauper: **78 cartas** na
+v0.45.0 e mais **57** na v0.46.0 ficaram full de brinde. Entre elas Cleansing Nova,
+Devastation, Purify, Powder Keg, Awakening (união "artifacts **and** enchantments" /
+"creatures **and** lands"), Enigma Drake, Haughty Djinn, Spellheart Chimera, Bedlam
+Reveler (contagem de "instant and sorcery cards" no cemitério), Commune with Nature,
 Adventurous Impulse, Bond of Flourishing, Seek the Wilds, Peer Through Depths,
-Glint-Nest Crane (o `digTop` com "in any order"), Blanchwood Armor, All That
-Glitters, Empyrial Armor (keywords junto do bônus por contagem) e Into the Core.
+Glint-Nest Crane, Sleight of Hand, Sight Beyond Sight (o `digTop`), Blanchwood Armor,
+All That Glitters, Empyrial Armor (keywords junto do bônus por contagem), Skullclamp,
+Original Skullclamp, Oathkeeper, Malefic Scythe, Eater of Virtue (gatilho da criatura
+equipada morrendo), Light Up the Stage, Wrenn's Resolve, Dark Bargain, Irradiate,
+Pyrohemia, Call to the Grave, Festergloom e Into the Core.
 
 ## Não fáceis (para o Fable 5.1)
 | Carta | Peso | O que falta na engine | Sugestão de op / mecanismo |
@@ -64,9 +87,7 @@ Glitters, Empyrial Armor (keywords junto do bônus por contagem) e Into the Core
 | Cryoshatter | 16.8 | gatilho "quando a criatura encantada vira ou recebe dano" | `hostBecomesTapped` / `hostDealtDamage` combinados |
 | Faerie Miscreant | 16.8 | condição "você controla outra criatura com este nome" | `Cond { kind: 'controlsAnotherNamed' }` |
 | Of One Mind | 16.8 | redução condicionada a controlar Humano **e** não-Humano | `costModifiers.condition: Cond` |
-| Clockwork Percussionist | 16.0 | `impulse` com duração "até o fim do seu próximo turno" a partir de `dies` | `impulse { untilNextEndStep }` existe; falta a regra de texto |
 | Inventor's Axe | 16.0 | custo de equipar pago com energia | `equipCost.energy` |
-| Rally at the Hornburg | 16.0 | "Humanos que você controla ganham ímpeto" junto da criação de fichas | `pumpEach` com `subtype` já existe; falta a regra de texto composta |
 | Balustrade Spy | 15.6 | moer até revelar um terreno | `op: 'millUntil'; filter` |
 | Mesmeric Fiend | 14.4 | escolher carta da mão do oponente e exilar até a fonte sair | `op: 'exileFromHandUntilLeaves'` |
 | Smash to Smithereens | 13.9 | `damage.to` é `SubjectRef` e não aceita `controllerOf:0` | permitir `controllerOf:${n}` em `SubjectRef` |
@@ -74,7 +95,6 @@ Glitters, Empyrial Armor (keywords junto do bônus por contagem) e Into the Core
 | Monstrous Emergence | 13.4 | custo adicional "escolha uma criatura sua **ou** revele uma da mão" | ver Highway Robbery |
 | Kenku Artificer | 12.3 | marcadores + virar artefato em criatura 0/0 voadora | `animatePermanent` sem duração + `putCounters` no mesmo alvo |
 | Gingerbrute | 12.0 | "não pode ser bloqueada exceto por criaturas com ímpeto" | `flags.cantBeBlockedExceptKeyword: Keyword` |
-| Reckless Impulse | 12.0 | `impulse { untilNextEndStep }` existe; falta a regra de texto "until the end of your next turn" | regra de texto |
 | Battle Screech | 12.0 | flashback pago virando três criaturas brancas | `flashback.tapCreatures: { count: number; filter: FilterSpec }` |
 | Lunarch Veteran | 12.0 | gatilho global de `leaves` não existe (só o próprio) | `fireZoneTriggers` também para `leaves` |
 | Vitu-Ghazi Inspector | 11.4 | mecânica collect evidence | mecânica nova |
@@ -91,10 +111,8 @@ Glitters, Empyrial Armor (keywords junto do bônus por contagem) e Into the Core
 | Spreading Seas | 8.4 | aura não muda o tipo do terreno encantado | `attachEffect.becomesSubtype: string` |
 | Citadel Gate / Cliffgate | 8.0 / 6.0 | `chooseOnEnter: 'color'` existe, mas não "cor **diferente de** X" | `chooseOnEnter: { kind: 'color'; except: Color }` |
 | Extract a Confession | 7.8 | collect evidence | mecânica nova |
-| Defile | 7.8 | -1/-1 por Pântano | `pump` com `powerDyn` negativo por filtro |
 | Crypt Rats | 7.8 | "gaste apenas mana preta em X" | `cost.manaRestriction: Color` |
 | Ride's End | 7.0 | redução se o alvo estiver virado | `costModifiers.ifTargetTapped` |
-| End the Festivities | 6.9 | dano ao oponente e a tudo que ele controla | `damageEach` com filtro + `damage` no mesmo passo |
 | Snap | 6.5 | "desvire até dois terrenos" sem alvo (escolha livre) | `op: 'untapChoice'; count; filter` |
 | Standard Bearer | 6.3 | regra de escolha de alvo forçada (flagbearer) | mecânica nova |
 | Deglamer | 5.6 | embaralhar **o alvo** no grimório do dono | `op: 'shuffleTargetIntoLibrary'` |
@@ -105,18 +123,23 @@ Glitters, Empyrial Armor (keywords junto do bônus por contagem) e Into the Core
 |---|---|
 
 ## Situação
-- Cartas da lista processadas: **80 de 159** (15 feitas, 65 classificadas como não fáceis).
-  As 79 restantes (peso ≤ 5,6) ainda não foram lidas uma a uma.
-- Releases publicadas: v0.45.0
-- Totais do auditor na última release: 13.992 full / 14.399 parciais / 4.690 manuais /
+- Cartas da lista processadas: **121 de 159** (37 feitas; 55 linhas de "não fáceis",
+  algumas cobrindo mais de uma carta). Restam 121 na lista regenerada; as de peso ≤ 0,5
+  ainda não foram lidas uma a uma.
+- Releases publicadas: v0.45.0 e v0.46.0
+- Totais do auditor na última release: 14.048 full / 14.372 parciais / 4.661 manuais /
   0 estruturais / 42 falhas de simulação
-- A falha de simulação nova (41 → 42) é **Melek, Reforged Researcher**: com a união de
+- As 42 falhas de simulação são as mesmas da v0.45.0 — nenhuma nova nesta leva.
+  A única acrescentada desde a v0.44.0 é **Melek, Reforged Researcher**: com a união de
   tipos, o `cdaPower/cdaToughness` dela passou a compilar ("o dobro do número de cartas
   de instantâneo e feitiço no seu cemitério"). No cenário do auditor o cemitério está
   vazio, então ela entra 0/0 e morre — comportamento **correto** de Magic, igual aos 17
   casos já presentes nesse mesmo balde (Splinterfright, Boneyard Wurm, Uro, Kroxa…).
   A carta saiu de manual para parcial: é ganho, não regressão.
-- Cobertura ponderada do Pauper: 72,1% → **78,9%**; cartas full do meta Pauper: 298 → 314
-  (lacunas 159 → 143). Legacy segue em 99,2%.
-- Diff de compilação das 38.629 cartas (v0.44.0 × v0.45.0): 79 mudaram de status,
-  78 para `full` e 1 de `null` (injogável) para `partial`; nenhuma perdeu automação.
+- Cobertura ponderada do Pauper: 72,1% → 78,9% (v0.45.0) → **80,5%** (v0.46.0);
+  cartas full do meta Pauper: 298 → 336 (lacunas 159 → 121). Legacy segue em 99,2%.
+- Diff de compilação das 38.629 cartas em cada release: nenhuma carta perdeu automação.
+  Na v0.46.0, a primeira versão da regra do Rally at the Hornburg derrubou o Grand
+  Crescendo ("Create **X** 1/1 …") de full para injogável; corrigida movendo as guardas
+  para a **condição** do `if`, de modo que uma regra que não casa inteira deixa a linha
+  seguir para as regras seguintes em vez de reprovar a carta.

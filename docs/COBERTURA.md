@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-18, v0.45.0 — leva fácil no Pauper: 15 cartas; Pauper a 78,9%, Legacy a 99,2%)
+## Estado (2026-09-18, v0.46.0 — leva fácil no Pauper, 2ª: 22 cartas; Pauper a 80,5%, Legacy a 99,2%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1154,6 +1154,41 @@ cenário, entra 0/0 e morre — comportamento correto, mesmo balde de Splinterfr
 e Uro). Pauper: 72,1% → **78,9%**, 314 cartas full do meta (lacunas 159 → 143).
 Legacy segue em 99,2%. 588 testes (mF3: 15). O que sobrou da lista do Pauper está
 em `docs/LEVA-FACIL-PAUPER-relatorio.md`, com o op que falta em cada carta.
+
+**v0.46.0 — leva fácil no Pauper, segunda leva (22 cartas).** Continuação direta
+da v0.45.0, mesma fronteira. Regras gerais novas: gatilho `youCastSpellOf` a partir
+de "Whenever you cast a blue, black, or red spell, …" (God-Pharaoh's Faithful);
+`costModifiers` com `filter.colorAnyOf` nas duas redações de desconto por cor
+("Green spells and blue spells you cast cost {1} less" e "Each spell you cast that's
+red or green costs {1} less" — os cinco Familiars de Invasions e o Goblin
+Anarchomancer); `pumpEach` com filtro de cor e de não-cor (Guardians' Pledge, Holy
+Light); gatilho `hostDies` com o corpo lido pelo parser de efeitos (Sylvok Lifestaff,
+Eater of Virtue, Malefic Scythe, Skullclamp); `impulse { untilNextEndStep }` nas duas
+ordens de frase (Reckless Impulse, Clockwork Percussionist, Light Up the Stage,
+Wrenn's Resolve); e o `digTop` da gramática passou a aceitar "…and the **other** on
+the bottom of your library" (Sea Gate Oracle, Sleight of Hand, Sight Beyond Sight).
+Regras por carta: Words of Wisdom, Kruphix's Insight, Ghostly Flicker (dois `blink`),
+Visionary's Dance (habilidade ativada **da mão**), Nested Shambler (`token` com
+`count: { powerOf: 'self' }`), Rally at the Hornburg, Defile (`powerDyn` negativo por
+Pântano), End the Festivities, Pestilence (gatilho de fim de turno com
+`Cond.compare` = "nenhuma criatura em jogo"), Aurora/Sandstorm Eidolon (gatilho com
+`zone: 'graveyard'`) e Fanged Flames (`damage` com `exileIfDies`).
+
+**Lição de método registrada aqui.** A primeira versão da regra do Rally at the
+Hornburg validava os pedaços **no corpo** do `if` e fazia `return false` quando um
+deles falhava. Isso derrubou o Grand Crescendo ("Create **X** 1/1 …") de full para
+injogável: a regra casava o texto, `num('X')` devolvia `null` e a linha inteira era
+reprovada antes das regras seguintes. Correção: **guardas na condição do `if`**, nunca
+no corpo — uma regra que não casa inteira deixa a linha seguir adiante. Vale para toda
+regra nova cujo regex tenha grupos abertos (`(\w+)`, `(.+?)`). O diff de compilação
+das 38.629 cartas foi o que pegou isso.
+
+Diff de compilação (v0.45.0 × v0.46.0): 58 mudanças de status, 57 para full, nenhuma
+perda. Auditor: **14.048 full / 14.372 parciais / 4.661 manuais**, 0 estruturais,
+42 falhas de simulação (as mesmas da v0.45.0, nenhuma nova). Pauper: 78,9% → **80,5%**,
+336 cartas full do meta (lacunas 159 → 121 desde o começo da leva). Legacy segue em
+99,2%. 605 testes (mF4: 17). O que sobrou está em
+`docs/LEVA-FACIL-PAUPER-relatorio.md`.
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.
