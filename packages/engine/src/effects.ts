@@ -337,9 +337,9 @@ function objectAlive(state: GameState, t: TargetChoice): GameObject | null {
 
 // ------------------------------------------------------------- choice ops
 
-type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' | 'yorionBlink' | 'cloakExile' | 'tibaltTrickery' | 'keepXDiscardRest' | 'manifestDread' }>;
+type ChoiceStep = Extract<EffectStep, { op: 'discard' | 'sacrifice' | 'scry' | 'surveil' | 'search' | 'nameCardDiscard' | 'counterUnlessPay' | 'mayDo' | 'payOrElse' | 'chooseValue' | 'devour' | 'explore' | 'exploit' | 'hideaway' | 'cipherEncode' | 'copyOf' | 'populate' | 'support' | 'connive' | 'digTop' | 'if' | 'bounceOwn' | 'learn' | 'putFromHand' | 'doomsday' | 'putHandOnTop' | 'revealTopByType' | 'returnFromExileToHand' | 'imprintFromHand' | 'discardOrDie' | 'addManaChoice' | 'wish' | 'pickFromMilled' | 'searchExileCastFree' | 'keepOnePerTypeSacrificeRest' | 'payEnergyDestroy' | 'returnFromGraveyardChoice' | 'tokenUnlessSacrifice' | 'extractName' | 'gambitPick' | 'discardUpToThenDraw' | 'castSearchedExiledOrHand' | 'reorderTop' | 'adNauseam' | 'revealFromHandRemember' | 'freeCastBargain' | 'legendRuleKeep' | 'draw' | 'divideDamage' | 'portentReveal' | 'portentCast' | 'payLifeDrawThatMany' | 'pileSplit' | 'pileSacrifice' | 'tabernacleTax' | 'planarPick' | 'planarHand' | 'discover' | 'chainCopy' | 'yorionBlink' | 'cloakExile' | 'tibaltTrickery' | 'keepXDiscardRest' | 'manifestDread' | 'sylvanChoose' | 'sylvanPay' }>;
 
-const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy', 'yorionBlink', 'cloakExile', 'tibaltTrickery', 'keepXDiscardRest', 'manifestDread']);
+const CHOICE_OPS = new Set(['discard', 'sacrifice', 'scry', 'surveil', 'search', 'nameCardDiscard', 'counterUnlessPay', 'mayDo', 'payOrElse', 'chooseValue', 'devour', 'explore', 'exploit', 'hideaway', 'cipherEncode', 'copyOf', 'populate', 'support', 'connive', 'digTop', 'if', 'bounceOwn', 'learn', 'putFromHand', 'doomsday', 'putHandOnTop', 'revealTopByType', 'returnFromExileToHand', 'imprintFromHand', 'discardOrDie', 'addManaChoice', 'wish', 'pickFromMilled', 'searchExileCastFree', 'keepOnePerTypeSacrificeRest', 'payEnergyDestroy', 'returnFromGraveyardChoice', 'tokenUnlessSacrifice', 'extractName', 'gambitPick', 'discardUpToThenDraw', 'castSearchedExiledOrHand', 'reorderTop', 'adNauseam', 'revealFromHandRemember', 'freeCastBargain', 'legendRuleKeep', 'draw', 'divideDamage', 'portentReveal', 'portentCast', 'payLifeDrawThatMany', 'pileSplit', 'pileSacrifice', 'tabernacleTax', 'planarPick', 'planarHand', 'discover', 'chainCopy', 'yorionBlink', 'cloakExile', 'tibaltTrickery', 'keepXDiscardRest', 'manifestDread', 'sylvanChoose', 'sylvanPay']);
 
 function isChoiceStep(step: EffectStep): step is ChoiceStep {
   return CHOICE_OPS.has(step.op);
@@ -798,6 +798,21 @@ function setupChoice(ctx: EffectContext, step: ChoiceStep): ChoiceSetup {
       const shown = state.players[victim].zones.hand.filter((id) => !hand.includes(id));
       if (options.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
       return { player: controller, options, shown, min: 0, max: 1, prompt: `${ctx.sourceName}: exile uma carta não-terreno da mão de ${state.players[victim].name} ou a criatura escolhida (até ${ctx.sourceName} sair)`, mode: 'cards', skipLabel: 'Não exilar' };
+    }
+    case 'sylvanChoose': {
+      const hand = state.players[controller].zones.hand;
+      const drawn = (state.players[controller].drawnThisTurn ?? []).filter((id) => hand.includes(id));
+      state.sylvanPending = undefined;
+      const n = Math.min(2, drawn.length);
+      if (n === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      return { player: controller, options: drawn, min: n, max: n, prompt: `${ctx.sourceName}: escolha ${n === 1 ? 'a carta comprada' : 'duas cartas compradas'} neste turno — para cada uma, pague 4 de vida ou devolva ao topo da biblioteca`, mode: 'cards' };
+    }
+    case 'sylvanPay': {
+      const hand = state.players[controller].zones.hand;
+      const ids = (state.sylvanPending ?? []).filter((id) => hand.includes(id));
+      if (ids.length === 0) return { player: controller, options: [], min: 0, max: 0, prompt: '', mode: 'cards', autoAnswer: 'skip' };
+      const affordable = Math.min(ids.length, Math.floor(state.players[controller].life / step.life));
+      return { player: controller, options: ids, min: 0, max: affordable, skipLabel: 'Devolver todas ao topo', prompt: `${ctx.sourceName}: marque as cartas pelas quais paga ${step.life} de vida cada — as outras voltam ao topo da biblioteca`, mode: 'cards' };
     }
     case 'manifestDread': {
       const top = state.players[controller].zones.library.slice(0, 2);
@@ -1578,6 +1593,25 @@ export function executeChoice(ctx: EffectContext, step: ChoiceStep, picks: numbe
         if (fromHand) (src.exiledUntilLeavesToHand ??= []).push(o.id); else (src.exiledUntilLeaves ??= []).push(o.id);
       }
       emit({ type: 'fizzled', description: `${ctx.sourceName}: ${o.card.name} exilada até ${ctx.sourceName} sair do campo` });
+      return;
+    }
+    case 'sylvanChoose': {
+      const hand = state.players[ctx.controller].zones.hand;
+      const drawn = (state.players[ctx.controller].drawnThisTurn ?? []).filter((id) => hand.includes(id));
+      const valid = picks.filter((id) => drawn.includes(id));
+      state.sylvanPending = valid.length > 0 ? valid : drawn.slice(0, Math.min(2, drawn.length));
+      return;
+    }
+    case 'sylvanPay': {
+      const hand = state.players[ctx.controller].zones.hand;
+      const ids = (state.sylvanPending ?? []).filter((id) => hand.includes(id));
+      state.sylvanPending = undefined;
+      const paid = new Set(picks.filter((id) => ids.includes(id)));
+      for (const id of ids) {
+        const o = state.objects[id];
+        if (paid.has(id) && state.players[ctx.controller].life >= step.life) changeLife(state, ctx.controller, -step.life, `${ctx.sourceName}: manteve ${o.card.name}`, emit);
+        else moveWithEvent(state, o, 'library', 'returned', emit, 'top');
+      }
       return;
     }
     case 'manifestDread': {
@@ -3017,6 +3051,12 @@ function runStep(ctx: EffectContext, step: Exclude<EffectStep, ChoiceStep>, iter
         applyPump(ctx, obj, step.power, step.toughness, step.keywords);
       return;
 
+    case 'loseKeywordsUntilEot': {
+      const hit = selectBattlefield(ctx, step.filter);
+      for (const obj of hit) obj.lostKeywordsUntilEot = [...new Set([...(obj.lostKeywordsUntilEot ?? []), ...step.keywords])];
+      if (hit.length > 0) emit({ type: 'fizzled', description: `${ctx.sourceName}: ${hit.map((o) => o.card.name).join(', ')} perde(m) ${step.keywords.join(', ')} até o fim do turno` });
+      return;
+    }
     case 'tapEach':
     case 'untapEach':
       for (const obj of selectBattlefield(ctx, step.filter))

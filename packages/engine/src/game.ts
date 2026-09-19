@@ -194,7 +194,7 @@ export class Game {
     const s = this.state;
     s.turn = 1;
     // A mão inicial não é "comprada em um turno": Tamiyo ("third card in a turn") e afins contam do zero.
-    for (const p of PLAYER_IDS) s.players[p].drawsThisTurn = 0;
+    for (const p of PLAYER_IDS) { s.players[p].drawsThisTurn = 0; s.players[p].drawnThisTurn = undefined; }
     this.emit({ type: 'turnBegan', turn: 1, activePlayer: s.activePlayer });
     this.enterStep('untap');
     this.advanceLoop();
@@ -2334,6 +2334,7 @@ export class Game {
           // Dredge: with a dredge card in the graveyard, the draw step asks draw-or-dredge before drawing.
           const dredges = s.players[s.activePlayer].dredgeNext === undefined ? dredgeOptions(s, s.activePlayer) : [];
           if (dredges.length > 0) {
+            this.fireStepTriggers('drawStep');
             s.pendingDecision = {
               type: 'effectChoice', player: s.activePlayer, mode: 'cards', options: dredges, min: 0, max: 1, skipLabel: 'Comprar a carta',
               prompt: 'Etapa de compra: comprar uma carta ou dragar? Escolha a carta do cemitério para dragar, ou compre normalmente',
@@ -2346,6 +2347,7 @@ export class Game {
           if (s.players[s.activePlayer].zones.hand.length <= 2 && s.players[s.activePlayer].zones.battlefield.some((id) => s.objects[id].card.drawPlusOneWhenHandSmall)) draw(s, s.activePlayer, this.emit); // Quantum Riddler (mão tinha ≤ 1 antes da compra)
           checkStateBasedActions(s, this.emit);
         }
+        this.fireStepTriggers('drawStep');
         s.priority = s.activePlayer;
         return;
       }
@@ -2458,6 +2460,7 @@ export class Game {
       if (obj.zone === 'battlefield') {
         obj.damage = 0;
         obj.untilEot = { power: 0, toughness: 0, keywords: [] };
+        obj.lostKeywordsUntilEot = undefined;
         obj.crewedUntilEot = undefined;
         delete obj.counters['__deathtouched'];
         delete obj.counters['__regen']; // regeneration shields expire
@@ -2469,6 +2472,7 @@ export class Game {
       const ps = s.players[p];
       ps.damagedThisTurn = false;
       ps.drawsThisTurn = 0;
+      ps.drawnThisTurn = undefined;
       ps.permanentCardsToGraveyardThisTurn = 0;
       ps.permanentsLeftThisTurn = 0;
       ps.nonlandEnteredThisTurn = 0;
@@ -3364,7 +3368,7 @@ export class Game {
     }
   }
 
-  private fireStepTriggers(on: 'upkeep' | 'endStep' | 'beginCombat' | 'main1' | 'main2'): void {
+  private fireStepTriggers(on: 'upkeep' | 'drawStep' | 'endStep' | 'beginCombat' | 'main1' | 'main2'): void {
     const s = this.state;
     if (on === 'endStep') {
       // Impending: "At the beginning of your end step, remove a time counter from it."

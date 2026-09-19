@@ -19,7 +19,7 @@ entendida; um **permanente** compila parcial quando alguma linha não é
 entendida (jogável, com a nota no tooltip). Nunca automatizar errado —
 uma automação incorreta é uma violação de regra que ninguém vê.
 
-## Estado (2026-09-18, v0.47.0 — fim da leva fácil no Pauper; Pauper a 81,8%, Legacy a 99,2%)
+## Estado (2026-09-18, v0.48.0 — Mystic Forge, Shadowspear e Sylvan Library na engine; Legacy a 99,3%, Pauper a 81,8%)
 
 | 33.085 cartas jogáveis | v0.5 | v0.6 | v0.7 | v0.8 (L1) | v0.9 (L2) | v0.10 (L3) | v0.11 (L3 completa) | v0.12 (Leva 4) | v0.13 (L5a) | v0.14 (L5b · faces) | v0.15 (L6a · Legacy) | v0.16 (L6a·3 · sideboard) | v0.17 (L6a·4) | v0.18 (L6a·5) | v0.19 (L6a·6) | v0.21.1 (L6a·7) | v0.22 (L6a·8) | v0.23 (L6a·9) | v0.24 | v0.25 | v0.27 (L13) | v0.28 (L14) | v0.30 | v0.35 (pesada) | v0.36 (top 30) | v0.37 | **v0.38** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -1216,6 +1216,27 @@ Resumo das três levas do Pauper: 41 cartas do meta feitas, **72,1% → 81,8%** 
 cobertura ponderada, 298 → 339 cartas full do meta, 159 → 118 lacunas. As regras gerais
 levantaram outras ~140 cartas fora da lista. Nenhuma carta perdeu automação em nenhuma
 das releases (verificado por diff de compilação das 38.629 cartas a cada uma).
+
+**v0.48.0 — Leva 24 (engine): Mystic Forge, Shadowspear, Sylvan Library.** Três
+das "não fáceis" do relatório do Legacy, a pedido do Lucas. (1) **Mystic Forge**:
+`FilterSpec.anyOf` (disjunção de sub-filtros, só campos de carta) — "artifact spells
+and colorless spells" vira `castFromLibraryTop: { anyOf: [{ what: 'artifact' },
+{ colorless: true }] }`; e "Exile the top card of your library." sozinho passou a
+compilar em `exileTop` (a habilidade `{T}, Pay 1 life` já era lida). (2)
+**Shadowspear**: op `loseKeywordsUntilEot { filter, keywords }` grava
+`obj.lostKeywordsUntilEot`, que `hasKeyword` consulta antes de qualquer fonte
+(impressa, marcador, estática, equipamento) — limpo no cleanup e ao trocar de zona.
+Sem hexproof a criatura vira alvo; sem indestrutível o dano letal mata. (3) **Sylvan
+Library**: gatilho novo `on: 'drawStep'` (dispara depois da compra do turno, também
+no caminho do dredge), `PlayerState.drawnThisTurn` (ids comprados no turno, zerado
+com `drawsThisTurn`) e dois ops de escolha: `sylvanChoose` (duas cartas da mão
+compradas neste turno; `state.sylvanPending`) e `sylvanPay { life: 4 }` (marca as
+que paga 4 de vida cada — máximo limitado pela vida; as outras voltam ao topo). Tudo
+dentro de um `mayDo`, então recusar não abre escolha nenhuma. Também: o simulador do
+auditor passou a escolher cor para habilidades de mana **do cemitério**
+(Jack-o'-Lantern deixou de ser falha falsa).
+Auditor: **14.060 full / 14.363 parciais / 4.658 manuais**, 0 estruturais, 41 falhas
+de simulação. Legacy: 99,2% → **99,3%** (437 full, 72 lacunas). 616 testes (m52: 5).
 
 Fora do escopo por enquanto: Mutate, Phasing, Banding, Ward—Discard,
 Conspire, Splice, Strive, Companion, Meld, mecânicas Alchemy.

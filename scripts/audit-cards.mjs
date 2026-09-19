@@ -367,7 +367,11 @@ function simulate(def) {
         if (s.objects[cardId].zone !== 'graveyard' || game.state.status !== 'playing') break;
         const targets = (ab.targets ?? []).map((spec) => pickTarget(game, me, opp, spec));
         if (targets.some((t) => t === null)) { log.push(`habilidade ${i} (cemitério): sem alvo legal — pulada`); continue; }
-        const r = game.apply(me, { type: 'activateAbility', objectId: cardId, abilityIndex: i, targets });
+        const action = { type: 'activateAbility', objectId: cardId, abilityIndex: i, targets };
+        // Habilidades de mana do cemitério (Jack-o'-Lantern): escolhe a cor como no campo de batalha.
+        if (ab.effect.some((e) => e.op === 'addManaChoice')) action.manaColor = ab.effect.find((e) => e.op === 'addManaChoice').colors?.[0] ?? 'G';
+        if (ab.effect.some((e) => e.op === 'addManaOptions')) action.manaColor = ab.effect.find((e) => e.op === 'addManaOptions').options[0];
+        const r = game.apply(me, action);
         if (!r.ok) {
           const m = errMsg(r);
           if (/mana insuficiente|feitiço|descarte|sacrificar|precisa exilar|precisa devolver/.test(m)) log.push(`habilidade ${i} (cemitério): ${m}`);

@@ -208,6 +208,8 @@ export interface FilterSpec {
   inCombat?: boolean;
   /** Two or more colors. */
   multicolored?: boolean;
+  /** Mystic Forge: "artifact spells and colorless spells" — matches when any sub-filter matches (card-level fields only). */
+  anyOf?: FilterSpec[];
 }
 
 /**
@@ -546,6 +548,13 @@ export type EffectStep =
   | { op: 'becomeCopy'; what: SubjectRef; /** Curie: copy the permanent exiled as this ability's cost. */ fromCostExile?: boolean; /** Curie: keep this card's triggered abilities instead of the ability carrying this op. */ keep?: 'triggered' }
   /** (choice) Manifest dread: look at the top two, one enters face down as a 2/2, the other goes to the graveyard. */
   | { op: 'manifestDread' }
+  // ---- Leva 24 (engine): Mystic Forge, Shadowspear, Sylvan Library
+  /** Shadowspear: matching permanents lose these keywords until end of turn (overrides every source, including statics). */
+  | { op: 'loseKeywordsUntilEot'; filter: FilterSpec; keywords: Keyword[] }
+  /** (choice) Sylvan Library, part 1: choose two cards in hand drawn this turn (stored in state.sylvanPending). */
+  | { op: 'sylvanChoose' }
+  /** (choice) Sylvan Library, part 2: for each chosen card, pay `life` or put it on top of the library. */
+  | { op: 'sylvanPay'; life: number }
   /** Raph & Mikey: reveal from the top until a matching card; it enters (tapped, attacking); the rest goes to the bottom in random order. */
   | { op: 'revealUntil'; filter: FilterSpec; tapped?: boolean; attacking?: boolean }
   /** Emry: the target card in your graveyard may be cast this turn. */
@@ -821,6 +830,8 @@ export type TriggerSpec =
   /** The controller attacks with one or more creatures (fires once). */
   | { on: 'youAttack' }
   | { on: 'upkeep'; whose: 'controller' | 'each' }
+  /** Sylvan Library: "At the beginning of your draw step" (fires after the turn-based draw). */
+  | { on: 'drawStep'; whose: 'controller' | 'each' }
   | { on: 'endStep'; whose: 'controller' | 'each' }
   /** The controller casts a spell (prowess-style). */
   | { on: 'youCastSpell'; noncreatureOnly?: boolean; instantSorceryOnly?: boolean; /** Poxwalkers: only spells cast from anywhere other than the hand. */ notFromHand?: boolean }
@@ -1570,6 +1581,7 @@ export function isPermanentCard(card: CardDefinition): boolean {
 /** Does a card definition match a FilterSpec, ignoring controller context? */
 export function cardMatchesFilter(card: CardDefinition, filter: FilterSpec | undefined): boolean {
   if (!filter) return true;
+  if (filter.anyOf && !filter.anyOf.some((f) => cardMatchesFilter(card, f))) return false;
   if (filter.what && filter.what !== 'permanent') {
     const typeName = filter.what.charAt(0).toUpperCase() + filter.what.slice(1);
     if (!card.types.includes(typeName as CardType) && !(typeName === 'Creature' && card.creatureOffBattlefield)) return false;

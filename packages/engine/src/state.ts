@@ -30,6 +30,8 @@ export interface GameObject {
   summoningSick: boolean;
   /** Temporary modifications, reset at cleanup. */
   untilEot: { power: number; toughness: number; keywords: import('./types.js').Keyword[] };
+  /** Shadowspear: keywords lost until end of turn — wins over every source that would grant them. */
+  lostKeywordsUntilEot?: import('./types.js').Keyword[];
   attacking: boolean;
   /** Attacker object id this creature is blocking, if any. */
   blocking?: number;
@@ -344,6 +346,8 @@ export interface PlayerState {
   stickyPool?: ManaPool;
   /** Cards drawn this turn (miracle: the first one). */
   drawsThisTurn: number;
+  /** Sylvan Library: ids of the cards drawn this turn, in order. */
+  drawnThisTurn?: number[];
   /** Dredge: graveyard card armed to replace the next draw. */
   dredgeNext?: number;
   /** Descend (Molten Collapse): permanent cards put into this player's graveyard this turn. */
@@ -554,6 +558,8 @@ export interface GameState {
   lastPlanarTop?: number[];
   /** Discover: cards exiled by the reveal and the hit. */
   lastDiscover?: { ids: number[]; hit?: number };
+  /** Sylvan Library: cards chosen in part 1, consumed by part 2. */
+  sylvanPending?: number[];
   /** Liliana −6: pile A chosen by the controller, awaiting the victim's choice. */
   pileA?: number[];
   /** Portent of Calamity: cards exiled by the reveal, for the cast-free step. */
@@ -689,6 +695,7 @@ export function moveObject(
     obj.wasBlocked = false;
     obj.attachedTo = undefined;
     obj.untilEot = { power: 0, toughness: 0, keywords: [] };
+    obj.lostKeywordsUntilEot = undefined;
     obj.summoningSick = false;
     obj.crewedUntilEot = undefined;
     obj.pairedWith = undefined;
@@ -1006,6 +1013,7 @@ export function losesAllAbilities(state: GameState, obj: GameObject): boolean {
 
 export function hasKeyword(state: GameState, obj: GameObject, kw: import('./types.js').Keyword): boolean {
   if (losesAllAbilities(state, obj)) return false;
+  if (obj.lostKeywordsUntilEot?.includes(kw)) return false;
   // Virada para baixo: sem habilidades impressas (disguise dá ward {2}, tratado no custo).
   if (!obj.faceDown && obj.card.keywords?.includes(kw)) return true;
   if ((obj.counters[kw] ?? 0) > 0) return true; // keyword counters ("a flying counter")

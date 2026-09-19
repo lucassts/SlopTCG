@@ -48,6 +48,7 @@ export function draw(state: GameState, playerId: PlayerId, emit: Emit): void {
   }
   const obj = state.objects[topId];
   moveObject(state, obj, 'hand');
+  (player.drawnThisTurn ??= []).push(obj.id);
   emit({
     type: 'cardDrawn',
     player: playerId,

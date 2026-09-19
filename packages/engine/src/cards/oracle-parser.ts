@@ -600,6 +600,11 @@ function parseEffectText(
     text = m[3];
     if (!text.trim()) return { steps };
   }
+  // Mystic Forge: "Exile the top card of your library." sozinho (sem "you may play").
+  if ((m = text.match(/^Exile the top (card|(\w+) cards) of your library\.$/i))) {
+    const n = m[2] ? num(m[2]) : 1;
+    if (n !== null) return { steps: [{ op: 'exileTop', who: 'controller', count: n }] };
+  }
   // Impulso: "Exile the top card of your library. You may play that card this turn." (duas frases acopladas).
   if ((m = text.match(/^Exile the top (card|\w+ cards) of your library\. (?:You may play (?:that card|it|them|those cards) this turn|Until end of turn, you may play (?:that card|it|them|those cards))\.?\s*(.*)$/i))) {
     const n = m[1] === 'card' ? 1 : num(m[1].replace(/ cards$/, ''));
@@ -2124,6 +2129,27 @@ function parseLine(rawLine: string, st: ParseState, isSpell: boolean, subtypes: 
   }
   if (/^Nonbasic lands don't untap during their controllers' untap steps\.$/i.test(line)) { st.flags13.noUntapNonbasicLands = true; return true; }
   if (/^Each opponent can cast spells only any time they could cast a sorcery\.$/i.test(line)) { st.flags13.opponentsSorcerySpeedOnly = true; return true; }
+  // ---- Leva 24 (engine): Mystic Forge, Shadowspear, Sylvan Library
+  if ((m = line.match(/^You may cast (.+?) spells and (.+?) spells from the top of your library\.$/i))) {
+    const parts = [m[1], m[2]].map((p): FilterSpec | null => {
+      if (/^colorless$/i.test(p)) return { colorless: true };
+      const info = parseNounG(p);
+      return info && !info.player && !info.zone ? info.filter : null;
+    });
+    if (parts.some((p) => !p)) return false;
+    st.flags6.castFromLibraryTop = { anyOf: parts as FilterSpec[] };
+    return true;
+  }
+  if ((m = line.match(/^((?:\{[^}]+\})+): Permanents your opponents control lose (.+?) until end of turn\.$/i))) {
+    const kws = keywordList(m[2]);
+    if (!kws) return false;
+    st.abilities.push({ kind: 'activated', cost: { mana: m[1] }, effect: [{ op: 'loseKeywordsUntilEot', filter: { what: 'permanent', controlledBy: 'opponent' }, keywords: kws }], text: `${m[1]}: permanentes dos oponentes perdem ${m[2].replace(/,? and /i, ' e ')} até o fim do turno` });
+    return true;
+  }
+  if (/^At the beginning of your draw step, you may draw two additional cards\. If you do, choose two cards in your hand drawn this turn\. For each of those cards, pay 4 life or put the card on top of your library\.$/i.test(line)) {
+    st.abilities.push({ kind: 'triggered', trigger: { on: 'drawStep', whose: 'controller' }, effect: [{ op: 'mayDo', prompt: 'comprar duas cartas a mais? (depois, para duas cartas compradas neste turno: pague 4 de vida cada ou devolva ao topo)', effect: [{ op: 'draw', who: 'controller', count: 2 }, { op: 'sylvanChoose' }, { op: 'sylvanPay', life: 4 }] }], text: 'na sua etapa de compra, pode comprar duas a mais; para duas cartas compradas neste turno, pague 4 de vida cada ou devolva ao topo' });
+    return true;
+  }
   // ---- Leva 23: Sheltered by Ghosts, Chancellor of the Annex, Call Forth the Tempest, Curie
   if ((m = line.match(/^Enchanted creature gets ([+-]\d+)\/([+-]\d+) and has (.+?),? and ward (\{\d+\})\.$/i))) {
     const kws = keywordList(m[3]);
